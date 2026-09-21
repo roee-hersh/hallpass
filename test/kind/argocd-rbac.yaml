@@ -1,0 +1,28 @@
+# Read access hallpass needs in the Argo CD namespace to evaluate Argo CD RBAC.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hallpass-argocd-reader
+  namespace: argocd
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["argocd-rbac-cm", "argocd-cm"]
+    verbs: ["get"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["appprojects"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hallpass-argocd-reader
+  namespace: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hallpass-argocd-reader
+subjects:
+  - kind: ServiceAccount
+    name: hallpass
+    namespace: hallpass

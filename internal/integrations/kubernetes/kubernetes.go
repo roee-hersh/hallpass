@@ -134,6 +134,27 @@ type Connection struct {
 	addAuth  bool
 }
 
+// ErrNotFound is returned by Get for a 404.
+var ErrNotFound = errors.New("kubernetes: not found")
+
+// Get performs a GET against the API server and decodes the JSON response.
+// Other integrations that live inside a cluster (argocd) read their
+// configuration through it. A 404 returns ErrNotFound; 401/403 and
+// transport failures come back as *integration.Error.
+func (c *Connection) Get(ctx context.Context, path string, out any) error {
+	_, err := c.client.GetJSON(ctx, path, nil, out)
+	if err == nil {
+		return nil
+	}
+	switch httpx.Status(err) {
+	case 404:
+		return ErrNotFound
+	case 403:
+		return integration.Wrap(integration.CodeCredentialRejected, err, "hallpass's ServiceAccount may not read %s (HTTP 403)", path)
+	}
+	return httpx.Classify(err)
+}
+
 // Username applies the template to an email.
 func (c *Connection) Username(email string) string {
 	local, domain, _ := strings.Cut(email, "@")

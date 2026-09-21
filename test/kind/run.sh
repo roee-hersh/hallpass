@@ -24,6 +24,9 @@ kubectl config use-context "kind-$CLUSTER" >/dev/null
 
 kubectl apply -f test/kind/hallpass-rbac.yaml
 kubectl apply -f test/kind/fixtures.yaml
+# The argocd Role needs the namespace to exist; Argo CD itself is not installed.
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f test/kind/argocd-rbac.yaml
 
 TMP="$(mktemp -d)"
 kubectl create token hallpass -n hallpass --duration=1h > "$TMP/token"

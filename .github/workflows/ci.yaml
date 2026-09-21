@@ -44,6 +44,22 @@ jobs:
       - name: kubernetes end to end
         run: KEEP=1 test/kind/run.sh
 
+  differential:
+    # Compares the Argo CD RBAC evaluator with the real argocd CLI.
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: install argocd cli
+        run: |
+          curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x /usr/local/bin/argocd
+          argocd version --client
+      - run: go test -tags differential -count=1 -v ./test/differential/
+
   docker:
     runs-on: ubuntu-latest
     needs: test
