@@ -1,0 +1,5 @@
+/hallpass
+/hallpass.exe
+/dist/
+*.test
+*.out

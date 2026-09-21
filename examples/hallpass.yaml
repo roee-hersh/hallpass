@@ -1,0 +1,22 @@
+# hallpass configuration. One flat list of connections.
+#
+# An integration is the product (kubernetes, jira). A connection is one
+# configured system of that product. Callers name the connection by id.
+#
+# Secrets are never written here. Every credential is a reference:
+#   env:NAME      read from the environment
+#   file:/path    read from a file on every use (rotating tokens keep working)
+
+api_key: env:HALLPASS_API_KEY
+
+# listen: ":8080"
+# decision_log: /var/log/hallpass/decisions.log   # or stderr (default), stdout, none
+# decision_cache_seconds: 30                       # allow/deny answers reused this long; 0 disables
+# identity_cache_seconds: 900                      # email -> account lookups reused this long
+
+connections:
+  # Smoke-test connection. Talks to nothing. Remove it once real connections work.
+  - id: demo
+    integration: fake
+    users: dana@example.com
+    admins: admin@example.com
