@@ -29,6 +29,21 @@ jobs:
       - run: go build -o /dev/null ./cmd/hallpass
         if: runner.os == 'Linux'
 
+  kind:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: hallpass-e2e
+          install_only: true
+      - name: kubernetes end to end
+        run: KEEP=1 test/kind/run.sh
+
   docker:
     runs-on: ubuntu-latest
     needs: test

@@ -112,7 +112,7 @@ service from starting.
 
 | Integration | Status |
 |---|---|
-| kubernetes | planned |
+| kubernetes | ready |
 | argocd | planned |
 | gitlab | planned |
 | github | planned |
