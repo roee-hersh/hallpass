@@ -261,6 +261,43 @@ func TestLinkNextAndPaginate(t *testing.T) {
 	}
 }
 
+func TestNextLinkStaysWithinBase(t *testing.T) {
+	c := &Client{Base: "https://gitlab.example/api/v4"}
+	link := func(u string) http.Header {
+		h := http.Header{}
+		h.Set("Link", "<"+u+">; rel=\"next\"")
+		return h
+	}
+	for _, ok := range []string{
+		"https://gitlab.example/api/v4/projects/1/protected_branches?page=2",
+		"https://GITLAB.example/api/v4/x",
+		"/api/v4/x?page=2",
+	} {
+		if got, err := c.NextLink(link(ok)); err != nil || got == "" {
+			t.Errorf("%s: got %q err %v", ok, got, err)
+		}
+	}
+	for _, bad := range []string{
+		"https://evil.example/api/v4/x",
+		"http://gitlab.example/api/v4/x",
+		"https://gitlab.example/oauth/token",
+		"https://gitlab.example/api/v4x",
+		"https://" + canary + "@gitlab.example/api/v4/x",
+		"https://gitlab.example:8443/api/v4/x",
+	} {
+		got, err := c.NextLink(link(bad))
+		if err == nil || got != "" {
+			t.Errorf("%s: got %q err %v", bad, got, err)
+		}
+		if err != nil && strings.Contains(err.Error(), canary) {
+			t.Errorf("error leaks userinfo: %v", err)
+		}
+	}
+	if got, err := c.NextLink(http.Header{}); err != nil || got != "" {
+		t.Errorf("no header: %q %v", got, err)
+	}
+}
+
 func TestRetryAfterDate(t *testing.T) {
 	h := http.Header{}
 	h.Set("Retry-After", time.Now().Add(3*time.Second).UTC().Format(http.TimeFormat))

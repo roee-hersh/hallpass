@@ -299,7 +299,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	groups := append([]string(nil), req.Groups...)
 	sort.Strings(groups)
 	user := integration.User{Email: req.User, Groups: groups}
-	decKey := strings.Join([]string{req.Connection, req.User, strings.Join(groups, ","), req.Action, req.Resource}, "\x00")
+	decKey := strings.Join([]string{req.Connection, req.User, groupsKey(groups), req.Action, req.Resource}, "\x00")
 	if e.decTTL > 0 {
 		if d, ok := e.decs.Get(decKey); ok {
 			return Result{Decision: d, Status: http.StatusOK, Cached: true}
@@ -334,8 +334,22 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	return Result{Decision: d, Status: http.StatusOK}
 }
 
+// groupsKey encodes a sorted group list for a cache key. Groups are joined
+// with \x01 and the surrounding fields with \x00; validation rejects both
+// bytes everywhere, so two different lists never share a key (a bare comma
+// would let ["a","b,c"] and ["a,b","c"] collide).
+func groupsKey(groups []string) string {
+	return strings.Join(groups, "\x01")
+}
+
 func (e *Engine) identity(ctx context.Context, c *conn, u integration.User) (integration.Identity, error) {
-	key := c.settings.ID + "\x00" + strings.ToLower(u.Email)
+	// The identity is a function of the email and of the caller's groups:
+	// integrations without a user directory (kubernetes, argocd) copy the
+	// request's groups into the identity, so an entry cached by email alone
+	// would answer later requests for the same user with another request's
+	// groups. Directory-backed integrations ignore the groups; keying on
+	// them only costs a lookup per distinct group set.
+	key := c.settings.ID + "\x00" + strings.ToLower(u.Email) + "\x00" + groupsKey(u.Groups)
 	fill := func(ctx context.Context) (idEntry, time.Duration, error) {
 		id, err := c.c.ResolveIdentity(ctx, u)
 		if err == nil {

@@ -53,8 +53,8 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	}
 	switch c.mode {
 	case "static_map":
-		// The engine caches identities by email only, so the group matches
-		// are recomputed in Check from the request's groups.
+		// The group matches are recomputed in Check from the request's
+		// groups, so the cached identity carries no role list.
 		arns, err := c.roleMap.lookup(email, u.Groups)
 		if err != nil {
 			return integration.Identity{}, err

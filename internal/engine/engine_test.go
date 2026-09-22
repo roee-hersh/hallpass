@@ -25,6 +25,10 @@ type counting struct {
 	checks   atomic.Int32
 	slow     time.Duration
 	badAllow bool
+	// echoGroups copies the caller's groups into the identity, as
+	// integrations without a user directory do, and allows a check only
+	// when the identity carries the admin group.
+	echoGroups bool
 }
 
 type countingConn struct {
@@ -54,6 +58,9 @@ func (c *counting) New(ctx context.Context, s *integration.Settings, d integrati
 
 func (c *countingConn) ResolveIdentity(ctx context.Context, u integration.User) (integration.Identity, error) {
 	c.p.resolves.Add(1)
+	if c.p.echoGroups {
+		return integration.Identity{ID: u.Email, Display: u.Email, Groups: append([]string(nil), u.Groups...)}, nil
+	}
 	return c.Connection.ResolveIdentity(ctx, u)
 }
 
@@ -68,6 +75,14 @@ func (c *countingConn) Check(ctx context.Context, r integration.CheckRequest) (i
 	}
 	if c.p.badAllow {
 		return integration.Decision{Outcome: integration.Allow, Code: integration.CodeUnsupported, Text: "bug"}, nil
+	}
+	if c.p.echoGroups {
+		for _, g := range r.Identity.Groups {
+			if g == "admin" {
+				return integration.Allowed("admin group"), nil
+			}
+		}
+		return integration.Denied("not an admin"), nil
 	}
 	return c.Connection.Check(ctx, r)
 }
@@ -160,6 +175,54 @@ func TestFlowAndCaches(t *testing.T) {
 	}
 	if lines != 7 {
 		t.Errorf("decision log lines = %d", lines)
+	}
+}
+
+// TestCachesKeyOnGroups: an identity that carries the caller's groups must
+// not be served to a later request for the same email with other groups,
+// and two group lists that differ only in where their boundaries fall must
+// not share a decision cache entry.
+func TestCachesKeyOnGroups(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}, echoGroups: true}
+	e, _ := build(t, c, Options{DecisionCache: 30 * time.Second, IdentityCache: 15 * time.Minute})
+	ctx := context.Background()
+	with := func(groups ...string) Request {
+		return Request{User: "a@x.com", Groups: groups, Connection: "c", Action: "thing.write", Resource: "thing:1"}
+	}
+
+	r := e.Check(ctx, with("admin"))
+	if r.Decision.Outcome != integration.Allow || c.resolves.Load() != 1 {
+		t.Fatalf("admin: %+v resolves=%d", r, c.resolves.Load())
+	}
+	// Same email, different groups: the identity is resolved again and the
+	// cached admin groups are not reused.
+	r = e.Check(ctx, with("staff"))
+	if r.Cached || r.Decision.Outcome != integration.Deny || c.resolves.Load() != 2 {
+		t.Fatalf("staff after admin: %+v resolves=%d", r, c.resolves.Load())
+	}
+	// No groups at all after a request with groups.
+	r = e.Check(ctx, with())
+	if r.Cached || r.Decision.Outcome != integration.Deny || c.resolves.Load() != 3 {
+		t.Fatalf("no groups after admin: %+v resolves=%d", r, c.resolves.Load())
+	}
+	// The same groups again hit both caches.
+	r = e.Check(ctx, with("admin"))
+	if !r.Cached || r.Decision.Outcome != integration.Allow || c.resolves.Load() != 3 {
+		t.Fatalf("admin again: %+v resolves=%d", r, c.resolves.Load())
+	}
+	// Group boundaries are part of the key: ["a","b,c"] and ["a,b","c"]
+	// are different requests.
+	r = e.Check(ctx, with("a", "b,c"))
+	if r.Cached {
+		t.Fatalf("first partition cached: %+v", r)
+	}
+	r = e.Check(ctx, with("a,b", "c"))
+	if r.Cached {
+		t.Fatalf("second partition served from the first's entry: %+v", r)
+	}
+	r = e.Check(ctx, with("a", "b,c"))
+	if !r.Cached {
+		t.Fatalf("first partition not cached on repeat: %+v", r)
 	}
 }
 

@@ -422,7 +422,11 @@ func (c *Connection) samlIdentity(ctx context.Context, email string) (user, erro
 				matches = append(matches, id.UserID)
 			}
 		}
-		if next := httpx.LinkNext(resp.Header); next != "" {
+		next, err := c.client.NextLink(resp.Header)
+		if err != nil {
+			return nil, integration.Wrap(integration.CodeUpstreamError, err, "GitLab returned a next page link outside the connection's url")
+		}
+		if next != "" {
 			return &httpx.Request{Method: http.MethodGet, Path: next}, nil
 		}
 		return nil, nil
@@ -687,7 +691,11 @@ func (c *Connection) protectedBranches(ctx context.Context, t target) ([]protect
 			return nil, fmt.Errorf("decode protected branches: %w", err)
 		}
 		out = append(out, page...)
-		if next := httpx.LinkNext(resp.Header); next != "" {
+		next, err := c.client.NextLink(resp.Header)
+		if err != nil {
+			return nil, integration.Wrap(integration.CodeUpstreamError, err, "GitLab returned a next page link outside the connection's url")
+		}
+		if next != "" {
 			return &httpx.Request{Method: http.MethodGet, Path: next}, nil
 		}
 		return nil, nil

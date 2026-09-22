@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,6 +67,7 @@ type fakeGitLab struct {
 	enterprise  []fakeUser              // enterprise users of the configured group (with email)
 	saml        []map[string]any        // SAML identities of the configured group
 	samlPages   int                     // split saml into this many pages
+	nextLink    string                  // when set, every paginated list points its next page here
 	projects    map[string]*fakeProject // by path and by numeric id
 	groups      map[string]*fakeGroup
 	me          fakeUser
@@ -189,7 +192,7 @@ func (f *fakeGitLab) handler(t *testing.T) http.HandlerFunc {
 					nq := next.Query()
 					nq.Set("page", strconv.Itoa(page+1))
 					next.RawQuery = nq.Encode()
-					w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, "https://"+r.Host+next.String()))
+					w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, f.link(r, next)))
 				}
 				out = out[lo:hi]
 			}
@@ -298,7 +301,7 @@ func (f *fakeGitLab) handler(t *testing.T) http.HandlerFunc {
 					nq := next.Query()
 					nq.Set("page", strconv.Itoa(page+1))
 					next.RawQuery = nq.Encode()
-					w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, "https://"+r.Host+next.String()))
+					w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, f.link(r, next)))
 				}
 				writeJSON(w, 200, f.saml[lo:hi])
 			default:
@@ -339,6 +342,14 @@ func newFake() *fakeGitLab {
 	f.groups["acme"] = acme
 	f.groups["200"] = acme
 	return f
+}
+
+// link renders a next-page URL on the fake's own host, or nextLink when set.
+func (f *fakeGitLab) link(r *http.Request, next url.URL) string {
+	if f.nextLink != "" {
+		return f.nextLink
+	}
+	return "https://" + r.Host + next.String()
 }
 
 func (f *fakeGitLab) member(project string, u fakeUser, level int) {
@@ -467,6 +478,24 @@ func TestIdentitySAML(t *testing.T) {
 	}
 	itest.ExpectCode(t, check(t, c, "nobody@example.com", "project.admin", "project:acme/webapp"), integration.CodeUserNotFound)
 	itest.ExpectCode(t, check(t, c, "dup@example.com", "project.admin", "project:acme/webapp"), integration.CodeUserAmbiguous)
+	// A next page on another host is not fetched: the request would carry
+	// the token there.
+	var elsewhere atomic.Int32
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Add(1)
+		if r.Header.Get("PRIVATE-TOKEN") != "" {
+			t.Errorf("token sent to %s", r.Host)
+		}
+		writeJSON(w, 200, []any{})
+	}))
+	defer evil.Close()
+	f.nextLink = evil.URL + "/api/v4/groups/acme/saml/identities?page=2"
+	d = check(t, c, "carol@example.com", "project.admin", "project:acme/webapp")
+	itest.ExpectCode(t, d, integration.CodeUpstreamError)
+	if !strings.Contains(d.Text, "outside the connection's url") || elsewhere.Load() != 0 {
+		t.Errorf("off-host next link: %+v, %d requests elsewhere", d, elsewhere.Load())
+	}
+	f.nextLink = ""
 	// Identity pointing at a deleted user.
 	itest.ExpectCode(t, check(t, c, "someone@example.com", "project.admin", "project:acme/webapp"), integration.CodeUserNotFound)
 }
