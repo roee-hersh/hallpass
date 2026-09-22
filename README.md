@@ -122,7 +122,7 @@ service from starting.
 | aws | ready |
 | googleworkspace | planned |
 | microsoft365 | planned |
-| salesforce | planned |
+| salesforce | ready (UNVERIFIED, see docs) |
 | fake | for smoke tests |
 
 Each integration is documented in `docs/integrations/<name>.md`: the credential to create, the

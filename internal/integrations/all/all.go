@@ -12,6 +12,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/gitlab"
 	"github.com/roee-hersh/hallpass/internal/integrations/jira"
 	"github.com/roee-hersh/hallpass/internal/integrations/kubernetes"
+	"github.com/roee-hersh/hallpass/internal/integrations/salesforce"
 	"github.com/roee-hersh/hallpass/internal/integrations/slack"
 )
 
@@ -27,5 +28,6 @@ func Registry() *integration.Registry {
 	r.Register(jira.Integration{})
 	r.Register(confluence.Integration{})
 	r.Register(slack.Integration{})
+	r.Register(salesforce.Integration{})
 	return r
 }

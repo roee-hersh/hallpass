@@ -30,6 +30,26 @@ jobs:
       - run: go build -o /dev/null ./cmd/hallpass
         if: runner.os == 'Linux'
 
+  specs:
+    # Runs the integration suites with every fake upstream validating requests
+    # against the vendor's published API description.
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@v4
+        with:
+          path: .specs
+          key: api-specs-${{ github.run_id }}
+          restore-keys: api-specs-
+      - name: fetch API descriptions
+        run: test/specs/fetch.sh .specs
+      - name: test against the descriptions
+        run: HALLPASS_SPECS_DIR=$PWD/.specs go test -race -count=1 ./internal/integrations/...
+
   kind:
     runs-on: ubuntu-latest
     needs: test
