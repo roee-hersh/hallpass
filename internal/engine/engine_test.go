@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +27,13 @@ type counting struct {
 	checks   atomic.Int32
 	slow     time.Duration
 	badAllow bool
+	// needGroup, when set, makes ResolveIdentity answer user_not_found unless
+	// the request carries that group (like aws static_map).
+	needGroup string
+
+	mu sync.Mutex
+	// identityGroups is Identity.Groups as the last Check saw it.
+	identityGroups []string
 }
 
 type countingConn struct {
@@ -52,13 +61,26 @@ func (c *counting) New(ctx context.Context, s *integration.Settings, d integrati
 	return &countingConn{Connection: inner, p: c}, nil
 }
 
+// ResolveIdentity embeds the request's groups in the identity, as the
+// kubernetes and argocd integrations do.
 func (c *countingConn) ResolveIdentity(ctx context.Context, u integration.User) (integration.Identity, error) {
 	c.p.resolves.Add(1)
-	return c.Connection.ResolveIdentity(ctx, u)
+	if c.p.needGroup != "" && !slices.Contains(u.Groups, c.p.needGroup) {
+		return integration.Identity{}, integration.UserNotFound("%s and its groups are not mapped", u.Email)
+	}
+	id, err := c.Connection.ResolveIdentity(ctx, u)
+	if err != nil {
+		return id, err
+	}
+	id.Groups = append([]string(nil), u.Groups...)
+	return id, nil
 }
 
 func (c *countingConn) Check(ctx context.Context, r integration.CheckRequest) (integration.Decision, error) {
 	c.p.checks.Add(1)
+	c.p.mu.Lock()
+	c.p.identityGroups = append([]string(nil), r.Identity.Groups...)
+	c.p.mu.Unlock()
 	if c.p.slow > 0 {
 		select {
 		case <-ctx.Done():
@@ -160,6 +182,80 @@ func TestFlowAndCaches(t *testing.T) {
 	}
 	if lines != 7 {
 		t.Errorf("decision log lines = %d", lines)
+	}
+}
+
+func groupsReq(user string, groups ...string) Request {
+	return Request{User: user, Groups: groups, Connection: "c", Action: "thing.read", Resource: "thing:1"}
+}
+
+// The identity cache is keyed by the request's groups too: integrations
+// that embed the caller's groups in the Identity must not serve a later
+// request with the first request's groups.
+func TestIdentityCacheKeyedByGroups(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}}
+	e, _ := build(t, c, Options{IdentityCache: 15 * time.Minute})
+	ctx := context.Background()
+	seen := func() []string {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return append([]string(nil), c.identityGroups...)
+	}
+
+	r := e.Check(ctx, groupsReq("a@x.com", "system:masters"))
+	if r.Decision.Outcome != integration.Allow || c.resolves.Load() != 1 {
+		t.Fatalf("%+v resolves=%d", r, c.resolves.Load())
+	}
+	if g := seen(); !slices.Equal(g, []string{"system:masters"}) {
+		t.Fatalf("identity groups = %v", g)
+	}
+	// Same user, no groups: a second resolve, and Check sees no groups.
+	r = e.Check(ctx, groupsReq("a@x.com"))
+	if r.Decision.Outcome != integration.Allow || c.resolves.Load() != 2 {
+		t.Fatalf("%+v resolves=%d, want 2", r, c.resolves.Load())
+	}
+	if g := seen(); len(g) != 0 {
+		t.Fatalf("identity groups = %v, want none (cached identity carried the first request's groups)", g)
+	}
+	// The first key is still cached.
+	e.Check(ctx, groupsReq("a@x.com", "system:masters"))
+	if c.resolves.Load() != 2 || !slices.Equal(seen(), []string{"system:masters"}) {
+		t.Fatalf("resolves=%d groups=%v", c.resolves.Load(), seen())
+	}
+	// Order and duplicates do not matter for the key.
+	e.Check(ctx, groupsReq("a@x.com", "b", "a", "a"))
+	e.Check(ctx, groupsReq("a@x.com", "a", "b"))
+	if c.resolves.Load() != 3 || !slices.Equal(seen(), []string{"a", "b"}) {
+		t.Fatalf("resolves=%d groups=%v", c.resolves.Load(), seen())
+	}
+	// Negative entries are keyed the same way.
+	before := c.resolves.Load()
+	e.Check(ctx, groupsReq("nobody@x.com", "x"))
+	e.Check(ctx, groupsReq("nobody@x.com", "y"))
+	e.Check(ctx, groupsReq("nobody@x.com", "x"))
+	if c.resolves.Load() != before+2 {
+		t.Fatalf("negative resolves = %d, want %d", c.resolves.Load(), before+2)
+	}
+}
+
+// A user_not_found for one set of groups must not be served to the same
+// user arriving with a group that does map (aws static_map).
+func TestNegativeIdentityNotSharedAcrossGroups(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}, needGroup: "platform"}
+	e, _ := build(t, c, Options{IdentityCache: 15 * time.Minute})
+	ctx := context.Background()
+	r := e.Check(ctx, groupsReq("u@x.com"))
+	if r.Decision.Code != integration.CodeUserNotFound {
+		t.Fatalf("%+v", r)
+	}
+	r = e.Check(ctx, groupsReq("u@x.com", "platform"))
+	if r.Decision.Outcome != integration.Allow || c.resolves.Load() != 2 {
+		t.Fatalf("mapped group after a miss: %+v resolves=%d", r, c.resolves.Load())
+	}
+	// The miss is still remembered for the unmapped shape.
+	r = e.Check(ctx, groupsReq("u@x.com"))
+	if r.Decision.Code != integration.CodeUserNotFound || c.resolves.Load() != 2 {
+		t.Fatalf("%+v resolves=%d", r, c.resolves.Load())
 	}
 }
 
