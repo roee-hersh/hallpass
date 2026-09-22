@@ -10,8 +10,10 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/fake"
 	"github.com/roee-hersh/hallpass/internal/integrations/github"
 	"github.com/roee-hersh/hallpass/internal/integrations/gitlab"
+	"github.com/roee-hersh/hallpass/internal/integrations/googleworkspace"
 	"github.com/roee-hersh/hallpass/internal/integrations/jira"
 	"github.com/roee-hersh/hallpass/internal/integrations/kubernetes"
+	"github.com/roee-hersh/hallpass/internal/integrations/microsoft365"
 	"github.com/roee-hersh/hallpass/internal/integrations/salesforce"
 	"github.com/roee-hersh/hallpass/internal/integrations/slack"
 )
@@ -29,5 +31,7 @@ func Registry() *integration.Registry {
 	r.Register(confluence.Integration{})
 	r.Register(slack.Integration{})
 	r.Register(salesforce.Integration{})
+	r.Register(microsoft365.Integration{})
+	r.Register(googleworkspace.Integration{})
 	return r
 }

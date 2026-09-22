@@ -120,8 +120,8 @@ service from starting.
 | confluence (Cloud) | ready |
 | slack | ready |
 | aws | ready |
-| googleworkspace | planned |
-| microsoft365 | planned |
+| googleworkspace | ready |
+| microsoft365 | ready |
 | salesforce | ready (UNVERIFIED, see docs) |
 | fake | for smoke tests |
 
