@@ -1,0 +1,28 @@
+# Cases for the opt-in live test:
+#
+#   HALLPASS_LIVE_CASES=examples/live-cases.yaml go test -tags live ./test/live/
+#
+# config is a hallpass config file (relative to this file). Each case names a
+# connection from it and the answer you expect. Fill in real users.
+config: hallpass.yaml
+
+cases:
+  - name: admin may write
+    connection: demo
+    user: admin@example.com
+    action: thing.write
+    resource: thing:1
+    expect: allow
+  - name: plain user may not write
+    connection: demo
+    user: dana@example.com
+    action: thing.write
+    resource: thing:1
+    expect: deny
+  - name: unknown user
+    connection: demo
+    user: nobody@example.com
+    action: thing.read
+    resource: thing:1
+    expect: deny
+    code: user_not_found

@@ -136,6 +136,20 @@ docker run -p 8080:8080 -e HALLPASS_API_KEY=change-me \
   -v $PWD/examples/hallpass.yaml:/etc/hallpass/hallpass.yaml:ro hallpass
 ```
 
+## Testing
+
+```sh
+go test -race ./...                                   # unit tests against fake upstreams
+test/kind/run.sh                                      # kubernetes end to end on a kind cluster
+go test -tags differential ./test/differential/      # Argo CD evaluator vs the argocd CLI
+HALLPASS_LIVE_CASES=$PWD/cases.yaml go test -tags live ./test/live/   # real systems, opt-in
+```
+
+Every integration's tests run against a fake of its API with injected failures (500, 429, 401,
+timeout) and assert that no secret ever reaches a log line. The live test takes a cases file
+(see `examples/live-cases.yaml`) that names a config file and the answers you expect from your own
+systems; run it once after setting up each connection.
+
 ## Design notes
 
 - Every integration is called with plain HTTP from the standard library. No vendor SDKs.
