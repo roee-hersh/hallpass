@@ -1,0 +1,24 @@
+name: Integration request
+description: Ask for a new system to be supported
+labels: [integration]
+body:
+  - type: input
+    id: system
+    attributes:
+      label: System
+      placeholder: e.g. PagerDuty, Terraform Cloud, Linear
+    validations:
+      required: true
+  - type: textarea
+    id: actions
+    attributes:
+      label: Actions you need checked
+      description: Which permission questions do you want hallpass to answer for this system?
+    validations:
+      required: true
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to help build or test this integration

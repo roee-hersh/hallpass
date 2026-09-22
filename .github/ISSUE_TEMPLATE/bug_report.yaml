@@ -1,0 +1,29 @@
+name: Bug report
+description: hallpass returned a wrong decision, crashed or misbehaved
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `hallpass version`, or the commit
+    validations:
+      required: true
+  - type: input
+    id: integration
+    attributes:
+      label: Integration
+      placeholder: kubernetes, jira, github, ...
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The request you sent, the decision you got and the decision you expected. Remove secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Connection config
+      description: The relevant connection block, with credentials removed
+      render: yaml
