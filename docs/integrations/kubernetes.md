@@ -90,6 +90,12 @@ When both the action and the request name a resource they must agree.
 | 401 | unknown (`credential_rejected`): the token is invalid |
 | 403 | unknown (`credential_rejected`): the ServiceAccount may not create SubjectAccessReviews |
 
+## Probe
+
+`hallpass probe` posts a SubjectAccessReview for a throwaway subject to prove the token may create
+them, then a SelfSubjectRulesReview (any authenticated subject may) and warns when the token can do
+anything beyond that one rule, listing the extra verbs and resources.
+
 ## What it cannot see
 
 - Admission: ValidatingAdmissionPolicy, admission webhooks, Pod Security admission and resource quotas

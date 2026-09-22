@@ -304,5 +304,72 @@ func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error)
 	if out.Status.Allowed {
 		res.Warnings = append(res.Warnings, "the cluster lets an unknown user read namespaces; check that authorization is enabled")
 	}
+	res.Warnings = append(res.Warnings, c.extraRules(ctx)...)
 	return res, nil
+}
+
+// selfRulesReview is the part of a SelfSubjectRulesReview the probe reads.
+type selfRulesReview struct {
+	Status struct {
+		ResourceRules []struct {
+			Verbs         []string `json:"verbs"`
+			APIGroups     []string `json:"apiGroups"`
+			Resources     []string `json:"resources"`
+			ResourceNames []string `json:"resourceNames"`
+		} `json:"resourceRules"`
+		Incomplete      bool   `json:"incomplete"`
+		EvaluationError string `json:"evaluationError"`
+	} `json:"status"`
+}
+
+// extraRules asks the API server what hallpass's own token may do (any
+// authenticated subject may create a SelfSubjectRulesReview) and warns
+// about anything beyond creating SubjectAccessReviews. Rules every
+// authenticated user has (self reviews, discovery) are ignored.
+func (c *Connection) extraRules(ctx context.Context) []string {
+	req := map[string]any{
+		"apiVersion": "authorization.k8s.io/v1",
+		"kind":       "SelfSubjectRulesReview",
+		"spec":       map[string]any{"namespace": "kube-system"},
+	}
+	var out selfRulesReview
+	if _, err := c.client.PostJSON(ctx, "/apis/authorization.k8s.io/v1/selfsubjectrulesreviews", req, &out, true); err != nil {
+		return []string{"could not list the token's own permissions (SelfSubjectRulesReview failed); check for over-privilege by hand"}
+	}
+	var extra []string
+	for _, r := range out.Status.ResourceRules {
+		if allSelfReview(r.Resources) {
+			continue
+		}
+		if len(r.Resources) == 1 && r.Resources[0] == "subjectaccessreviews" && len(r.Verbs) == 1 && r.Verbs[0] == "create" {
+			continue
+		}
+		extra = append(extra, strings.Join(r.Verbs, ",")+" "+strings.Join(r.Resources, ",")+groupSuffix(r.APIGroups))
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+	if len(extra) > 8 {
+		extra = append(extra[:8], fmt.Sprintf("and %d more", len(extra)-8))
+	}
+	return []string{"the token can do more than create SubjectAccessReviews (in kube-system): " + strings.Join(extra, "; ") + ". Bind only the hallpass ClusterRole to it"}
+}
+
+func allSelfReview(resources []string) bool {
+	if len(resources) == 0 {
+		return false
+	}
+	for _, r := range resources {
+		if r != "selfsubjectaccessreviews" && r != "selfsubjectrulesreviews" && r != "selfsubjectreviews" {
+			return false
+		}
+	}
+	return true
+}
+
+func groupSuffix(groups []string) string {
+	if len(groups) == 0 || (len(groups) == 1 && groups[0] == "") {
+		return ""
+	}
+	return "." + strings.Join(groups, ",")
 }

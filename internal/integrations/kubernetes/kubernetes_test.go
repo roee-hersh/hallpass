@@ -64,9 +64,23 @@ func (f *fakeAPI) handler(t *testing.T) http.HandlerFunc {
 	}
 }
 
+// rulesHandler serves SelfSubjectRulesReview with the given extra rules.
+func rulesHandler(extra []map[string]any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rules := []map[string]any{
+			{"verbs": []string{"create"}, "apiGroups": []string{"authorization.k8s.io"}, "resources": []string{"selfsubjectaccessreviews", "selfsubjectrulesreviews"}},
+			{"verbs": []string{"create"}, "apiGroups": []string{"authorization.k8s.io"}, "resources": []string{"subjectaccessreviews"}},
+		}
+		rules = append(rules, extra...)
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"resourceRules": rules, "nonResourceRules": []map[string]any{{"verbs": []string{"get"}, "nonResourceURLs": []string{"/api", "/healthz"}}}}})
+	}
+}
+
 func setup(t *testing.T, values map[string]string) (*itest.Server, *fakeAPI, integration.Connection) {
 	t.Helper()
 	srv := itest.NewServer(t)
+	srv.Handle("POST", "/apis/authorization.k8s.io/v1/selfsubjectrulesreviews", rulesHandler(nil))
 	api := &fakeAPI{allow: map[string][]string{
 		"dana@example.com":      {"get pods payments ", "create deployments.apps payments ", "get pods/log payments ", "update deployments.apps/scale payments api"},
 		"bob@example.com":       {"get pods payments "},
@@ -196,7 +210,7 @@ func TestFailures(t *testing.T) {
 }
 
 func TestProbe(t *testing.T) {
-	_, api, c := setup(t, nil)
+	srv, api, c := setup(t, nil)
 	r, err := c.Probe(context.Background())
 	if err != nil || r.Summary == "" || len(r.Warnings) != 0 {
 		t.Fatal(r, err)
@@ -205,6 +219,22 @@ func TestProbe(t *testing.T) {
 	r, _ = c.Probe(context.Background())
 	if len(r.Warnings) != 1 {
 		t.Error("expected warning for permissive cluster")
+	}
+	api.allow["hallpass:probe"] = nil
+	// An over-privileged token is reported with the extra rules.
+	srv.Handle("POST", "/apis/authorization.k8s.io/v1/selfsubjectrulesreviews", rulesHandler([]map[string]any{
+		{"verbs": []string{"get", "list"}, "apiGroups": []string{""}, "resources": []string{"secrets"}},
+		{"verbs": []string{"*"}, "apiGroups": []string{"apps"}, "resources": []string{"deployments"}},
+	}))
+	r, err = c.Probe(context.Background())
+	if err != nil || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "get,list secrets") || !strings.Contains(r.Warnings[0], "* deployments.apps") {
+		t.Fatalf("%+v %v", r, err)
+	}
+	// A failing rules review is a warning, not an error.
+	srv.JSON("POST", "/apis/authorization.k8s.io/v1/selfsubjectrulesreviews", 403, `{}`)
+	r, err = c.Probe(context.Background())
+	if err != nil || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "could not list") {
+		t.Fatalf("%+v %v", r, err)
 	}
 }
 
