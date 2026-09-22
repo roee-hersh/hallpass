@@ -102,6 +102,10 @@ func TestServeEndToEnd(t *testing.T) {
 	p := writeConfig(t, goodConfig)
 	addr := freePort(t)
 	errf, _ := os.CreateTemp(t.TempDir(), "err")
+	t.Cleanup(func() { errf.Close() }) // before the temp dir is removed (Windows)
+	parent, cancelServe := context.WithCancel(context.Background())
+	serveParent = parent
+	t.Cleanup(func() { serveParent = context.Background() })
 	done := make(chan int, 1)
 	go func() {
 		done <- run([]string{"serve", "-config", p, "-listen", addr, "-log-level", "debug"}, os.Stdout, errf)
@@ -152,8 +156,7 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	res.Body.Close()
 
-	proc, _ := os.FindProcess(os.Getpid())
-	_ = proc.Signal(os.Interrupt)
+	cancelServe()
 	select {
 	case code := <-done:
 		if code != 0 {
