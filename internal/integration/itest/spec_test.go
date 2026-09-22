@@ -223,3 +223,27 @@ func TestOptionalParams(t *testing.T) {
 		t.Fatal("AnySpec accepted unknown path")
 	}
 }
+
+// A server URL whose host carries a template variable still yields its path
+// prefix, so paths relative to it validate.
+func TestServerPathWithVariables(t *testing.T) {
+	doc := `{"openapi":"3.0.1","servers":[{"url":"https://{your-domain}.atlassian.net/wiki/api/v2","variables":{"your-domain":{"default":"your-domain"}}}],
+	"paths":{"/spaces":{"get":{"responses":{"200":{"description":"ok"}}}}}}`
+	s, err := LoadSpec("c", []byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Validate(req("GET", "https://x/wiki/api/v2/spaces", ""), nil); err != nil {
+		t.Fatalf("prefixed path rejected: %v", err)
+	}
+	if err := s.Validate(req("GET", "https://x/spaces", ""), nil); err != nil {
+		t.Fatalf("bare path rejected: %v", err)
+	}
+	for in, want := range map[string]string{
+		"https://{h}/wiki/api/v2/": "/wiki/api/v2", "{scheme}://{h}/a": "/a", "https://h": "", "https://h/": "", "/rest/api": "/rest/api",
+	} {
+		if got := serverPath(map[string]any{"url": in}); got != want {
+			t.Errorf("serverPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

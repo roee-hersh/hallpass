@@ -355,8 +355,8 @@ func newOpenAPI(name string, doc map[string]any) (*openAPI, error) {
 		}
 	} else {
 		for _, srv := range asSlice(doc["servers"]) {
-			if u, err := url.Parse(asString(asMap(srv)["url"])); err == nil && u.Path != "" && u.Path != "/" {
-				s.prefixes = append(s.prefixes, strings.TrimRight(u.Path, "/"))
+			if p := serverPath(asMap(srv)); p != "" {
+				s.prefixes = append(s.prefixes, p)
 			}
 		}
 	}
@@ -704,4 +704,32 @@ func (a anySpec) Validate(r *http.Request, body []byte) error {
 		errs = append(errs, err.Error())
 	}
 	return errors.New(strings.Join(errs, "; "))
+}
+
+// serverPath returns the path part of an OpenAPI server URL, or "" when it
+// has none. Server variables ({your-domain}) are replaced by their defaults
+// first, since a brace in the host does not parse; a URL that still does
+// not parse is split on the first slash after the scheme.
+func serverPath(srv map[string]any) string {
+	raw := asString(srv["url"])
+	for name, v := range asMap(srv["variables"]) {
+		raw = strings.ReplaceAll(raw, "{"+name+"}", asString(asMap(v)["default"]))
+	}
+	var path string
+	if u, err := url.Parse(raw); err == nil {
+		path = u.Path
+	} else {
+		rest := raw
+		if i := strings.Index(rest, "://"); i >= 0 {
+			rest = rest[i+3:]
+		}
+		if i := strings.Index(rest, "/"); i >= 0 {
+			path = rest[i:]
+		}
+	}
+	path = strings.TrimRight(path, "/")
+	if path == "" || path == "/" {
+		return ""
+	}
+	return path
 }
