@@ -257,6 +257,10 @@ func setup(t *testing.T, values map[string]string) (*itest.Server, *fakeSlack, i
 func setupToken(t *testing.T, values map[string]string, cred secret.Secret) (*itest.Server, *fakeSlack, integration.Connection) {
 	t.Helper()
 	srv := itest.NewServer(t)
+	// Slack's published description is the legacy one: the token is a query
+	// parameter there, team_id (org installs) and team.preferences.list are
+	// newer than it.
+	srv.UseSpec(itest.SpecFromEnv(t, "slack"), itest.SpecOptions{StripPrefix: []string{`/api`}, OptionalParams: []string{"token"}, AllowQuery: []string{"team_id"}, IgnorePaths: []string{`^(/api)?/team\.preferences\.list$`}})
 	f := newFake()
 	srv.Handle("", "/api/*", f.handler(t))
 	deps, _ := itest.Deps(t, srv)

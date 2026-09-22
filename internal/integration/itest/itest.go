@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -66,6 +67,72 @@ type Server struct {
 	fail   Failure
 	// Unmatched is called for requests no route matches (default 404).
 	Unmatched http.HandlerFunc
+
+	spec     Spec
+	specOpts SpecOptions
+	strip    []*regexp.Regexp
+	ignore   []*regexp.Regexp
+}
+
+// UseSpec validates every following request against the API description.
+// A nil spec (SpecFromEnv found none) is a no-op. Violations fail the test.
+func (s *Server) UseSpec(spec Spec, opts SpecOptions) {
+	if spec == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.spec, s.specOpts = spec, opts
+	s.strip, s.ignore = nil, nil
+	for _, p := range opts.StripPrefix {
+		s.strip = append(s.strip, regexp.MustCompile("^"+p))
+	}
+	for _, p := range opts.IgnorePaths {
+		s.ignore = append(s.ignore, regexp.MustCompile(p))
+	}
+}
+
+// validate checks one request against the spec, if any.
+func (s *Server) validate(r *http.Request, body []byte) {
+	s.mu.Lock()
+	spec, strip, ignore, allow, optional := s.spec, s.strip, s.ignore, s.specOpts.AllowQuery, s.specOpts.OptionalParams
+	s.mu.Unlock()
+	if spec == nil {
+		return
+	}
+	for _, re := range ignore {
+		if re.MatchString(r.URL.Path) {
+			return
+		}
+	}
+	// Work on a copy so handlers see the original request.
+	rc := WithOptional(r.Clone(r.Context()), optional)
+	u := *r.URL
+	rc.URL = &u
+	esc := u.EscapedPath()
+	for _, re := range strip {
+		if loc := re.FindStringIndex(esc); loc != nil {
+			esc = esc[loc[1]:]
+			if !strings.HasPrefix(esc, "/") {
+				esc = "/" + esc
+			}
+			u.RawPath = esc
+			if p, err := url.PathUnescape(esc); err == nil {
+				u.Path = p
+			}
+			break
+		}
+	}
+	if len(allow) > 0 {
+		q := u.Query()
+		for _, a := range allow {
+			q.Del(a)
+		}
+		u.RawQuery = q.Encode()
+	}
+	if err := spec.Validate(rc, body); err != nil {
+		s.t.Errorf("request does not match the %s API description: %v", spec.Name(), err)
+	}
 }
 
 type route struct {
@@ -89,6 +156,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	fail := s.fail
 	routes := append([]route(nil), s.routes...)
 	s.mu.Unlock()
+	s.validate(r, body)
 
 	switch fail {
 	case FailServerError:

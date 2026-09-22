@@ -304,6 +304,9 @@ func (f *fakeGitLab) groupMember(group string, u fakeUser, level int) {
 func setup(t *testing.T, f *fakeGitLab, values map[string]string) (*itest.Server, integration.Connection) {
 	t.Helper()
 	srv := itest.NewServer(t)
+	// GitLab's published OpenAPI keys paths with /api/v4 and leaves out the
+	// users, user, SAML identities, enterprise users and token endpoints.
+	srv.UseSpec(itest.SpecFromEnv(t, "gitlab"), itest.SpecOptions{IgnorePaths: []string{`^/api/v4/users(/|$)`, `^/api/v4/user$`, `/saml/identities$`, `/enterprise_users$`, `^/api/v4/personal_access_tokens/self$`}})
 	srv.Handle("", "/api/v4/*", f.handler(t))
 	deps, _ := itest.Deps(t, srv)
 	v := map[string]string{"url": srv.URL, "identity_mode": "admin_search", "username_template": "{local}"}
@@ -443,6 +446,9 @@ func TestIdentityTemplate(t *testing.T) {
 
 func TestNewValidation(t *testing.T) {
 	srv := itest.NewServer(t)
+	// GitLab's published OpenAPI keys paths with /api/v4 and leaves out the
+	// users, user, SAML identities, enterprise users and token endpoints.
+	srv.UseSpec(itest.SpecFromEnv(t, "gitlab"), itest.SpecOptions{IgnorePaths: []string{`^/api/v4/users(/|$)`, `^/api/v4/user$`, `/saml/identities$`, `/enterprise_users$`, `^/api/v4/personal_access_tokens/self$`}})
 	deps, _ := itest.Deps(t, srv)
 	build := func(values map[string]string, cred secret.Secret) error {
 		v := map[string]string{"url": srv.URL}

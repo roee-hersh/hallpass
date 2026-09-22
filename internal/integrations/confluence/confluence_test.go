@@ -233,6 +233,7 @@ func (f *fakeSite) handler(w http.ResponseWriter, r *http.Request) {
 func setup(t *testing.T, f *fakeSite, withIdentity bool) (*itest.Server, integration.Connection) {
 	t.Helper()
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "confluence-v1"), itest.SpecFromEnv(t, "confluence-v2"), itest.SpecFromEnv(t, "jira")), itest.SpecOptions{StripPrefix: []string{`/ex/(confluence|jira)/[^/]+`}, IgnorePaths: []string{`^/_edge/tenant_info$`, `/oauth/token$`}})
 	srv.Handle("", "*", f.handler)
 	deps, _ := itest.Deps(t, srv)
 	oldGW, oldTok := jira.Gateway, jira.TokenURL
@@ -301,6 +302,7 @@ func TestFieldsValid(t *testing.T) {
 
 func TestNewRejectsWrongIdentityConnection(t *testing.T) {
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "confluence-v1"), itest.SpecFromEnv(t, "confluence-v2"), itest.SpecFromEnv(t, "jira")), itest.SpecOptions{StripPrefix: []string{`/ex/(confluence|jira)/[^/]+`}, IgnorePaths: []string{`^/_edge/tenant_info$`, `/oauth/token$`}})
 	deps, _ := itest.Deps(t, srv)
 	deps.Connection = func(string) (integration.Connection, error) { return fakeConn{}, nil }
 	s := itest.Settings("c", "confluence", map[string]string{"url": srv.URL, "username": "x@example.com", "identity_connection": "k8s"}, map[string]secret.Secret{"credential": itest.Literal("x")})
@@ -538,6 +540,7 @@ func TestFailuresAfterIdentity(t *testing.T) {
 	// Identity resolved first, then the Confluence call fails.
 	f := newFake(t)
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "confluence-v1"), itest.SpecFromEnv(t, "confluence-v2"), itest.SpecFromEnv(t, "jira")), itest.SpecOptions{StripPrefix: []string{`/ex/(confluence|jira)/[^/]+`}, IgnorePaths: []string{`^/_edge/tenant_info$`, `/oauth/token$`}})
 	srv.Handle("", "*", f.handler)
 	deps, _ := itest.Deps(t, srv)
 	js := itest.Settings("jira-1", "jira", map[string]string{"url": srv.URL, "username": "jirabot@example.com"}, map[string]secret.Secret{"credential": itest.Literal("jira")})

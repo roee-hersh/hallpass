@@ -91,6 +91,12 @@ Use `internal/integration/itest`:
 - `itest.Check(t, conn, integ, user, action, resource)` runs the check like the engine.
 - `itest.FailureCases(t, srv, func() Decision)` asserts the unknown codes for 500, 429, 401 and a
   timeout.
+- `srv.UseSpec(itest.SpecFromEnv(t, "<name>"), opts)` validates every request against the vendor's
+  published API description (OpenAPI, Google discovery or botocore) when `HALLPASS_SPECS_DIR` holds
+  `<name>.spec`; `test/specs/fetch.sh` downloads them and CI runs the suite with them. A wrong path,
+  method, missing required parameter or body field fails the test. Use `StripPrefix` for gateway
+  prefixes, `IgnorePaths` for endpoints the description lacks (say why in a comment), `AllowQuery`
+  and `OptionalParams` for parameters newer or older than the description.
 
 The coverage gate in `internal/integrations/all` requires, for every non-pattern action, a
 `TestAction_<name>_allow` and `TestAction_<name>_deny` in the integration package, with every

@@ -449,6 +449,7 @@ type env struct {
 func setup(t *testing.T, values map[string]string) *env {
 	t.Helper()
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "github"), itest.SpecOptions{StripPrefix: []string{`/api/v3`}, IgnorePaths: []string{`^/graphql$`, `^/api/graphql$`}})
 	api := newFake(t)
 	srv.Handle("", "/api/*", api.handle)
 	deps, logs := itest.Deps(t, srv)
@@ -599,6 +600,7 @@ func TestTokenRefreshNearExpiry(t *testing.T) {
 
 func TestBadKeyAndMissingInstallation(t *testing.T) {
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "github"), itest.SpecOptions{StripPrefix: []string{`/api/v3`}, IgnorePaths: []string{`^/graphql$`, `^/api/graphql$`}})
 	api := newFake(t)
 	srv.Handle("", "/api/*", api.handle)
 	deps, _ := itest.Deps(t, srv)
@@ -755,6 +757,7 @@ func TestIdentityMapFile(t *testing.T) {
 
 	// New validates the file exists.
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "github"), itest.SpecOptions{StripPrefix: []string{`/api/v3`}, IgnorePaths: []string{`^/graphql$`, `^/api/graphql$`}})
 	deps, _ := itest.Deps(t, srv)
 	base := map[string]string{"url": srv.URL, "organization": "acme", "app_id": testAppID, "identity_mode": "map_file"}
 	secrets := map[string]secret.Secret{"credential": keySecret()}
@@ -807,6 +810,7 @@ func TestFields(t *testing.T) {
 		t.Error("template")
 	}
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "github"), itest.SpecOptions{StripPrefix: []string{`/api/v3`}, IgnorePaths: []string{`^/graphql$`, `^/api/graphql$`}})
 	deps, _ := itest.Deps(t, srv)
 	s := itest.Settings("gh", "github", map[string]string{"organization": "acme", "app_id": testAppID, "identity_mode": "template", "login_template": "static"}, map[string]secret.Secret{"credential": keySecret()})
 	if _, err := (Integration{}).New(context.Background(), s, deps); err == nil {

@@ -532,6 +532,7 @@ type env struct {
 func setup(t *testing.T, values map[string]string, cred secret.Secret) *env {
 	t.Helper()
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "aws-sts"), itest.SpecFromEnv(t, "aws-iam"), itest.SpecFromEnv(t, "aws-identitystore"), itest.SpecFromEnv(t, "aws-sso-admin")), itest.SpecOptions{IgnorePaths: []string{`^/latest/`}})
 	f := newFake(t)
 	srv.Handle("", "/*", f.handler)
 	deps, _ := itest.Deps(t, srv)
@@ -1065,6 +1066,7 @@ func TestFieldValidation(t *testing.T) {
 		}
 	}
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "aws-sts"), itest.SpecFromEnv(t, "aws-iam"), itest.SpecFromEnv(t, "aws-identitystore"), itest.SpecFromEnv(t, "aws-sso-admin")), itest.SpecOptions{IgnorePaths: []string{`^/latest/`}})
 	deps, _ := itest.Deps(t, srv)
 	base := map[string]string{"account_id": acct, "role_arn": roleARN, "region": "eu-west-1", "identity_mode": "identity_center",
 		"identity_center_role_arn": icRoleARN, "identity_center_region": "eu-west-1", "identity_store_id": storeID, "sso_instance_arn": instanceARN}

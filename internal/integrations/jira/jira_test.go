@@ -221,6 +221,7 @@ func jsonNum(n int64) string { return strconv.FormatInt(n, 10) }
 func setup(t *testing.T, mode string, values map[string]string) (*itest.Server, *fakeJira, integration.Connection) {
 	t.Helper()
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "jira"), itest.SpecOptions{StripPrefix: []string{`/ex/jira/[^/]+`}, IgnorePaths: []string{`^/_edge/tenant_info$`, `/oauth/token$`}})
 	f := newFake(t, mode)
 	srv.Handle("", "*", f.handler)
 	deps, logs := itest.Deps(t, srv)
@@ -274,6 +275,7 @@ func TestFieldsValid(t *testing.T) {
 
 func TestNewValidation(t *testing.T) {
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "jira"), itest.SpecOptions{StripPrefix: []string{`/ex/jira/[^/]+`}, IgnorePaths: []string{`^/_edge/tenant_info$`, `/oauth/token$`}})
 	deps, _ := itest.Deps(t, srv)
 	cases := []struct {
 		name   string
