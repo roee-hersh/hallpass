@@ -43,15 +43,25 @@ type fakeGoogle struct {
 	metaCalls    int
 	signCalls    int
 	keylessIss   string
-	users        map[string]directoryUser  // primary email -> user
+	users        map[string]fakeUser       // primary email -> user
 	aliases      map[string]string         // alias -> primary
 	files        map[string]map[string]any // file id -> fields visible to everyone in visible[]
 	visible      map[string][]string       // file id -> users who can see it
 	calendars    map[string]map[string]string
-	sendAs       map[string][]map[string]string
+	sendAs       map[string][]map[string]any
 	delegates    map[string][]map[string]string
 	groupMembers map[string][]string // group -> members; missing group -> 404
+	noIsMember   bool                // hasMember answers {} without isMember
 }
+
+// fakeUser is a Directory user as the fake serves it; a nil Suspended or
+// Archived is left out of the body.
+type fakeUser struct {
+	ID, PrimaryEmail    string
+	Suspended, Archived *bool
+}
+
+func ptr(b bool) *bool { return &b }
 
 // testKey is generated once per package; the tests only need it to be a
 // valid RSA key that the fake token endpoint can verify against.
@@ -69,12 +79,16 @@ func newFake(t *testing.T) *fakeGoogle {
 		tokens:   map[string]sourceKey{},
 		minted:   map[sourceKey]int{},
 		badGrant: map[string]bool{"nodelegation@example.com": true},
-		users: map[string]directoryUser{
-			"dana@example.com":         {ID: "100", PrimaryEmail: "dana@example.com"},
-			"bob@example.com":          {ID: "101", PrimaryEmail: "bob@example.com"},
-			"sus@example.com":          {ID: "102", PrimaryEmail: "sus@example.com", Suspended: true},
-			"arch@example.com":         {ID: "103", PrimaryEmail: "arch@example.com", Archived: true},
-			"nodelegation@example.com": {ID: "104", PrimaryEmail: "nodelegation@example.com"},
+		users: map[string]fakeUser{
+			"dana@example.com":         {ID: "100", PrimaryEmail: "dana@example.com", Suspended: ptr(false), Archived: ptr(false)},
+			"bob@example.com":          {ID: "101", PrimaryEmail: "bob@example.com", Suspended: ptr(false), Archived: ptr(false)},
+			"sus@example.com":          {ID: "102", PrimaryEmail: "sus@example.com", Suspended: ptr(true), Archived: ptr(false)},
+			"arch@example.com":         {ID: "103", PrimaryEmail: "arch@example.com", Suspended: ptr(false), Archived: ptr(true)},
+			"nodelegation@example.com": {ID: "104", PrimaryEmail: "nodelegation@example.com", Suspended: ptr(false), Archived: ptr(false)},
+			// nostatus comes without suspended and archived.
+			"nostatus@example.com": {ID: "105", PrimaryEmail: "nostatus@example.com"},
+			// noarch has suspended but no archived.
+			"noarch@example.com": {ID: "106", PrimaryEmail: "noarch@example.com", Suspended: ptr(false)},
 		},
 		aliases: map[string]string{"d.alias@example.com": "dana@example.com"},
 		files: map[string]map[string]any{
@@ -86,11 +100,21 @@ func newFake(t *testing.T) *fakeGoogle {
 		calendars: map[string]map[string]string{
 			"dana@example.com": {"team@group.calendar.google.com": "writer", "fb@example.com": "freeBusyReader", "ro@example.com": "reader", "wwpa@example.com": "writerWithoutPrivateAccess", "mine@example.com": "owner", "odd@example.com": "editor"},
 		},
-		sendAs: map[string][]map[string]string{
-			"dana@example.com": {{"sendAsEmail": "dana@example.com", "verificationStatus": "accepted", "isPrimary": "true"}, {"sendAsEmail": "support@example.com", "verificationStatus": "accepted"}, {"sendAsEmail": "pending@example.com", "verificationStatus": "pending"}},
+		sendAs: map[string][]map[string]any{
+			// The primary entry carries no verificationStatus, like Gmail's
+			// documented example; the others are custom "from" aliases.
+			"dana@example.com": {
+				{"sendAsEmail": "dana@example.com", "isPrimary": true, "isDefault": true},
+				{"sendAsEmail": "support@example.com", "verificationStatus": "accepted"},
+				{"sendAsEmail": "pending@example.com", "verificationStatus": "pending"},
+				{"sendAsEmail": "unspec@example.com", "verificationStatus": "verificationStatusUnspecified", "treatAsAlias": true},
+				{"sendAsEmail": "blank@example.com", "treatAsAlias": true},
+			},
+			// bob's list lacks the primary entry altogether.
+			"bob@example.com": {{"sendAsEmail": "team@example.com", "verificationStatus": "accepted"}},
 		},
 		delegates: map[string][]map[string]string{
-			"boss@example.com": {{"delegateEmail": "dana@example.com", "verificationStatus": "accepted"}, {"delegateEmail": "bob@example.com", "verificationStatus": "pending"}},
+			"boss@example.com": {{"delegateEmail": "dana@example.com", "verificationStatus": "accepted"}, {"delegateEmail": "bob@example.com", "verificationStatus": "pending"}, {"delegateEmail": "nostatus@example.com", "verificationStatus": "verificationStatusUnspecified"}},
 		},
 		groupMembers: map[string][]string{"eng@example.com": {"dana@example.com"}},
 	}
@@ -221,7 +245,14 @@ func (f *fakeGoogle) api(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, 404, "notFound")
 			return
 		}
-		write(w, map[string]any{"id": u.ID, "primaryEmail": u.PrimaryEmail, "suspended": u.Suspended, "archived": u.Archived, "name": map[string]any{"fullName": "Someone"}})
+		body := map[string]any{"id": u.ID, "primaryEmail": u.PrimaryEmail, "name": map[string]any{"fullName": "Someone"}}
+		if u.Suspended != nil {
+			body["suspended"] = *u.Suspended
+		}
+		if u.Archived != nil {
+			body["archived"] = *u.Archived
+		}
+		write(w, body)
 	case strings.HasPrefix(p, "/admin/directory/v1/groups/"):
 		if !need(adminEmail, scopeDirectoryGroup) {
 			return
@@ -239,6 +270,10 @@ func (f *fakeGoogle) api(w http.ResponseWriter, r *http.Request) {
 		members, ok := f.groupMembers[group]
 		if !ok {
 			apiErr(w, 404, "notFound")
+			return
+		}
+		if f.noIsMember {
+			write(w, map[string]any{})
 			return
 		}
 		is := false
@@ -385,11 +420,13 @@ func setup(t *testing.T, values map[string]string) (*itest.Server, *fakeGoogle, 
 }
 
 var (
-	dana = integration.User{Email: "dana@example.com"}
-	bob  = integration.User{Email: "bob@example.com"}
-	sus  = integration.User{Email: "sus@example.com"}
-	arch = integration.User{Email: "arch@example.com"}
-	nod  = integration.User{Email: "nodelegation@example.com"}
+	dana     = integration.User{Email: "dana@example.com"}
+	bob      = integration.User{Email: "bob@example.com"}
+	sus      = integration.User{Email: "sus@example.com"}
+	arch     = integration.User{Email: "arch@example.com"}
+	nod      = integration.User{Email: "nodelegation@example.com"}
+	nostatus = integration.User{Email: "nostatus@example.com"}
+	noarch   = integration.User{Email: "noarch@example.com"}
 )
 
 func check(t *testing.T, c integration.Connection, u integration.User, action, resource string) integration.Decision {
@@ -603,6 +640,10 @@ func TestResolveIdentity(t *testing.T) {
 	if err != nil || id.Attr("archived") != "true" {
 		t.Errorf("archived: %+v %v", id, err)
 	}
+	id, err = c.ResolveIdentity(ctx, nostatus)
+	if err != nil || id.Attr("suspended") != "unknown" || id.Attr("archived") != "unknown" {
+		t.Errorf("no status fields: %+v %v", id, err)
+	}
 	srv.JSON("GET", "/admin/directory/v1/users/dana@example.com", 403, `{"error":{"code":403,"message":"`+itest.Canary+`","errors":[{"reason":"forbidden"}]}}`)
 	_, err = c.ResolveIdentity(ctx, dana)
 	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeCredentialRejected)
@@ -622,6 +663,31 @@ func TestSuspendedAndArchivedDeny(t *testing.T) {
 	}
 }
 
+// TestStatusFieldsAbsentUnknown: a user record without suspended or
+// archived is not taken to be active.
+func TestStatusFieldsAbsentUnknown(t *testing.T) {
+	srv, _, c := setup(t, nil)
+	for _, u := range []integration.User{nostatus, noarch} {
+		for _, cs := range []struct{ action, resource string }{
+			{"user.active", "user:" + u.Email},
+			{"drive.file.read", "file:" + fileA},
+			{"group.member", "group:eng@example.com"},
+		} {
+			srv.Reset()
+			d := check(t, c, u, cs.action, cs.resource)
+			itest.ExpectCode(t, d, integration.CodeUnsupported)
+			if !strings.Contains(d.Text, "did not report") {
+				t.Errorf("%s %s: %s", u.Email, cs.action, d.Text)
+			}
+			for _, call := range srv.Calls() {
+				if !strings.HasPrefix(call.Path, "/admin/directory/v1/users/") && call.Path != "/token" {
+					t.Errorf("%s %s: unexpected call %s", u.Email, cs.action, call.Path)
+				}
+			}
+		}
+	}
+}
+
 // --- actions ----------------------------------------------------------------
 
 func TestAction_user_active_allow(t *testing.T) {
@@ -635,6 +701,7 @@ func TestAction_user_active_deny(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, sus, "user.active", "user:sus@example.com"), integration.CodeDenied)
 	itest.ExpectCode(t, check(t, c, arch, "user.active", "user:arch@example.com"), integration.CodeDenied)
 	itest.ExpectCode(t, check(t, c, dana, "user.active", "user:bob@example.com"), integration.CodeUnsupported)
+	itest.ExpectCode(t, check(t, c, nostatus, "user.active", "user:nostatus@example.com"), integration.CodeUnsupported)
 }
 
 func driveAllow(t *testing.T, action string) {
@@ -651,7 +718,7 @@ func driveDeny(t *testing.T, action string) {
 	_, _, c := setup(t, nil)
 	// Capability false.
 	itest.ExpectCode(t, check(t, c, bob, action, "file:"+fileB), integration.CodeDenied)
-	// Not visible: 404 is a deny.
+	// Not visible: 404 notFound is a deny.
 	d := check(t, c, bob, action, "file:"+fileA)
 	itest.ExpectCode(t, d, integration.CodeDenied)
 	if !strings.Contains(d.Text, "does not distinguish") {
@@ -692,6 +759,26 @@ func TestAction_drive_folder_add_child_allow(t *testing.T) {
 func TestAction_drive_folder_add_child_deny(t *testing.T) { driveDeny(t, "drive.folder.add_child") }
 func TestAction_drive_folder_list_allow(t *testing.T)     { driveAllow(t, "drive.folder.list") }
 func TestAction_drive_folder_list_deny(t *testing.T)      { driveDeny(t, "drive.folder.list") }
+
+// TestDriveNotFoundOtherReason: only a 404 whose reason is notFound is a
+// deny; any other 404 is resource_not_visible.
+func TestDriveNotFoundOtherReason(t *testing.T) {
+	srv, _, c := setup(t, nil)
+	for _, body := range []string{
+		`{"error":{"code":404,"message":"` + itest.Canary + `msg","errors":[{"domain":"global","reason":"fileNotFound"}]}}`,
+		`{"error":{"code":404,"message":"` + itest.Canary + `msg"}}`,
+		`not json`,
+	} {
+		srv.JSON("GET", "/drive/v3/files/"+fileA, 404, body)
+		for _, action := range []string{"drive.file.read", "drive.file.edit"} {
+			d := check(t, c, dana, action, "file:"+fileA)
+			itest.ExpectCode(t, d, integration.CodeResourceNotVisible)
+			itest.AssertNoCanary(t, d.Text)
+		}
+	}
+	srv.JSON("GET", "/drive/v3/files/"+fileA, 404, `{"error":{"code":404,"message":"`+itest.Canary+`msg","errors":[{"domain":"global","reason":"notFound"}]}}`)
+	itest.ExpectCode(t, check(t, c, dana, "drive.file.read", "file:"+fileA), integration.CodeDenied)
+}
 
 func TestDriveTrashedMentioned(t *testing.T) {
 	_, _, c := setup(t, nil)
@@ -756,16 +843,55 @@ func TestAction_calendar_share_deny(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, dana, "calendar.share", "calendar:team@group.calendar.google.com"), integration.CodeDenied)
 }
 
+// gmailToken returns the (sub, scope) the last Gmail call was made with.
+func gmailToken(t *testing.T, srv *itest.Server, f *fakeGoogle) sourceKey {
+	t.Helper()
+	last := srv.LastCall()
+	if !strings.HasPrefix(last.Path, "/gmail/v1/users/me/settings/") {
+		t.Fatalf("last call %s is not a Gmail settings call", last.Path)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tokens[strings.TrimPrefix(last.Header.Get("Authorization"), "Bearer ")]
+}
+
 func TestAction_mail_send_as_allow(t *testing.T) {
-	srv, _, c := setup(t, map[string]string{"enable_gmail_settings": "true"})
-	itest.ExpectCode(t, check(t, c, dana, "mail.send_as", "mailbox:Dana@example.com"), integration.CodeAllowed)
-	itest.ExpectCode(t, check(t, c, dana, "mail.send_as", "mailbox:support@example.com"), integration.CodeAllowed)
+	srv, f, c := setup(t, map[string]string{"enable_gmail_settings": "true"})
+	// The own mailbox is answered by the isPrimary entry of sendAs.list,
+	// read as the user, never without a Gmail call.
+	srv.Reset()
+	d := check(t, c, dana, "mail.send_as", "mailbox:Dana@example.com")
+	itest.ExpectCode(t, d, integration.CodeAllowed)
+	if !strings.Contains(d.Text, "primary") {
+		t.Error(d.Text)
+	}
+	if k := gmailToken(t, srv, f); k.sub != "dana@example.com" || k.scope != scopeGmailSettings {
+		t.Errorf("sendAs read as %v, want the user", k)
+	}
 	if srv.LastCall().Path != "/gmail/v1/users/me/settings/sendAs" {
 		t.Error(srv.LastCall().Path)
 	}
-	// Own mailbox never needs the Gmail scope.
+	itest.ExpectCode(t, check(t, c, dana, "mail.send_as", "mailbox:support@example.com"), integration.CodeAllowed)
+}
+
+func TestAction_mail_send_as_deny(t *testing.T) {
+	_, _, c := setup(t, map[string]string{"enable_gmail_settings": "true"})
+	itest.ExpectCode(t, check(t, c, dana, "mail.send_as", "mailbox:other@example.com"), integration.CodeDenied)
+	d := check(t, c, dana, "mail.send_as", "mailbox:pending@example.com")
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "awaiting verification") {
+		t.Error(d.Text)
+	}
+	itest.ExpectCode(t, check(t, c, sus, "mail.send_as", "mailbox:sus@example.com"), integration.CodeDenied)
+	// Feature off: unknown, for another address and for the own mailbox.
 	srv2, _, c2 := setup(t, nil)
-	itest.ExpectCode(t, check(t, c2, dana, "mail.send_as", "mailbox:dana@example.com"), integration.CodeAllowed)
+	for _, mailbox := range []string{"mailbox:support@example.com", "mailbox:dana@example.com"} {
+		d := check(t, c2, dana, "mail.send_as", mailbox)
+		itest.ExpectCode(t, d, integration.CodeUnsupported)
+		if !strings.Contains(d.Text, "enable_gmail_settings") {
+			t.Error(d.Text)
+		}
+	}
 	for _, call := range srv2.Calls() {
 		if strings.HasPrefix(call.Path, "/gmail/") {
 			t.Errorf("gmail called with the feature off: %s", call.Path)
@@ -773,17 +899,45 @@ func TestAction_mail_send_as_allow(t *testing.T) {
 	}
 }
 
-func TestAction_mail_send_as_deny(t *testing.T) {
-	_, _, c := setup(t, map[string]string{"enable_gmail_settings": "true"})
-	itest.ExpectCode(t, check(t, c, dana, "mail.send_as", "mailbox:other@example.com"), integration.CodeDenied)
-	itest.ExpectCode(t, check(t, c, dana, "mail.send_as", "mailbox:pending@example.com"), integration.CodeDenied)
-	itest.ExpectCode(t, check(t, c, sus, "mail.send_as", "mailbox:sus@example.com"), integration.CodeDenied)
-	// Feature off: unknown.
-	_, _, c2 := setup(t, nil)
-	d := check(t, c2, dana, "mail.send_as", "mailbox:support@example.com")
+// TestSendAsVerificationStatus: only accepted (or the primary entry) allows;
+// pending denies; an absent or unspecified status is unknown even when the
+// alias is treatAsAlias in the same domain.
+func TestSendAsVerificationStatus(t *testing.T) {
+	srv, _, c := setup(t, map[string]string{"enable_gmail_settings": "true"})
+	for _, mailbox := range []string{"mailbox:unspec@example.com", "mailbox:blank@example.com"} {
+		d := check(t, c, dana, "mail.send_as", mailbox)
+		itest.ExpectCode(t, d, integration.CodeUnsupported)
+		if !strings.Contains(d.Text, "without a verification status") {
+			t.Error(d.Text)
+		}
+	}
+	// The own primary address missing from the list: unknown, not allow.
+	d := check(t, c, bob, "mail.send_as", "mailbox:bob@example.com")
 	itest.ExpectCode(t, d, integration.CodeUnsupported)
-	if !strings.Contains(d.Text, "enable_gmail_settings") {
+	if !strings.Contains(d.Text, "primary") {
 		t.Error(d.Text)
+	}
+	// Gmail refusals as the user: no mailbox or a user-level policy is
+	// unknown; hallpass's own scope or API enablement is credential_rejected.
+	for _, cs := range []struct {
+		status int
+		reason string
+		code   integration.Code
+	}{
+		{404, "notFound", integration.CodeUnsupported},
+		{400, "failedPrecondition", integration.CodeUnsupported},
+		{403, "domainPolicy", integration.CodeUnsupported},
+		{403, "forbidden", integration.CodeUnsupported},
+		{403, "insufficientPermissions", integration.CodeCredentialRejected},
+		{403, "accessNotConfigured", integration.CodeCredentialRejected},
+		{403, "userRateLimitExceeded", integration.CodeUpstreamRateLimit},
+	} {
+		srv.Handle("GET", "/gmail/v1/users/me/settings/sendAs", func(w http.ResponseWriter, r *http.Request) { apiErr(w, cs.status, cs.reason) })
+		for _, mailbox := range []string{"mailbox:dana@example.com", "mailbox:support@example.com"} {
+			d := check(t, c, dana, "mail.send_as", mailbox)
+			itest.ExpectCode(t, d, cs.code)
+			itest.AssertNoCanary(t, d.Text)
+		}
 	}
 }
 
@@ -800,17 +954,48 @@ func TestAction_mail_delegate_access_allow(t *testing.T) {
 	if k.sub != "boss@example.com" || k.scope != scopeGmailSettings {
 		t.Errorf("delegates read as %v, want the mailbox owner", k)
 	}
+	// The own mailbox is allowed only after Gmail answered as the user.
+	srv.Reset()
 	itest.ExpectCode(t, check(t, c, dana, "mail.delegate_access", "mailbox:dana@example.com"), integration.CodeAllowed)
+	if k := gmailToken(t, srv, f); k.sub != "dana@example.com" || k.scope != scopeGmailSettings {
+		t.Errorf("own mailbox read as %v, want the user", k)
+	}
 }
 
 func TestAction_mail_delegate_access_deny(t *testing.T) {
-	_, _, c := setup(t, map[string]string{"enable_gmail_settings": "true"})
+	srv, _, c := setup(t, map[string]string{"enable_gmail_settings": "true"})
 	itest.ExpectCode(t, check(t, c, bob, "mail.delegate_access", "mailbox:boss@example.com"), integration.CodeDenied)
 	itest.ExpectCode(t, check(t, c, dana, "mail.delegate_access", "mailbox:bob@example.com"), integration.CodeDenied)
+	// An unspecified verification status is not a deny.
+	itest.ExpectCode(t, check(t, c, nostatus, "mail.delegate_access", "mailbox:boss@example.com"), integration.CodeUnsupported)
 	// Mailbox hallpass cannot impersonate: unknown.
 	itest.ExpectCode(t, check(t, c, dana, "mail.delegate_access", "mailbox:nodelegation@example.com"), integration.CodeUnsupported)
-	_, _, c2 := setup(t, nil)
+	// Gmail refuses the call as the user: unknown, including the own mailbox.
+	for _, cs := range []struct {
+		status int
+		reason string
+		code   integration.Code
+	}{
+		{404, "notFound", integration.CodeUnsupported},
+		{403, "domainPolicy", integration.CodeUnsupported},
+		{403, "insufficientPermissions", integration.CodeCredentialRejected},
+	} {
+		srv.Handle("GET", "/gmail/v1/users/me/settings/delegates", func(w http.ResponseWriter, r *http.Request) { apiErr(w, cs.status, cs.reason) })
+		for _, mailbox := range []string{"mailbox:dana@example.com", "mailbox:boss@example.com"} {
+			d := check(t, c, dana, "mail.delegate_access", mailbox)
+			itest.ExpectCode(t, d, cs.code)
+			itest.AssertNoCanary(t, d.Text)
+		}
+	}
+	// Feature off: unknown, for another mailbox and for the own one.
+	srv2, _, c2 := setup(t, nil)
 	itest.ExpectCode(t, check(t, c2, dana, "mail.delegate_access", "mailbox:boss@example.com"), integration.CodeUnsupported)
+	itest.ExpectCode(t, check(t, c2, dana, "mail.delegate_access", "mailbox:dana@example.com"), integration.CodeUnsupported)
+	for _, call := range srv2.Calls() {
+		if strings.HasPrefix(call.Path, "/gmail/") {
+			t.Errorf("gmail called with the feature off: %s", call.Path)
+		}
+	}
 }
 
 func TestAction_group_member_allow(t *testing.T) {
@@ -826,6 +1011,19 @@ func TestAction_group_member_deny(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, bob, "group.member", "group:eng@example.com"), integration.CodeDenied)
 	itest.ExpectCode(t, check(t, c, bob, "group.member", "group:missing@example.com"), integration.CodeUnsupported)
 	itest.ExpectCode(t, check(t, c, bob, "group.member", "group:external@other.com"), integration.CodeUnsupported)
+}
+
+// TestGroupMemberUnreported: a hasMember body without isMember is unknown.
+func TestGroupMemberUnreported(t *testing.T) {
+	_, f, c := setup(t, nil)
+	f.mu.Lock()
+	f.noIsMember = true
+	f.mu.Unlock()
+	d := check(t, c, dana, "group.member", "group:eng@example.com")
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "did not report") {
+		t.Error(d.Text)
+	}
 }
 
 // --- resources and errors ---------------------------------------------------
@@ -860,13 +1058,24 @@ func TestErrorClassification(t *testing.T) {
 		{"rateLimitExceeded", integration.CodeUpstreamRateLimit},
 		{"insufficientPermissions", integration.CodeCredentialRejected},
 		{"accessNotConfigured", integration.CodeCredentialRejected},
+		{"forbidden", integration.CodeCredentialRejected},
 		{"somethingElse", integration.CodeCredentialRejected},
+		// About the user or the file, not hallpass's credential.
+		{"insufficientFilePermissions", integration.CodeUnsupported},
+		{"domainPolicy", integration.CodeUnsupported},
+		{"cannotDownloadAbusiveFile", integration.CodeUnsupported},
 	} {
 		srv.Handle("GET", "/drive/v3/files/"+fileA, func(w http.ResponseWriter, r *http.Request) { apiErr(w, 403, cs.reason) })
 		d := check(t, c, dana, "drive.file.edit", "file:"+fileA)
 		itest.ExpectCode(t, d, cs.code)
 		itest.AssertNoCanary(t, d.Text)
+		if cs.code == integration.CodeUnsupported && !strings.Contains(d.Text, cs.reason) {
+			t.Errorf("%s: %s", cs.reason, d.Text)
+		}
 	}
+	// A 403 with no reason at all is hallpass's problem.
+	srv.JSON("GET", "/drive/v3/files/"+fileA, 403, `{"error":{"code":403,"message":"`+itest.Canary+`"}}`)
+	itest.ExpectCode(t, check(t, c, dana, "drive.file.edit", "file:"+fileA), integration.CodeCredentialRejected)
 }
 
 func TestFailures(t *testing.T) {
