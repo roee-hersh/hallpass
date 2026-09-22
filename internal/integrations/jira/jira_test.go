@@ -25,7 +25,8 @@ type fakeJira struct {
 	projects    map[string]string    // key -> id
 	issues      map[string][2]string // key -> issue id, project id
 	grants      map[string]map[string][]string
-	checkStatus int // injected status for permissions/check (0 = normal)
+	checkStatus int  // injected status for permissions/check (0 = normal)
+	echoDrop    bool // permissions/check omits the echo of the requested project permission
 	admin       bool
 	knownPerms  []string
 	tokenCalls  int
@@ -140,6 +141,20 @@ func (f *fakeJira) handler(w http.ResponseWriter, r *http.Request) {
 				out = append(out, u)
 			}
 		}
+		// startAt/maxResults paging, as Jira does it.
+		startAt, _ := strconv.Atoi(r.URL.Query().Get("startAt"))
+		maxResults, _ := strconv.Atoi(r.URL.Query().Get("maxResults"))
+		if maxResults <= 0 {
+			maxResults = 50
+		}
+		if startAt > len(out) {
+			startAt = len(out)
+		}
+		end := startAt + maxResults
+		if end > len(out) {
+			end = len(out)
+		}
+		out = out[startAt:end]
 		if out == nil {
 			out = []map[string]any{}
 		}
@@ -174,6 +189,9 @@ func (f *fakeJira) handler(w http.ResponseWriter, r *http.Request) {
 		var pps []map[string]any
 		for _, pp := range req.ProjectPermissions {
 			for _, perm := range pp.Permissions {
+				if f.echoDrop {
+					continue
+				}
 				entry := map[string]any{"permission": perm, "projects": []int64{}, "issues": []int64{}}
 				for _, p := range pp.Projects {
 					if f.has(req.AccountID, perm, "p:"+jsonNum(p)) {
@@ -229,7 +247,7 @@ func setup(t *testing.T, mode string, values map[string]string) (*itest.Server, 
 	oldGW, oldTok := Gateway, TokenURL
 	Gateway, TokenURL = srv.URL, srv.URL+"/oauth/token"
 	t.Cleanup(func() { Gateway, TokenURL = oldGW, oldTok })
-	v := map[string]string{"url": srv.URL, "auth_mode": mode, "strict_email_match": "true"}
+	v := map[string]string{"url": srv.URL, "auth_mode": mode}
 	var cred secret.Secret
 	switch mode {
 	case ModeBasic:
@@ -306,7 +324,7 @@ func TestIdentity(t *testing.T) {
 		t.Fatalf("dana: %+v %v", id, err)
 	}
 	call := srv.LastCall()
-	if call.Path != "/rest/api/3/user/search" || call.Query.Get("query") != "dana@example.com" || call.Query.Get("maxResults") != "50" {
+	if call.Path != "/rest/api/3/user/search" || call.Query.Get("query") != "dana@example.com" || call.Query.Get("maxResults") != "50" || call.Query.Get("startAt") != "0" {
 		t.Errorf("search call %s %v", call.Path, call.Query)
 	}
 	// inactive and app accounts with the same email are ignored
@@ -318,10 +336,8 @@ func TestIdentity(t *testing.T) {
 	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserAmbiguous)
 	_, err = c.ResolveIdentity(ctx, integration.User{Email: "nobody@example.com"})
 	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserNotFound)
-	_, err = c.ResolveIdentity(ctx, integration.User{Email: ""})
-	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserNotFound)
 
-	// hidden email, strict: unknown
+	// hidden email: unknown, never a match, however many candidates
 	_, err = c.ResolveIdentity(ctx, integration.User{Email: "hidden@example.com"})
 	d := integration.ToDecision(err)
 	itest.ExpectCode(t, d, integration.CodeUnsupported)
@@ -329,20 +345,158 @@ func TestIdentity(t *testing.T) {
 		t.Error(d.Text)
 	}
 
-	// hidden email, non-strict: one candidate accepted, two are ambiguous
-	_, f, c2 := setup(t, ModeBasic, map[string]string{"strict_email_match": "false"})
-	_, err = c2.ResolveIdentity(ctx, integration.User{Email: "hidden@example.com"})
-	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserAmbiguous)
-	f.users = f.users[:len(f.users)-1]
-	id, err = c2.ResolveIdentity(ctx, integration.User{Email: "hidden@example.com"})
-	if err != nil || id.ID != "acc-hidden" || id.Attr("email_hidden") != "true" {
-		t.Fatalf("hidden non-strict: %+v %v", id, err)
-	}
-
 	// search forbidden: credential_rejected
 	srv.JSON("GET", "/rest/api/3/user/search", 403, `{"errorMessages":["forbidden"]}`)
 	_, err = c.ResolveIdentity(ctx, dana)
 	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeCredentialRejected)
+}
+
+// TestIdentityEmptyEmail: a request without an email is a bad request, not
+// a user that positively does not exist.
+func TestIdentityEmptyEmail(t *testing.T) {
+	srv, _, c := setup(t, ModeBasic, nil)
+	for _, email := range []string{"", "   "} {
+		_, err := c.ResolveIdentity(context.Background(), integration.User{Email: email})
+		itest.ExpectCode(t, integration.ToDecision(err), integration.CodeInvalidRequest)
+	}
+	if len(srv.Calls()) != 0 {
+		t.Error("an empty email must not reach upstream")
+	}
+}
+
+// TestIdentityDisplayNameSpoof: user/search?query= also matches displayName,
+// so an account named "cfo@example.com" is a candidate for that email. It
+// must never be resolved as the CFO: with a hidden email it is unsupported,
+// with a visible other email it is not found. The strict_email_match switch
+// that used to accept a single hidden candidate is gone.
+func TestIdentityDisplayNameSpoof(t *testing.T) {
+	for _, f := range (Integration{}).Fields() {
+		if f.Name == "strict_email_match" {
+			t.Fatal("strict_email_match must no longer be a connection key")
+		}
+	}
+	_, f, c := setup(t, ModeBasic, nil)
+	ctx := context.Background()
+	f.users = append(f.users, map[string]any{"accountId": "acc-spoof", "accountType": "atlassian", "active": true, "emailAddress": "", "displayName": "cfo@example.com"})
+	id, err := c.ResolveIdentity(ctx, integration.User{Email: "cfo@example.com"})
+	d := integration.ToDecision(err)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if id.ID != "" || !strings.Contains(d.Text, "hidden") {
+		t.Errorf("%+v %s", id, d.Text)
+	}
+	// The same name with a visible, different email: plainly not the CFO.
+	f.users[len(f.users)-1]["emailAddress"] = "impostor@example.com"
+	id, err = c.ResolveIdentity(ctx, integration.User{Email: "cfo@example.com"})
+	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserNotFound)
+	if id.ID != "" {
+		t.Errorf("%+v", id)
+	}
+	// Explicitly asking for the old non-strict behaviour changes nothing.
+	_, f2, c2 := setup(t, ModeBasic, map[string]string{"strict_email_match": "false"})
+	f2.users = append(f2.users, map[string]any{"accountId": "acc-spoof", "accountType": "atlassian", "active": true, "emailAddress": "", "displayName": "cfo@example.com"})
+	id, err = c2.ResolveIdentity(ctx, integration.User{Email: "cfo@example.com"})
+	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUnsupported)
+	if id.ID != "" {
+		t.Errorf("%+v", id)
+	}
+}
+
+// crowd returns n active Atlassian accounts whose display name contains the
+// query, so that a user search for it fills pages.
+func crowd(n int, query string) []map[string]any {
+	var users []map[string]any
+	for i := 0; i < n; i++ {
+		users = append(users, map[string]any{
+			"accountId": "acc-crowd-" + strconv.Itoa(i), "accountType": "atlassian", "active": true,
+			"emailAddress": "crowd-" + strconv.Itoa(i) + "@example.com", "displayName": "Crowd " + strconv.Itoa(i) + " (" + query + ")",
+		})
+	}
+	return users
+}
+
+func searchCalls(srv *itest.Server) []int {
+	var starts []int
+	for _, call := range srv.Calls() {
+		if call.Path == "/rest/api/3/user/search" {
+			n, _ := strconv.Atoi(call.Query.Get("startAt"))
+			starts = append(starts, n)
+		}
+	}
+	return starts
+}
+
+// TestIdentityPagination: the match on a later page is found; a match on the
+// last page hallpass reads still wins even when that page is full.
+func TestIdentityPagination(t *testing.T) {
+	srv, f, c := setup(t, ModeBasic, nil)
+	ctx := context.Background()
+	f.users = append(crowd(60, "dana@example.com"), f.users...)
+	id, err := c.ResolveIdentity(ctx, dana)
+	if err != nil || id.ID != "acc-dana" {
+		t.Fatalf("dana on page 2: %+v %v", id, err)
+	}
+	if starts := searchCalls(srv); len(starts) != 2 || starts[0] != 0 || starts[1] != 50 {
+		t.Errorf("search pages %v, want [0 50]", starts)
+	}
+	for _, call := range srv.Calls() {
+		if call.Query.Get("maxResults") != "50" {
+			t.Errorf("maxResults %q", call.Query.Get("maxResults"))
+		}
+	}
+
+	srv.Reset()
+	f.users = append(crowd(249, "dana@example.com"), f.users[60:]...) // dana is result 250, the last slot of page 5
+	id, err = c.ResolveIdentity(ctx, dana)
+	if err != nil || id.ID != "acc-dana" {
+		t.Fatalf("dana on a full page 5: %+v %v", id, err)
+	}
+	if starts := searchCalls(srv); len(starts) != 5 {
+		t.Errorf("search pages %v, want 5", starts)
+	}
+}
+
+// TestIdentityTooManyCandidates: five full pages without an exact email
+// match is unknown, since the user may sit on a page hallpass did not read.
+func TestIdentityTooManyCandidates(t *testing.T) {
+	srv, f, c := setup(t, ModeBasic, nil)
+	f.users = append(append(crowd(300, "nobody@example.com"), crowd(300, "hidden@example.com")...), f.users...)
+	_, err := c.ResolveIdentity(context.Background(), integration.User{Email: "nobody@example.com"})
+	d := integration.ToDecision(err)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "too many candidates") {
+		t.Error(d.Text)
+	}
+	if starts := searchCalls(srv); len(starts) != 5 || starts[4] != 200 {
+		t.Errorf("search pages %v, want [0 50 100 150 200]", starts)
+	}
+	// hidden candidates on full pages are "too many", not "hidden"
+	srv.Reset()
+	_, err = c.ResolveIdentity(context.Background(), integration.User{Email: "hidden@example.com"})
+	d = integration.ToDecision(err)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "too many candidates") {
+		t.Error(d.Text)
+	}
+}
+
+// TestCheckMissingPermissionEcho: a 200 whose projectPermissions does not
+// echo the requested key means Jira did not evaluate it; that is unknown,
+// not deny. The global list has no echo and is unaffected.
+func TestCheckMissingPermissionEcho(t *testing.T) {
+	_, f, c := setup(t, ModeBasic, nil)
+	f.echoDrop = true
+	for _, res := range []string{"project:OPS", "issue:OPS-1"} {
+		d := check(t, c, dana, "CREATE_ISSUES", res)
+		itest.ExpectCode(t, d, integration.CodeUnsupported)
+		if !strings.Contains(d.Text, "did not evaluate") {
+			t.Error(d.Text)
+		}
+	}
+	itest.ExpectCode(t, check(t, c, dana, "ADMINISTER", "global"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, bob, "ADMINISTER", "global"), integration.CodeDenied)
+	f.echoDrop = false
+	itest.ExpectCode(t, check(t, c, dana, "CREATE_ISSUES", "project:OPS"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, bob, "CREATE_ISSUES", "project:OPS"), integration.CodeDenied)
 }
 
 func TestBasicRequestShape(t *testing.T) {

@@ -5,7 +5,9 @@
 // space and content restrictions for the given account. Space actions have
 // no such call, so hallpass reads the space's permission list
 // (GET /wiki/api/v2/spaces/{id}/permissions) and the user's groups and
-// matches them itself.
+// matches them itself; a space administrator (administer/space) holds every
+// space operation, and a grant to a principal hallpass cannot resolve
+// (anonymous, a role, licensed users) answers unknown rather than deny.
 //
 // Confluence's user search has no email field, so the caller's email is
 // resolved through a jira connection on the same Atlassian site
@@ -20,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/roee-hersh/hallpass/internal/catalog"
@@ -149,6 +152,13 @@ func (c *Connection) checkContent(ctx context.Context, accountID, who string, ac
 	if out.HasPermission {
 		return integration.Allowed("%s may %s %s %s", who, act.operation, res.kind, res.id), nil
 	}
+	if len(out.Errors) > 0 {
+		// UNVERIFIED: the errors list is taken to mean the check could not be
+		// evaluated (unknown subject, operation not applicable, ...). If a
+		// live site also fills it on an ordinary refusal, those refusals
+		// answer unknown instead of deny; never the other way round.
+		return integration.Unsupported("Confluence reported %d error(s) instead of a permission answer for %s %s; the check could not be evaluated", len(out.Errors), res.kind, res.id), nil
+	}
 	return integration.Denied("%s may not %s %s %s", who, act.operation, res.kind, res.id), nil
 }
 
@@ -187,48 +197,66 @@ type groupPage struct {
 	} `json:"_links"`
 }
 
+// Space administrators (administer/space) implicitly hold every space
+// operation, so that grant is evaluated alongside the requested one.
+const (
+	adminOperation = "administer"
+	adminTarget    = "space"
+)
+
+// spaceGrants is what the permission list says about one operation and about
+// administer/space, reduced to what hallpass can resolve.
+type spaceGrants struct {
+	groups      []string        // group ids holding the operation
+	adminGroups []string        // group ids holding administer/space
+	unresolved  map[string]bool // principal types hallpass cannot resolve, holding either
+}
+
 // checkSpace evaluates a space permission from the space's permission list.
 func (c *Connection) checkSpace(ctx context.Context, accountID, who string, act action, key string) (integration.Decision, error) {
-	var spaces spaceList
-	if _, err := c.site.GetJSON(ctx, "/wiki/api/v2/spaces", url.Values{"keys": {key}}, &spaces); err != nil {
-		if httpx.Status(err) == 404 {
-			return integration.UnknownDecision(integration.CodeResourceNotVisible, "space %s does not exist or is not visible to hallpass's account", key), nil
-		}
-		return integration.Decision{}, c.classify(err)
-	}
-	var spaceID string
-	for _, s := range spaces.Results {
-		if strings.EqualFold(s.Key, key) {
-			spaceID = s.ID
-			break
-		}
-	}
-	if spaceID == "" {
-		return integration.UnknownDecision(integration.CodeResourceNotVisible, "space %s does not exist or is not visible to hallpass's account", key), nil
+	spaceID, d, err := c.spaceID(ctx, key)
+	if err != nil || d != nil {
+		return orDecision(d, err)
 	}
 
 	// UNVERIFIED: the operation keys and targetTypes for export, restrict
 	// and administer are taken from the specification, not from a live site.
-	var groupIDs []string
-	unknownTypes := map[string]bool{}
-	err := c.paginate(ctx, "/wiki/api/v2/spaces/"+httpx.PathEscape(spaceID)+"/permissions", url.Values{"limit": {"250"}}, func(resp *httpx.Response) (string, error) {
+	// UNVERIFIED: how the v2 list represents anonymous and licensed-user
+	// (site-wide) grants; every principal type other than user and group is
+	// treated as unresolved, so such a grant never reads as deny.
+	var g spaceGrants
+	g.unresolved = map[string]bool{}
+	direct := ""
+	err = c.paginate(ctx, "/wiki/api/v2/spaces/"+httpx.PathEscape(spaceID)+"/permissions", url.Values{"limit": {"250"}}, func(resp *httpx.Response) (string, error) {
 		var page spacePermissionPage
 		if err := resp.JSON(&page); err != nil {
 			return "", err
 		}
 		for _, p := range page.Results {
-			if p.Operation.Key != act.operation || p.Operation.TargetType != act.target {
+			wanted := p.Operation.Key == act.operation && p.Operation.TargetType == act.target
+			admin := p.Operation.Key == adminOperation && p.Operation.TargetType == adminTarget
+			if !wanted && !admin {
 				continue
 			}
 			switch p.Principal.Type {
 			case "user":
-				if p.Principal.ID == accountID {
-					return "", errAllowed
+				if p.Principal.ID != accountID {
+					continue
 				}
+				if wanted {
+					direct = "directly"
+				} else {
+					direct = "as a space administrator"
+				}
+				return "", errAllowed
 			case "group":
-				groupIDs = append(groupIDs, p.Principal.ID)
+				if wanted {
+					g.groups = append(g.groups, p.Principal.ID)
+				} else {
+					g.adminGroups = append(g.adminGroups, p.Principal.ID)
+				}
 			default:
-				unknownTypes[p.Principal.Type] = true
+				g.unresolved[p.Principal.Type] = true
 			}
 		}
 		return page.Links.Next, nil
@@ -236,40 +264,89 @@ func (c *Connection) checkSpace(ctx context.Context, accountID, who string, act 
 	what := fmt.Sprintf("%s (%s/%s) in space %s", act.name, act.operation, act.target, key)
 	switch {
 	case errors.Is(err, errAllowed):
-		return integration.Allowed("%s holds %s directly", who, what), nil
+		return integration.Allowed("%s holds %s %s", who, what, direct), nil
 	case err != nil:
 		return integration.Decision{}, c.classify(err)
 	}
 
-	if len(groupIDs) > 0 {
-		member, groupName, err := c.memberOfAny(ctx, accountID, groupIDs)
+	if len(g.groups)+len(g.adminGroups) > 0 {
+		member, groupID, groupName, err := c.memberOfAny(ctx, accountID, append(append([]string{}, g.groups...), g.adminGroups...))
 		if err != nil {
 			return integration.Decision{}, c.classify(err)
 		}
 		if member {
+			for _, id := range g.adminGroups {
+				if id == groupID {
+					return integration.Allowed("%s holds %s as a space administrator through group %s", who, what, groupName), nil
+				}
+			}
 			return integration.Allowed("%s holds %s through group %s", who, what, groupName), nil
 		}
 	}
-	if len(unknownTypes) > 0 {
-		types := make([]string, 0, len(unknownTypes))
-		for t := range unknownTypes {
+	if len(g.unresolved) > 0 {
+		types := make([]string, 0, len(g.unresolved))
+		for t := range g.unresolved {
 			types = append(types, t)
 		}
-		return integration.Unsupported("%s-based space permissions not evaluated: %s is granted to a principal type hallpass does not model", strings.Join(types, "/"), what), nil
+		sort.Strings(types)
+		return integration.Unsupported("%s-based space permissions not evaluated: %s or %s/%s is granted to a principal type hallpass does not model", strings.Join(types, "/"), what, adminOperation, adminTarget), nil
 	}
-	return integration.Denied("no space permission grants %s to %s or their groups", what, who), nil
+	return integration.Denied("no space permission grants %s or %s/%s to %s or their groups", what, adminOperation, adminTarget, who), nil
+}
+
+// spaceID resolves a space key to its id with GET /wiki/api/v2/spaces?keys=.
+// The key must match exactly: a case variant or several hits leave hallpass
+// unsure which space is meant, which is unknown, not deny.
+func (c *Connection) spaceID(ctx context.Context, key string) (string, *integration.Decision, error) {
+	var spaces spaceList
+	if _, err := c.site.GetJSON(ctx, "/wiki/api/v2/spaces", url.Values{"keys": {key}}, &spaces); err != nil {
+		if httpx.Status(err) == 404 {
+			d := integration.UnknownDecision(integration.CodeResourceNotVisible, "space %s does not exist or is not visible to hallpass's account", key)
+			return "", &d, nil
+		}
+		return "", nil, c.classify(err)
+	}
+	var exact, others []string
+	for _, s := range spaces.Results {
+		if s.Key == key {
+			exact = append(exact, s.ID)
+		} else {
+			others = append(others, s.Key)
+		}
+	}
+	var d integration.Decision
+	switch {
+	case len(exact) == 1:
+		return exact[0], nil, nil
+	case len(exact) > 1:
+		d = integration.Unsupported("space key %s matches %d spaces; hallpass cannot tell which one is meant", key, len(exact))
+	case len(others) > 0:
+		d = integration.Unsupported("space key %s has no exact match; Confluence returned %s, use the exact key", key, strings.Join(others, ", "))
+	default:
+		d = integration.UnknownDecision(integration.CodeResourceNotVisible, "space %s does not exist or is not visible to hallpass's account", key)
+	}
+	return "", &d, nil
+}
+
+// orDecision returns the decision when there is one, else the error.
+func orDecision(d *integration.Decision, err error) (integration.Decision, error) {
+	if err != nil {
+		return integration.Decision{}, err
+	}
+	return *d, nil
 }
 
 var errAllowed = errors.New("allowed")
 
 // memberOfAny reports whether the account belongs to one of the groups,
-// reading GET /wiki/rest/api/user/memberof page by page.
-func (c *Connection) memberOfAny(ctx context.Context, accountID string, groupIDs []string) (bool, string, error) {
+// reading GET /wiki/rest/api/user/memberof page by page, and which group
+// matched (id and name).
+func (c *Connection) memberOfAny(ctx context.Context, accountID string, groupIDs []string) (bool, string, string, error) {
 	want := map[string]bool{}
 	for _, g := range groupIDs {
 		want[g] = true
 	}
-	found := ""
+	foundID, foundName := "", ""
 	err := c.paginate(ctx, "/wiki/rest/api/user/memberof", url.Values{"accountId": {accountID}, "limit": {"200"}}, func(resp *httpx.Response) (string, error) {
 		var page groupPage
 		if err := resp.JSON(&page); err != nil {
@@ -277,9 +354,9 @@ func (c *Connection) memberOfAny(ctx context.Context, accountID string, groupIDs
 		}
 		for _, g := range page.Results {
 			if want[g.ID] {
-				found = g.Name
-				if found == "" {
-					found = g.ID
+				foundID, foundName = g.ID, g.Name
+				if foundName == "" {
+					foundName = g.ID
 				}
 				return "", errAllowed
 			}
@@ -287,9 +364,9 @@ func (c *Connection) memberOfAny(ctx context.Context, accountID string, groupIDs
 		return page.Links.Next, nil
 	})
 	if errors.Is(err, errAllowed) {
-		return true, found, nil
+		return true, foundID, foundName, nil
 	}
-	return false, "", err
+	return false, "", "", err
 }
 
 // paginate follows _links.next until the page func returns "" or an error.

@@ -37,7 +37,8 @@ type fakeSite struct {
 	spaceGrants  map[string][]grant             // space id -> grants
 	memberships  map[string][]group             // accountId -> groups
 	pageSize     int
-	checkStatus  int // injected status for the content permission check
+	checkStatus  int  // injected status for the content permission check
+	checkErrors  bool // the content permission check answers false with a non-empty errors list
 	permPages    int
 	memberPages  int
 	permCalls    int
@@ -56,7 +57,7 @@ func newFake(t *testing.T) *fakeSite {
 			"100": {"acc-dana": {"read", "update", "delete"}, "acc-bob": {"read"}},
 			"200": {"acc-dana": {"read", "update", "delete"}},
 		},
-		spaces: map[string]string{"DEV": "98307", "OPS": "98308"},
+		spaces: map[string]string{"DEV": "98307", "OPS": "98308", "PUB": "98309"},
 		memberships: map[string][]group{
 			"acc-dana": {{"grp-a", "alpha"}, {"grp-b", "beta"}, {"grp-eng", "engineering"}},
 			"acc-bob":  {{"grp-x", "xray"}},
@@ -84,6 +85,11 @@ func newFake(t *testing.T) *fakeSite {
 			{principal{"role", "site-admins"}, "administer", "space"},
 			{principal{"role", "site-admins"}, "read", "space"},
 			{principal{"user", "acc-bob"}, "read", "space"},
+		},
+		// PUB: anonymous read, a group nobody here is in for create/page
+		"98309": {
+			{principal{"anonymous", ""}, "read", "space"},
+			{principal{"group", "grp-pub"}, "create", "page"},
 		},
 	}
 	return f
@@ -163,8 +169,8 @@ func (f *fakeSite) handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		out := map[string]any{"hasPermission": has, "errors": []any{}}
-		if !has {
-			out["errors"] = []any{map[string]any{"message": map[string]any{"key": "no.permission", "args": []any{}}}}
+		if !has && f.checkErrors {
+			out["errors"] = []any{map[string]any{"message": map[string]any{"key": "injected " + itest.Canary, "args": []any{}}}}
 		}
 		writeJSON(w, 200, out)
 	case path == "/wiki/api/v2/spaces":
@@ -240,7 +246,7 @@ func setup(t *testing.T, f *fakeSite, withIdentity bool) (*itest.Server, integra
 	jira.Gateway, jira.TokenURL = srv.URL, srv.URL+"/oauth/token"
 	t.Cleanup(func() { jira.Gateway, jira.TokenURL = oldGW, oldTok })
 
-	js := itest.Settings("jira-1", "jira", map[string]string{"url": srv.URL, "auth_mode": "basic", "username": "jirabot@example.com", "strict_email_match": "true"},
+	js := itest.Settings("jira-1", "jira", map[string]string{"url": srv.URL, "auth_mode": "basic", "username": "jirabot@example.com"},
 		map[string]secret.Secret{"credential": itest.Literal("jira")})
 	jc, err := jira.Integration{}.New(context.Background(), js, deps)
 	if err != nil {
@@ -252,7 +258,7 @@ func setup(t *testing.T, f *fakeSite, withIdentity bool) (*itest.Server, integra
 		}
 		return jc, nil
 	}
-	values := map[string]string{"url": srv.URL, "auth_mode": f.confMode, "strict_email_match": "true"}
+	values := map[string]string{"url": srv.URL, "auth_mode": f.confMode}
 	var cred secret.Secret
 	switch f.confMode {
 	case jira.ModeBasic:
@@ -446,10 +452,143 @@ func TestSpaceUnknownPrincipal(t *testing.T) {
 	// read/space: a role and bob directly; dana is neither -> unsupported, bob -> allow
 	itest.ExpectCode(t, check(t, c, dana, "space.read", "space:OPS"), integration.CodeUnsupported)
 	itest.ExpectCode(t, check(t, c, bob, "space.read", "space:OPS"), integration.CodeAllowed)
-	// create/page: a group dana is not in, no role -> deny
+	// create/page: a group dana is not in, but administer/space is held by a
+	// role, whose members hold every operation -> unsupported, not deny
+	itest.ExpectCode(t, check(t, c, dana, "page.create", "space:OPS"), integration.CodeUnsupported)
+	// export/space: no grant at all, yet the role's administer/space -> unsupported
+	itest.ExpectCode(t, check(t, c, dana, "space.export", "space:OPS"), integration.CodeUnsupported)
+	// without the role's administer/space, the create/page and export/space answers are deny
+	var kept []grant
+	for _, g := range f.spaceGrants["98308"] {
+		if !(g.principal.typ == "role" && g.op == "administer") {
+			kept = append(kept, g)
+		}
+	}
+	f.spaceGrants["98308"] = kept
 	itest.ExpectCode(t, check(t, c, dana, "page.create", "space:OPS"), integration.CodeDenied)
-	// export/space: nothing at all -> deny
 	itest.ExpectCode(t, check(t, c, dana, "space.export", "space:OPS"), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, dana, "space.read", "space:OPS"), integration.CodeUnsupported)
+}
+
+// TestContentCheckErrors: hasPermission false with a non-empty errors list
+// means Confluence could not evaluate the check, which is unknown, not deny.
+func TestContentCheckErrors(t *testing.T) {
+	f := newFake(t)
+	_, c := setup(t, f, true)
+	f.checkErrors = true
+	d := check(t, c, bob, "page.update", "page:100")
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "error") {
+		t.Error(d.Text)
+	}
+	itest.AssertNoCanary(t, d.Text)
+	// a positive answer is allow whatever the errors list says
+	itest.ExpectCode(t, check(t, c, dana, "page.update", "page:100"), integration.CodeAllowed)
+	f.checkErrors = false
+	itest.ExpectCode(t, check(t, c, bob, "page.update", "page:100"), integration.CodeDenied)
+}
+
+// TestSpaceAdministerImpliesAll: a holder of administer/space, directly or
+// through a group, holds every space operation.
+func TestSpaceAdministerImpliesAll(t *testing.T) {
+	f := newFake(t)
+	_, c := setup(t, f, true)
+	// DEV: keep only dana's administer/space among her direct grants
+	var kept []grant
+	for _, g := range f.spaceGrants["98307"] {
+		if g.principal.typ != "user" || g.op == "administer" {
+			kept = append(kept, g)
+		}
+	}
+	f.spaceGrants["98307"] = kept
+	for _, a := range []string{"space.read", "page.create", "blogpost.create", "comment.create", "attachment.create", "space.export", "page.restrict", "space.admin"} {
+		d := check(t, c, dana, a, "space:DEV")
+		itest.ExpectCode(t, d, integration.CodeAllowed)
+		if a != "space.admin" && !strings.Contains(d.Text, "space administrator") {
+			t.Errorf("%s: %s", a, d.Text)
+		}
+	}
+	if f.memberofCall != 0 {
+		t.Error("a direct administer grant should not fetch groups")
+	}
+	// bob is not an administrator: blogpost.create is still a deny
+	itest.ExpectCode(t, check(t, c, bob, "blogpost.create", "space:DEV"), integration.CodeDenied)
+
+	// administer/space through a group: grp-eng, which dana is in and bob is not
+	kept = kept[:0]
+	for _, g := range f.spaceGrants["98307"] {
+		if g.principal.typ != "user" {
+			kept = append(kept, g)
+		}
+	}
+	f.spaceGrants["98307"] = append(kept, grant{principal{"group", "grp-eng"}, "administer", "space"})
+	d := check(t, c, dana, "space.export", "space:DEV")
+	itest.ExpectCode(t, d, integration.CodeAllowed)
+	if !strings.Contains(d.Text, "space administrator") || !strings.Contains(d.Text, "engineering") {
+		t.Error(d.Text)
+	}
+	itest.ExpectCode(t, check(t, c, bob, "space.export", "space:DEV"), integration.CodeDenied)
+}
+
+// TestSpaceAnonymousGrant: an anonymous (or any non user/group) grant for
+// the operation is unknown when nothing else allows, never deny; operations
+// nobody holds stay deny.
+func TestSpaceAnonymousGrant(t *testing.T) {
+	f := newFake(t)
+	_, c := setup(t, f, true)
+	d := check(t, c, dana, "space.read", "space:PUB")
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "anonymous") {
+		t.Error(d.Text)
+	}
+	itest.ExpectCode(t, check(t, c, bob, "space.read", "space:PUB"), integration.CodeUnsupported)
+	// create/page is granted to a group neither is in, and administer/space to nobody
+	itest.ExpectCode(t, check(t, c, dana, "page.create", "space:PUB"), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, dana, "space.export", "space:PUB"), integration.CodeDenied)
+	// administer/space granted anonymously: every operation is unknown now,
+	// since an administrator holds them all and hallpass cannot resolve who
+	f.spaceGrants["98309"] = append(f.spaceGrants["98309"], grant{principal{"anonymous", ""}, "administer", "space"})
+	for _, a := range []string{"page.create", "space.export", "space.admin"} {
+		d := check(t, c, dana, a, "space:PUB")
+		itest.ExpectCode(t, d, integration.CodeUnsupported)
+		if !strings.Contains(d.Text, "anonymous") {
+			t.Errorf("%s: %s", a, d.Text)
+		}
+	}
+	// a direct grant still wins over the anonymous one
+	f.spaceGrants["98309"] = append(f.spaceGrants["98309"], grant{principal{"user", "acc-bob"}, "read", "space"})
+	itest.ExpectCode(t, check(t, c, bob, "space.read", "space:PUB"), integration.CodeAllowed)
+}
+
+// TestSpaceKeyExactMatch: the space is the one whose key equals the request
+// exactly; a case variant or several hits is unknown, never another space's
+// answer.
+func TestSpaceKeyExactMatch(t *testing.T) {
+	f := newFake(t)
+	srv, c := setup(t, f, true)
+	// Confluence answers the lookup for "dev" with DEV
+	srv.JSON("GET", "/wiki/api/v2/spaces", 200, `{"results":[{"id":"98307","key":"DEV","name":"Space DEV"}],"_links":{}}`)
+	d := check(t, c, dana, "space.export", "space:dev")
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "exact") {
+		t.Error(d.Text)
+	}
+	if f.permCalls != 0 {
+		t.Error("no permission list must be read for a space that did not match exactly")
+	}
+	// several exact hits
+	srv.JSON("GET", "/wiki/api/v2/spaces", 200, `{"results":[{"id":"98307","key":"DEV"},{"id":"98308","key":"DEV"}],"_links":{}}`)
+	d = check(t, c, dana, "space.export", "space:DEV")
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "2 spaces") || f.permCalls != 0 {
+		t.Errorf("%s (perm calls %d)", d.Text, f.permCalls)
+	}
+	// one exact hit next to a variant: the exact one is used
+	srv.JSON("GET", "/wiki/api/v2/spaces", 200, `{"results":[{"id":"98308","key":"dev"},{"id":"98307","key":"DEV"}],"_links":{}}`)
+	itest.ExpectCode(t, check(t, c, dana, "space.export", "space:DEV"), integration.CodeAllowed)
+	// no hit at all
+	srv.JSON("GET", "/wiki/api/v2/spaces", 200, `{"results":[],"_links":{}}`)
+	itest.ExpectCode(t, check(t, c, dana, "space.export", "space:DEV"), integration.CodeResourceNotVisible)
 }
 
 func TestSpaceForbidden(t *testing.T) {

@@ -38,7 +38,6 @@ tokens are cached and refreshed five minutes before expiry.
     username: hallpass@acme.com          # basic only
     credential: env:JIRA_TOKEN           # API token, or client secret for oauth_client
     client_id: "abc123"                  # oauth_client only
-    strict_email_match: "true"           # default
 ```
 
 | Key | Meaning |
@@ -48,12 +47,22 @@ tokens are cached and refreshed five minutes before expiry.
 | `username` | email of the bot account; required for `basic` |
 | `credential` | API token (`basic`, `scoped_token`) or OAuth client secret (`oauth_client`); `env:` or `file:` |
 | `client_id` | OAuth 2.0 client id; required for `oauth_client` |
-| `strict_email_match` | Atlassian profiles can hide the email. `true`: when the only candidates hide theirs, answer unknown (`unsupported`, "email hidden by profile visibility"). `false`: accept a single such candidate as the match |
 
-Identity: the search results are filtered to `accountType: atlassian` and `active: true`, then
-matched case-insensitively on `emailAddress`. Exactly one match is the identity; several are
-`user_ambiguous`; none is `user_not_found` unless candidates with a hidden email remain, which
-`strict_email_match` decides.
+The key `strict_email_match` no longer exists. It let a connection accept a single candidate whose
+profile hides its email, but `user/search?query=` matches the display name as well as the email, so
+an account *named* `cfo@corp.com` with a hidden email was resolved as the CFO. The loader rejects
+unknown keys (`integration jira does not accept key "strict_email_match"`): remove the line from any
+existing connection.
+
+Identity: `GET /rest/api/3/user/search?query=<email>` is read in pages of 50 (`startAt`), up to
+five pages. The results are filtered to `accountType: atlassian` and `active: true`, and a candidate
+counts only when its `emailAddress` equals the request email case-insensitively; a display name is
+never a match. Exactly one match is the identity; several are `user_ambiguous`; none is
+`user_not_found`, except that when candidates remain whose email the profile hides the answer is
+unknown (`unsupported`, "email hidden by profile visibility": make the email visible to the site or
+use a scoped token that can read it), and when five full pages hold no match it is unknown
+(`unsupported`, "too many candidates"), since the account may sit on a page hallpass did not read.
+An empty email is `invalid_request`.
 
 ## Resources
 
@@ -88,7 +97,9 @@ A project permission on `global`, or a global permission on a project or issue, 
 | Jira says | hallpass answers |
 |---|---|
 | the project / issue id appears under the permission in the response, or the key appears in `globalPermissions` | allow |
-| it does not | deny |
+| the permission is echoed in `projectPermissions` without the id, or the key is missing from `globalPermissions` | deny |
+| 200 whose `projectPermissions` does not echo the requested permission key at all | unknown (`unsupported`): Jira did not evaluate the key |
+| no active account with the email, or only candidates whose email is hidden, or five full search pages without a match | deny (`user_not_found`), unknown (`unsupported`), unknown (`unsupported`) |
 | 404 on the project or issue lookup | unknown (`resource_not_visible`): missing, archived, or not browsable by hallpass's account |
 | 403 on the project or issue lookup | unknown (`credential_rejected`): hallpass's account lacks Browse Projects |
 | 403 on `permissions/check` | unknown (`credential_rejected`): hallpass's account lacks Administer Jira |
@@ -123,13 +134,20 @@ warns when Administer Jira is missing (every check for another user will answer 
   `https://auth.atlassian.com/oauth/token`, then `Authorization: Bearer` against the
   `api.atlassian.com/ex/jira/{cloudId}` gateway. Not exercised against a live token endpoint.
 - Whether `user/search?query=<email>` returns accounts whose profile hides the email. If it does not,
-  such users are `user_not_found` rather than the hidden-email branch that `strict_email_match`
-  governs.
-- Whether `permissions/check` answers 400 for an unknown permission key. A key that Jira silently
-  drops instead would read as deny; the probe's key validation is the safeguard.
+  such users are `user_not_found` rather than the hidden-email `unsupported` answer.
+- Whether `permissions/check` answers 400 for an unknown permission key. A project permission that
+  Jira silently drops instead is caught by the echo check (no `projectPermissions` entry for the
+  key, so `unsupported`); a dropped *global* permission has no echo to check and would read as deny.
+  The probe's key validation is the safeguard for both.
+- The page size and the five-page cap of the user search assume Jira honours `startAt` and
+  `maxResults: 50` on `user/search` as the API description says; a smaller server-side cap would
+  make the "too many candidates" answer appear sooner than documented.
 
 ## Test
 
 Unit tests run against a fake Jira Cloud site (`internal/integrations/jira/jira_test.go`) covering
-the three auth modes, identity edge cases, project/issue/global checks, every action, the injected
-failure modes and the probe. No live-site test exists yet.
+the three auth modes, identity edge cases (display-name spoofing, hidden emails, paging and the
+too-many-candidates cap, empty email), project/issue/global checks, a check whose response does not
+echo the permission key, every action, the injected failure modes and the probe. With
+`HALLPASS_SPECS_DIR` set, every request is validated against the Jira Cloud API description. No
+live-site test exists yet.

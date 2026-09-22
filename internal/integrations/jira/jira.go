@@ -48,8 +48,7 @@ const (
 )
 
 // SiteFields are the connection keys every Atlassian Cloud integration
-// accepts: url, auth_mode, username, credential, client_id and
-// strict_email_match.
+// accepts: url, auth_mode, username, credential and client_id.
 func SiteFields() []integration.Field {
 	return []integration.Field{
 		integration.URLField(true, "site URL, e.g. https://acme.atlassian.net"),
@@ -58,8 +57,6 @@ func SiteFields() []integration.Field {
 		{Name: "username", Description: "email of the bot account (required for auth_mode basic)"},
 		integration.CredentialField(true, "API token (basic, scoped_token) or OAuth client secret (oauth_client)"),
 		{Name: "client_id", Description: "OAuth 2.0 client id (required for auth_mode oauth_client)"},
-		{Name: "strict_email_match", Default: "true", Enum: []string{"true", "false"},
-			Description: "true: answer unknown when the only candidates hide their email; false: accept a single such candidate"},
 	}
 }
 
@@ -296,13 +293,12 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	if err != nil {
 		return nil, err
 	}
-	return &Connection{site: site, strictEmail: s.Bool("strict_email_match", true)}, nil
+	return &Connection{site: site}, nil
 }
 
 // Connection is one Jira Cloud site.
 type Connection struct {
-	site        *Site
-	strictEmail bool
+	site *Site
 }
 
 // Site returns the transport, for integrations on the same site.
@@ -325,36 +321,60 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	return c.LookupAccountID(ctx, u.Email)
 }
 
+// userSearchPageSize is maxResults for user/search; userSearchMaxPages caps
+// how many pages hallpass reads before giving up on a crowded query.
+const (
+	userSearchPageSize = 50
+	userSearchMaxPages = 5
+)
+
 // LookupAccountID finds the one active Atlassian account with the email.
 // The confluence integration uses it, since Confluence's own user search
 // has no email field.
+//
+// user/search?query= matches displayName as well as emailAddress, so a
+// result counts only when its emailAddress equals the request email
+// case-insensitively. A display name that looks like the email never does:
+// a candidate whose email the profile hides is answered unsupported, not
+// accepted, because hallpass cannot tell it from an impostor.
 func (c *Connection) LookupAccountID(ctx context.Context, email string) (integration.Identity, error) {
 	email = strings.TrimSpace(email)
 	if email == "" {
-		return integration.Identity{}, integration.UserNotFound("no email given")
+		return integration.Identity{}, integration.Errorf(integration.CodeInvalidRequest, "no email given")
 	}
 	// UNVERIFIED: whether the query parameter matches an email the profile
 	// hides. When it does not, hidden accounts never show up here and the
 	// answer is user_not_found rather than the hidden-email branch below.
-	var users []user
-	q := url.Values{"query": {email}, "maxResults": {"50"}}
-	if _, err := c.site.GetJSON(ctx, "/rest/api/3/user/search", q, &users); err != nil {
-		if httpx.Status(err) == 403 {
-			return integration.Identity{}, integration.Wrap(integration.CodeCredentialRejected, err,
-				"hallpass's account may not search users; it needs Browse users and groups (HTTP 403)")
-		}
-		return integration.Identity{}, httpx.Classify(err)
-	}
 	var matches, hidden []user
-	for _, u := range users {
-		if u.AccountType != "atlassian" || !u.Active {
-			continue
+	lastFull := false
+	for page := 0; page < userSearchMaxPages; page++ {
+		var users []user
+		q := url.Values{
+			"query":      {email},
+			"startAt":    {strconv.Itoa(page * userSearchPageSize)},
+			"maxResults": {strconv.Itoa(userSearchPageSize)},
 		}
-		switch {
-		case u.Email == "":
-			hidden = append(hidden, u)
-		case strings.EqualFold(u.Email, email):
-			matches = append(matches, u)
+		if _, err := c.site.GetJSON(ctx, "/rest/api/3/user/search", q, &users); err != nil {
+			if httpx.Status(err) == 403 {
+				return integration.Identity{}, integration.Wrap(integration.CodeCredentialRejected, err,
+					"hallpass's account may not search users; it needs Browse users and groups (HTTP 403)")
+			}
+			return integration.Identity{}, httpx.Classify(err)
+		}
+		for _, u := range users {
+			if u.AccountType != "atlassian" || !u.Active {
+				continue
+			}
+			switch {
+			case u.Email == "":
+				hidden = append(hidden, u)
+			case strings.EqualFold(u.Email, email):
+				matches = append(matches, u)
+			}
+		}
+		lastFull = len(users) >= userSearchPageSize
+		if !lastFull {
+			break
 		}
 	}
 	switch {
@@ -362,17 +382,16 @@ func (c *Connection) LookupAccountID(ctx context.Context, email string) (integra
 		return identityOf(matches[0]), nil
 	case len(matches) > 1:
 		return integration.Identity{}, integration.UserAmbiguous("%d active Atlassian accounts have the email %s", len(matches), email)
-	case len(hidden) == 0:
-		return integration.Identity{}, integration.UserNotFound("no active Atlassian account has the email %s", email)
-	case c.strictEmail:
+	case lastFull:
+		// Every page read was full, so more candidates may follow; a not
+		// found here could be a user on a page hallpass did not read.
 		return integration.Identity{}, integration.Errorf(integration.CodeUnsupported,
-			"email hidden by profile visibility: %d account(s) matched %s without a visible email; set strict_email_match: false to accept a single match", len(hidden), email)
-	case len(hidden) == 1:
-		id := identityOf(hidden[0])
-		id.Attrs = map[string]string{"email_hidden": "true"}
-		return id, nil
+			"too many candidates: the user search for %s filled %d pages without an exact email match", email, userSearchMaxPages)
+	case len(hidden) > 0:
+		return integration.Identity{}, integration.Errorf(integration.CodeUnsupported,
+			"email hidden by profile visibility: %d candidate(s) for %s show no email; make the email visible to the site or use a scoped token that can read it", len(hidden), email)
 	default:
-		return integration.Identity{}, integration.UserAmbiguous("%d accounts matched %s but hide their email", len(hidden), email)
+		return integration.Identity{}, integration.UserNotFound("no active Atlassian account has the email %s", email)
 	}
 }
 
@@ -397,30 +416,37 @@ type checkResponse struct {
 	GlobalPermissions []string `json:"globalPermissions"`
 }
 
-func (r checkResponse) grants(perm string, kind resourceKind, id int64) bool {
+// grants reports whether the response lists the id under the permission
+// (granted) and whether the response echoed the permission at all
+// (evaluated). Jira echoes every project permission it evaluated, with the
+// ids that hold it, so a key missing from the echo was not evaluated and
+// must not read as deny. Global permissions have no echo: the response
+// lists only the keys the account holds.
+func (r checkResponse) grants(perm string, kind resourceKind, id int64) (granted, evaluated bool) {
 	if kind == resGlobal {
 		for _, g := range r.GlobalPermissions {
 			if g == perm {
-				return true
+				return true, true
 			}
 		}
-		return false
+		return false, true
 	}
 	for _, pp := range r.ProjectPermissions {
 		if pp.Permission != perm {
 			continue
 		}
+		evaluated = true
 		ids := pp.Projects
 		if kind == resIssue {
 			ids = pp.Issues
 		}
 		for _, x := range ids {
 			if x == id {
-				return true
+				return true, true
 			}
 		}
 	}
-	return false
+	return false, evaluated
 }
 
 // Check posts one permissions/check for the account and the resource.
@@ -465,7 +491,9 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 				"hallpass's account may not check other users' permissions; it needs Administer Jira (HTTP 403)")
 		case 400:
 			// UNVERIFIED: Jira answers 400 for a permission key it does not
-			// know; a key it silently drops would read as deny instead.
+			// know. A project permission it silently drops instead is caught
+			// below (no echo -> unsupported); a dropped global permission has
+			// no echo to check and would read as deny.
 			return integration.Unsupported("Jira rejected the permission check for %s; the permission key may not exist on this site", act.name), nil
 		}
 		return integration.Decision{}, httpx.Classify(err)
@@ -474,7 +502,11 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	if who == "" {
 		who = r.Identity.ID
 	}
-	if out.grants(act.name, res.kind, id) {
+	granted, evaluated := out.grants(act.name, res.kind, id)
+	switch {
+	case !evaluated:
+		return integration.Unsupported("Jira did not evaluate the permission key %s for %s; the key may not exist on this site", act.name, res.describe()), nil
+	case granted:
 		return integration.Allowed("%s holds %s on %s", who, act.name, res.describe()), nil
 	}
 	return integration.Denied("%s does not hold %s on %s", who, act.name, res.describe()), nil
