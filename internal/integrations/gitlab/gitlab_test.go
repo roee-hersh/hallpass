@@ -25,6 +25,9 @@ type fakeUser struct {
 	PublicEmail string
 	Bot         bool
 	IsAdmin     bool
+	External    bool
+	// Emails, when set, is written as the "emails" array of the full record.
+	Emails []any
 }
 
 // fakeMember is one effective membership.
@@ -42,6 +45,9 @@ type fakeProject struct {
 	Protected  []map[string]any
 	// pbStatus, when non-zero, is answered for the protected_branches list.
 	pbStatus int
+	// IssuesAccessLevel and IssuesEnabled are written when set.
+	IssuesAccessLevel string
+	IssuesEnabled     *bool
 }
 
 type fakeGroup struct {
@@ -55,6 +61,7 @@ type fakeGroup struct {
 type fakeGitLab struct {
 	admin       bool // the token is an administrator's: search returns email and is_admin
 	users       []fakeUser
+	searchHits  []fakeUser              // when set, every /users?search answers these (paginated)
 	enterprise  []fakeUser              // enterprise users of the configured group (with email)
 	saml        []map[string]any        // SAML identities of the configured group
 	samlPages   int                     // split saml into this many pages
@@ -78,6 +85,10 @@ func (f *fakeGitLab) userJSON(u fakeUser, full bool) map[string]any {
 	if full {
 		m["email"] = u.Email
 		m["is_admin"] = u.IsAdmin
+		m["external"] = u.External
+		if u.Emails != nil {
+			m["emails"] = u.Emails
+		}
 	}
 	return m
 }
@@ -145,12 +156,42 @@ func (f *fakeGitLab) handler(t *testing.T) http.HandlerFunc {
 					}
 				}
 			} else if s := strings.ToLower(q.Get("search")); s != "" {
-				for _, u := range f.users {
-					hay := strings.ToLower(u.Username + " " + u.Email + " " + u.PublicEmail)
-					if strings.Contains(hay, s) {
+				if f.searchHits != nil {
+					for _, u := range f.searchHits {
 						out = append(out, f.userJSON(u, f.admin))
 					}
+				} else {
+					for _, u := range f.users {
+						hay := strings.ToLower(u.Username + " " + u.Email + " " + u.PublicEmail)
+						if strings.Contains(hay, s) {
+							out = append(out, f.userJSON(u, f.admin))
+						}
+					}
 				}
+				// Offset pagination like GitLab: page and per_page, Link rel=next.
+				per, _ := strconv.Atoi(q.Get("per_page"))
+				if per < 1 {
+					per = 20
+				}
+				page, _ := strconv.Atoi(q.Get("page"))
+				if page < 1 {
+					page = 1
+				}
+				lo, hi := (page-1)*per, page*per
+				if lo > len(out) {
+					lo = len(out)
+				}
+				if hi > len(out) {
+					hi = len(out)
+				}
+				if hi < len(out) {
+					next := *r.URL
+					nq := next.Query()
+					nq.Set("page", strconv.Itoa(page+1))
+					next.RawQuery = nq.Encode()
+					w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, "https://"+r.Host+next.String()))
+				}
+				out = out[lo:hi]
 			}
 			if out == nil {
 				out = []map[string]any{}
@@ -173,7 +214,14 @@ func (f *fakeGitLab) handler(t *testing.T) http.HandlerFunc {
 			}
 			switch {
 			case len(seg) == 2:
-				writeJSON(w, 200, map[string]any{"id": p.ID, "visibility": p.Visibility, "description": itest.Canary + "desc"})
+				pj := map[string]any{"id": p.ID, "visibility": p.Visibility, "description": itest.Canary + "desc"}
+				if p.IssuesAccessLevel != "" {
+					pj["issues_access_level"] = p.IssuesAccessLevel
+				}
+				if p.IssuesEnabled != nil {
+					pj["issues_enabled"] = *p.IssuesEnabled
+				}
+				writeJSON(w, 200, pj)
 			case len(seg) == 5 && seg[2] == "members" && seg[3] == "all":
 				uid, _ := strconv.ParseInt(seg[4], 10, 64)
 				m, ok := p.Members[uid]
@@ -427,14 +475,14 @@ func TestIdentityTemplate(t *testing.T) {
 	f := newFake()
 	f.admin = false
 	f.member("acme/webapp", bob, levelReporter)
-	srv, c := setup(t, f, map[string]string{"identity_mode": "template", "username_template": "{local}"})
+	srv, c := setup(t, f, map[string]string{"identity_mode": "template", "username_template": "{local}", "email_domains": "corp.example"})
 	itest.ExpectCode(t, check(t, c, "bob@corp.example", "issue.create", "project:acme/webapp"), integration.CodeAllowed)
 	if q := srv.Calls()[0].Query; q.Get("username") != "bob" || q.Get("search") != "" {
 		t.Errorf("query %v", q)
 	}
 	itest.ExpectCode(t, check(t, c, "nobody@corp.example", "issue.create", "project:acme/webapp"), integration.CodeUserNotFound)
 
-	_, c2 := setup(t, f, map[string]string{"identity_mode": "template", "username_template": "{domain}-{local}"})
+	_, c2 := setup(t, f, map[string]string{"identity_mode": "template", "username_template": "{domain}-{local}", "email_domains": "corp.example"})
 	id, err := c2.ResolveIdentity(context.Background(), integration.User{Email: "bob@corp.example"})
 	if err == nil || id.ID != "" {
 		t.Errorf("corp.example-bob should not exist: %+v %v", id, err)
@@ -472,6 +520,17 @@ func TestNewValidation(t *testing.T) {
 	}
 	if err := build(map[string]string{"username_template": "static"}, itest.Literal(token)); err == nil {
 		t.Error("static template accepted")
+	}
+	if err := build(map[string]string{"identity_mode": "template"}, itest.Literal(token)); err == nil || !strings.Contains(err.Error(), "email_domains") {
+		t.Errorf("template without email_domains: %v", err)
+	}
+	for _, bad := range []string{"Acme.com", "acme.com,", "acme.com, acme.io", "acme.com;acme.io", "a/b", ","} {
+		if err := build(map[string]string{"identity_mode": "template", "email_domains": bad}, itest.Literal(token)); err == nil {
+			t.Errorf("email_domains %q accepted", bad)
+		}
+	}
+	if err := build(map[string]string{"identity_mode": "template", "email_domains": "acme.com,acme.io"}, itest.Literal(token)); err != nil {
+		t.Error(err)
 	}
 	if err := build(nil, secret.Secret{}); err == nil {
 		t.Error("missing credential accepted")
@@ -567,7 +626,7 @@ func TestNonMemberVisibility(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, "alice@example.com", "project.read", "project:acme/public"), integration.CodeAllowed)
 	itest.ExpectCode(t, check(t, c, "alice@example.com", "project.read", "project:acme/internal"), integration.CodeAllowed)
 	itest.ExpectCode(t, check(t, c, "alice@example.com", "issue.create", "project:acme/internal"), integration.CodeAllowed)
-	itest.ExpectCode(t, check(t, c, "alice@example.com", "issue.create", "project:acme/public"), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "issue.create", "project:acme/public"), integration.CodeAllowed)
 	itest.ExpectCode(t, check(t, c, "alice@example.com", "project.read", "project:acme/webapp"), integration.CodeDenied)
 	itest.ExpectCode(t, check(t, c, "alice@example.com", "mr.create", "project:acme/public"), integration.CodeDenied)
 	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/public@main"), integration.CodeDenied)
@@ -669,8 +728,8 @@ func TestProtectedBranchWildcardAndLevels(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp@v1-hotfix"), integration.CodeAllowed)
 	// Unprotected branch: the unprotected rule applies.
 	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp@feature/x"), integration.CodeAllowed)
-	// No branch given: base rule, no protected-branch lookup.
-	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp"), integration.CodeAllowed)
+	// No branch given while rules exist: unknown, the caller must name the branch.
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp"), integration.CodeUnsupported)
 	// Merge on "*-hotfix" allows no one (empty entry list): deny.
 	itest.ExpectCode(t, check(t, c, "bob@example.com", "mr.merge", "project:acme/webapp@v1-hotfix"), integration.CodeDenied)
 }
@@ -757,7 +816,10 @@ func TestProtectedBranchListForbidden(t *testing.T) {
 	f.projects["acme/webapp"].pbStatus = 403
 	_, c := setup(t, f, nil)
 	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp@main"), integration.CodeCredentialRejected)
-	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp"), integration.CodeAllowed)
+	// Without a branch the rules are still listed, so the 403 shows here too.
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp"), integration.CodeCredentialRejected)
+	// Actions without a branch rule never list protected branches.
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "mr.create", "project:acme/webapp"), integration.CodeAllowed)
 }
 
 func TestWildcard(t *testing.T) {
@@ -898,7 +960,7 @@ func TestProbe(t *testing.T) {
 	}
 	// Template mode on a non-admin token: no admin warning.
 	f.me.IsAdmin = false
-	_, c4 := setup(t, f, map[string]string{"identity_mode": "template"})
+	_, c4 := setup(t, f, map[string]string{"identity_mode": "template", "email_domains": "example.com"})
 	r, _ = c4.Probe(context.Background())
 	if len(r.Warnings) != 0 {
 		t.Errorf("%+v", r.Warnings)
@@ -1024,4 +1086,294 @@ func TestEveryActionHasASpec(t *testing.T) {
 	if _, ok := integration.FindAction(Integration{}, "repo.delete"); ok {
 		t.Error("unknown action matched")
 	}
+}
+
+// Security-review findings.
+
+func TestProtectedBranchDeployKeyEntry(t *testing.T) {
+	f := newFake()
+	p := f.projects["acme/webapp"]
+	f.member("acme/webapp", alice, levelMaintainer)
+	// alice's user id is 7, the same number as the deploy key: the entry
+	// must never be read as naming her, nor as "Maintainers and up".
+	p.Protected = []map[string]any{
+		protect("main", []map[string]any{entry("access_level", 40, "deploy_key_id", 7)}, nil),
+		protect("both", []map[string]any{entry("access_level", 40, "deploy_key_id", 7), entry("access_level", 40)}, nil),
+	}
+	_, c := setup(t, f, nil)
+	d := check(t, c, "alice@example.com", "repo.push", "project:acme/webapp@main")
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if strings.Contains(d.Text, "no one") {
+		t.Errorf("a deploy key may push, so the rule is not 'no one': %s", d.Text)
+	}
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp@both"), integration.CodeAllowed)
+}
+
+func TestExternalUserOnInternalProject(t *testing.T) {
+	f := newFake()
+	ext := fakeUser{ID: 20, Username: "ext", State: "active", Email: "ext@example.com", PublicEmail: "ext@example.com", External: true}
+	f.users = append(f.users, ext)
+	_, c := setup(t, f, nil)
+	id, err := c.ResolveIdentity(context.Background(), integration.User{Email: "ext@example.com"})
+	if err != nil || id.Attr("external") != "true" {
+		t.Fatalf("identity %+v %v", id, err)
+	}
+	// External users cannot see internal projects; public ones they can.
+	d := check(t, c, "ext@example.com", "project.read", "project:acme/internal")
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "external") {
+		t.Error(d.Text)
+	}
+	itest.ExpectCode(t, check(t, c, "ext@example.com", "issue.create", "project:acme/internal"), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, "ext@example.com", "project.read", "project:acme/public"), integration.CodeAllowed)
+	// A known non-external user is still allowed.
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "project.read", "project:acme/internal"), integration.CodeAllowed)
+	// A non-admin token cannot see the external flag: unknown on internal, allow on public.
+	f.admin = false
+	id, err = c.ResolveIdentity(context.Background(), integration.User{Email: "ext@example.com"})
+	if err != nil || id.Attr("external") != "" {
+		t.Fatalf("identity %+v %v", id, err)
+	}
+	itest.ExpectCode(t, check(t, c, "ext@example.com", "project.read", "project:acme/internal"), integration.CodeUnsupported)
+	itest.ExpectCode(t, check(t, c, "ext@example.com", "project.read", "project:acme/public"), integration.CodeAllowed)
+}
+
+func TestAdminNonMemberAllowed(t *testing.T) {
+	f := newFake()
+	_, c := setup(t, f, nil)
+	d := check(t, c, "root@example.com", "project.delete", "project:acme/webapp")
+	itest.ExpectCode(t, d, integration.CodeAllowed)
+	if !strings.Contains(d.Text, "instance administrator") {
+		t.Error(d.Text)
+	}
+	itest.ExpectCode(t, check(t, c, "root@example.com", "group.admin", "group:acme"), integration.CodeAllowed)
+	// A project the token cannot see is still not visible, even for an administrator.
+	itest.ExpectCode(t, check(t, c, "root@example.com", "project.read", "project:acme/missing"), integration.CodeResourceNotVisible)
+	// Issues disabled: even an administrator cannot create one.
+	f.projects["acme/webapp"].IssuesAccessLevel = "disabled"
+	itest.ExpectCode(t, check(t, c, "root@example.com", "issue.create", "project:acme/webapp"), integration.CodeDenied)
+	// Administrator status unknown (non-admin token): the membership deny stands.
+	f.admin = false
+	f.users = []fakeUser{{ID: 1, Username: "root", State: "active", PublicEmail: "root@example.com"}}
+	itest.ExpectCode(t, check(t, c, "root@example.com", "project.delete", "project:acme/webapp"), integration.CodeDenied)
+}
+
+func fillerUsers(n int) []fakeUser {
+	out := make([]fakeUser, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, fakeUser{ID: int64(1000 + i), Username: fmt.Sprintf("filler%d", i), State: "active", Email: fmt.Sprintf("filler%d@example.com", i)})
+	}
+	return out
+}
+
+func TestSecondaryEmailsAndPagination(t *testing.T) {
+	f := newFake()
+	carol := fakeUser{ID: 30, Username: "carol", State: "active", Email: "carol@example.com", Emails: []any{
+		map[string]any{"email": "Carol.Alias@example.com", "confirmed_at": "2020-01-02T03:04:05Z"},
+		map[string]any{"email": "pending@example.com", "confirmed_at": nil},
+		"plain@example.com",
+	}}
+	// carol is on page 2 of a 100-per-page listing.
+	f.searchHits = append(fillerUsers(150), carol)
+	srv, c := setup(t, f, nil)
+	id, err := c.ResolveIdentity(context.Background(), integration.User{Email: "carol@example.com"})
+	if err != nil || id.ID != "30" {
+		t.Fatalf("primary email on page 2: %+v %v", id, err)
+	}
+	pages := map[string]bool{}
+	for _, call := range srv.Calls() {
+		if call.Path == "/api/v4/users" {
+			if call.Query.Get("per_page") != "100" {
+				t.Errorf("per_page %q", call.Query.Get("per_page"))
+			}
+			pages[call.Query.Get("page")] = true
+		}
+	}
+	if len(pages) != 2 || !pages["1"] || !pages["2"] {
+		t.Errorf("pages fetched: %v", pages)
+	}
+	// A confirmed secondary email matches, ignoring case.
+	id, err = c.ResolveIdentity(context.Background(), integration.User{Email: "carol.alias@example.com"})
+	if err != nil || id.ID != "30" {
+		t.Errorf("confirmed secondary email: %+v %v", id, err)
+	}
+	// A secondary email without confirmed_at at all is accepted.
+	id, err = c.ResolveIdentity(context.Background(), integration.User{Email: "plain@example.com"})
+	if err != nil || id.ID != "30" {
+		t.Errorf("secondary email without confirmed_at: %+v %v", id, err)
+	}
+	// An unconfirmed secondary email never matches.
+	_, err = c.ResolveIdentity(context.Background(), integration.User{Email: "pending@example.com"})
+	if integration.ToDecision(err).Code != integration.CodeUserNotFound {
+		t.Errorf("unconfirmed secondary email: %v", err)
+	}
+	// Never a substring.
+	_, err = c.ResolveIdentity(context.Background(), integration.User{Email: "alias@example.com"})
+	if integration.ToDecision(err).Code != integration.CodeUserNotFound {
+		t.Errorf("substring: %v", err)
+	}
+	// Two accounts sharing a secondary email are ambiguous.
+	dave := fakeUser{ID: 31, Username: "dave", State: "active", Email: "dave@example.com", Emails: []any{map[string]any{"email": "carol.alias@example.com", "confirmed_at": "2020-01-02T03:04:05Z"}}}
+	f.searchHits = []fakeUser{carol, dave}
+	_, err = c.ResolveIdentity(context.Background(), integration.User{Email: "carol.alias@example.com"})
+	if integration.ToDecision(err).Code != integration.CodeUserAmbiguous {
+		t.Errorf("shared secondary email: %v", err)
+	}
+}
+
+func TestSearchTooManyCandidates(t *testing.T) {
+	f := newFake()
+	f.searchHits = fillerUsers(520)
+	srv, c := setup(t, f, nil)
+	_, err := c.ResolveIdentity(context.Background(), integration.User{Email: "alice@example.com"})
+	d := integration.ToDecision(err)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "too many candidates") {
+		t.Error(d.Text)
+	}
+	n := 0
+	for _, call := range srv.Calls() {
+		if call.Path == "/api/v4/users" {
+			n++
+		}
+	}
+	if n != 5 {
+		t.Errorf("%d pages fetched, want 5", n)
+	}
+	// A match on the fifth page is still found.
+	f.searchHits = append(fillerUsers(450), alice)
+	id, err := c.ResolveIdentity(context.Background(), integration.User{Email: "alice@example.com"})
+	if err != nil || id.ID != "7" {
+		t.Errorf("match on page 5: %+v %v", id, err)
+	}
+	// Exactly five full pages and no match: unknown, not user_not_found.
+	f.searchHits = fillerUsers(500)
+	_, err = c.ResolveIdentity(context.Background(), integration.User{Email: "alice@example.com"})
+	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUnsupported)
+	// A short last page with no match: user_not_found.
+	f.searchHits = fillerUsers(499)
+	_, err = c.ResolveIdentity(context.Background(), integration.User{Email: "alice@example.com"})
+	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserNotFound)
+}
+
+func TestBranchlessPushWithProtectedRules(t *testing.T) {
+	f := newFake()
+	f.member("acme/webapp", alice, levelDeveloper)
+	f.member("acme/webapp", bob, levelMaintainer)
+	f.projects["acme/webapp"].Protected = []map[string]any{
+		protect("main", []map[string]any{entry("access_level", 40)}, []map[string]any{entry("access_level", 40)}),
+	}
+	srv, c := setup(t, f, nil)
+	for _, action := range []string{"repo.push", "mr.merge"} {
+		for _, u := range []string{"alice@example.com", "bob@example.com"} {
+			d := check(t, c, u, action, "project:acme/webapp")
+			itest.ExpectCode(t, d, integration.CodeUnsupported)
+			if !strings.Contains(d.Text, "@branch") {
+				t.Errorf("%s %s: %s", action, u, d.Text)
+			}
+		}
+	}
+	// With the branch named, the rule decides.
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp@main"), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, "bob@example.com", "repo.push", "project:acme/webapp@main"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp@feature"), integration.CodeAllowed)
+	// No rules at all: the level rule applies.
+	f.projects["acme/webapp"].Protected = nil
+	srv.Reset()
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp"), integration.CodeAllowed)
+	listed := false
+	for _, call := range srv.Calls() {
+		if strings.HasSuffix(call.Path, "/protected_branches") {
+			listed = true
+		}
+	}
+	if !listed {
+		t.Error("protected branches were not listed for a branchless push")
+	}
+	// A level that never pushes is still denied when no rules exist.
+	f.member("acme/webapp", alice, levelReporter)
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "repo.push", "project:acme/webapp"), integration.CodeDenied)
+}
+
+func TestPublicIssueCreationAndIssuesDisabled(t *testing.T) {
+	f := newFake()
+	pub := f.projects["acme/public"]
+	_, c := setup(t, f, nil)
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "issue.create", "project:acme/public"), integration.CodeAllowed)
+	pub.IssuesAccessLevel = "enabled"
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "issue.create", "project:acme/public"), integration.CodeAllowed)
+	pub.IssuesAccessLevel = "disabled"
+	d := check(t, c, "alice@example.com", "issue.create", "project:acme/public")
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "issues") {
+		t.Error(d.Text)
+	}
+	// Issues disabled does not touch other actions.
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "project.read", "project:acme/public"), integration.CodeAllowed)
+	// issues_enabled false (older shape) also denies.
+	pub.IssuesAccessLevel = ""
+	no := false
+	pub.IssuesEnabled = &no
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "issue.create", "project:acme/public"), integration.CodeDenied)
+	// Issues for members only: a non-member is denied.
+	pub.IssuesEnabled = nil
+	pub.IssuesAccessLevel = "private"
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "issue.create", "project:acme/public"), integration.CodeDenied)
+	// Internal projects stay open to non-external signed-in users.
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "issue.create", "project:acme/internal"), integration.CodeAllowed)
+	f.projects["acme/internal"].IssuesAccessLevel = "disabled"
+	itest.ExpectCode(t, check(t, c, "alice@example.com", "issue.create", "project:acme/internal"), integration.CodeDenied)
+}
+
+func TestAccountStateHandling(t *testing.T) {
+	f := newFake()
+	mk := func(id int64, state string) fakeUser {
+		return fakeUser{ID: id, Username: fmt.Sprintf("u%d", id), State: state, Email: fmt.Sprintf("u%d@example.com", id)}
+	}
+	states := map[int64]string{40: "", 41: "deactivated", 42: "ldap_blocked", 43: "banned", 44: "blocked_pending_approval", 45: "blocked", 46: "something_new"}
+	for id, st := range states {
+		u := mk(id, st)
+		f.users = append(f.users, u)
+		f.member("acme/webapp", u, levelOwner)
+	}
+	_, c := setup(t, f, nil)
+	for _, id := range []int64{41, 42, 43, 44, 45} {
+		d := check(t, c, fmt.Sprintf("u%d@example.com", id), "project.read", "project:acme/webapp")
+		itest.ExpectCode(t, d, integration.CodeDenied)
+		if !strings.Contains(d.Text, states[id]) {
+			t.Error(d.Text)
+		}
+	}
+	// Empty or unrecognised state: hallpass cannot tell, so unknown.
+	for _, id := range []int64{40, 46} {
+		d := check(t, c, fmt.Sprintf("u%d@example.com", id), "project.read", "project:acme/webapp")
+		itest.ExpectCode(t, d, integration.CodeUnsupported)
+	}
+}
+
+func TestTemplateDomainAllowlist(t *testing.T) {
+	f := newFake()
+	f.admin = false
+	f.member("acme/webapp", root, levelOwner)
+	f.member("acme/webapp", bob, levelDeveloper)
+	_, c := setup(t, f, map[string]string{"identity_mode": "template", "username_template": "{local}", "email_domains": "acme.com,acme.io"})
+	// A listed domain resolves through the template.
+	itest.ExpectCode(t, check(t, c, "bob@acme.io", "mr.create", "project:acme/webapp"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, "bob@ACME.com", "mr.create", "project:acme/webapp"), integration.CodeAllowed)
+	// root@attacker.example must not become the root account: unknown, not a lookup.
+	d := check(t, c, "root@attacker.example", "project.delete", "project:acme/webapp")
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "domain not allowed for template identities") {
+		t.Error(d.Text)
+	}
+	for _, e := range []string{"root@sub.acme.com", "root@acme.com.evil", "root@acme.comm", "root", "root@"} {
+		itest.ExpectCode(t, check(t, c, e, "project.delete", "project:acme/webapp"), integration.CodeUnsupported)
+	}
+	// With an administrator's token the account's email is visible and must
+	// equal the request email.
+	f.admin = true
+	itest.ExpectCode(t, check(t, c, "bob@acme.com", "mr.create", "project:acme/webapp"), integration.CodeUserNotFound)
+	f.users = append(f.users, fakeUser{ID: 50, Username: "eve", State: "active", Email: "Eve@Acme.com"})
+	f.member("acme/webapp", fakeUser{ID: 50}, levelDeveloper)
+	itest.ExpectCode(t, check(t, c, "eve@acme.com", "mr.create", "project:acme/webapp"), integration.CodeAllowed)
 }

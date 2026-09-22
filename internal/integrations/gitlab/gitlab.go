@@ -4,16 +4,19 @@
 // modes, see Fields), reads the account's effective membership of the project
 // or group with the members/all endpoint, and maps the access level to the
 // asked action with an exact level set per action. For repo.push and mr.merge
-// on a named branch it also evaluates the project's protected-branch rules.
+// it also reads the project's protected-branch rules: on a named branch it
+// evaluates them, without one it answers unknown when any exist.
 // The token is read-only (read_api) and nothing is written.
 package gitlab
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +33,23 @@ const (
 	modeEnterpriseUsers = "enterprise_users"
 	modeSAML            = "saml"
 	modeTemplate        = "template"
+
+	// searchPerPage and searchMaxPages bound the admin_search listing: a
+	// search that fills searchMaxPages pages without an exact match answers
+	// unknown rather than user_not_found.
+	searchPerPage  = 100
+	searchMaxPages = 5
 )
+
+// inactiveStates are the account states GitLab uses for accounts that may
+// not sign in. Any other non-active state is not evaluable.
+var inactiveStates = map[string]bool{
+	"blocked":                  true,
+	"deactivated":              true,
+	"ldap_blocked":             true,
+	"banned":                   true,
+	"blocked_pending_approval": true,
+}
 
 // Integration is the gitlab product.
 type Integration struct{}
@@ -52,7 +71,32 @@ func (Integration) Fields() []integration.Field {
 			Description: "top-level group path; required for identity_mode enterprise_users and saml"},
 		{Name: "username_template", Default: defaultTemplate, Validate: validateTemplate,
 			Description: "username derivation for identity_mode template: placeholders {email}, {local}, {domain}, default {local}"},
+		{Name: "email_domains", Validate: validateEmailDomains,
+			Description: "comma-separated email domains (acme.com,acme.io) whose users may be mapped by identity_mode template; required in that mode, any other domain answers unknown"},
 	}
+}
+
+// emailDomainRe is one lowercase DNS-style domain of the email_domains list.
+var emailDomainRe = regexp.MustCompile(`^[a-z0-9.-]+$`)
+
+// parseEmailDomains splits and validates the email_domains value.
+func parseEmailDomains(v string) ([]string, error) {
+	if v == "" {
+		return nil, nil
+	}
+	var out []string
+	for _, d := range strings.Split(v, ",") {
+		if !emailDomainRe.MatchString(d) {
+			return nil, fmt.Errorf("domain %q must match %s (lowercase, no spaces)", d, emailDomainRe)
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+func validateEmailDomains(v string) error {
+	_, err := parseEmailDomains(v)
+	return err
 }
 
 func validateGroup(v string) error {
@@ -125,6 +169,13 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	if err := validateTemplate(tpl); err != nil {
 		return nil, fmt.Errorf("username_template: %w", err)
 	}
+	domains, err := parseEmailDomains(s.Get("email_domains"))
+	if err != nil {
+		return nil, fmt.Errorf("email_domains: %w", err)
+	}
+	if mode == modeTemplate && len(domains) == 0 {
+		return nil, errors.New("email_domains is required when identity_mode is template: the template maps any email's local part to an account, so the domains that may be mapped must be listed")
+	}
 	base := s.Get("url")
 	if base == "" {
 		base = defaultURL
@@ -133,6 +184,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		mode:     mode,
 		group:    group,
 		template: tpl,
+		domains:  domains,
 		now:      d.Now,
 	}
 	if c.now == nil {
@@ -153,11 +205,13 @@ type Connection struct {
 	mode     string
 	group    string
 	template string
-	now      func() time.Time
+	// domains is the email_domains allow-list (template mode).
+	domains []string
+	now     func() time.Time
 }
 
-// user is the subset of a GitLab user record hallpass reads. email and
-// is_admin are present only for administrators' tokens.
+// user is the subset of a GitLab user record hallpass reads. email,
+// is_admin, external and emails are present only for administrators' tokens.
 type user struct {
 	ID          int64  `json:"id"`
 	Username    string `json:"username"`
@@ -166,6 +220,43 @@ type user struct {
 	PublicEmail string `json:"public_email"`
 	Bot         bool   `json:"bot"`
 	IsAdmin     *bool  `json:"is_admin"`
+	External    *bool  `json:"external"`
+	// Emails are the account's secondary emails.
+	// UNVERIFIED: that a user record of the search listing carries an
+	// "emails" array, and its shape; both a bare string and an object with
+	// "email" and "confirmed_at" are accepted.
+	Emails []secondaryEmail `json:"emails"`
+}
+
+// secondaryEmail is one entry of a user's emails array. confirmed reports
+// whether the entry may be trusted: true when confirmed_at is absent or
+// non-null, false when it is present and null.
+type secondaryEmail struct {
+	email     string
+	confirmed bool
+}
+
+func (e *secondaryEmail) UnmarshalJSON(b []byte) error {
+	var str string
+	if err := json.Unmarshal(b, &str); err == nil {
+		*e = secondaryEmail{email: str, confirmed: true}
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	out := secondaryEmail{confirmed: true}
+	if raw, ok := obj["email"]; ok {
+		if err := json.Unmarshal(raw, &out.email); err != nil {
+			return fmt.Errorf("emails[].email: %w", err)
+		}
+	}
+	if raw, ok := obj["confirmed_at"]; ok && string(raw) == "null" {
+		out.confirmed = false
+	}
+	*e = out
+	return nil
 }
 
 func (u user) identity() integration.Identity {
@@ -177,7 +268,25 @@ func (u user) identity() integration.Identity {
 	if u.IsAdmin != nil {
 		attrs["is_admin"] = strconv.FormatBool(*u.IsAdmin)
 	}
+	if u.External != nil {
+		attrs["external"] = strconv.FormatBool(*u.External)
+	}
 	return integration.Identity{ID: strconv.FormatInt(u.ID, 10), Display: u.Username, Attrs: attrs}
+}
+
+// domainAllowed reports whether the email's domain is in email_domains.
+func (c *Connection) domainAllowed(email string) bool {
+	_, domain, ok := strings.Cut(email, "@")
+	if !ok || domain == "" {
+		return false
+	}
+	domain = strings.ToLower(domain)
+	for _, d := range c.domains {
+		if d == domain {
+			return true
+		}
+	}
+	return false
 }
 
 // Username applies the template to an email (identity_mode template).
@@ -205,7 +314,15 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	case modeSAML:
 		found, err = c.samlIdentity(ctx, email)
 	case modeTemplate:
+		if !c.domainAllowed(email) {
+			return integration.Identity{}, integration.Errorf(integration.CodeUnsupported, "domain not allowed for template identities: %s is not in email_domains", email)
+		}
 		found, err = c.byUsername(ctx, c.Username(email))
+		// The template only guesses a username; when the account's email is
+		// visible it must be the caller's, else the guess is wrong.
+		if err == nil && found.Email != "" && !strings.EqualFold(found.Email, email) {
+			err = integration.UserNotFound("the account %s derived from %s has a different email", found.Username, email)
+		}
 	default:
 		return integration.Identity{}, fmt.Errorf("unreachable: identity_mode %q", c.mode)
 	}
@@ -215,12 +332,27 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	return found.identity(), nil
 }
 
+// adminSearch lists GET /users?search=<email> page by page (searchPerPage
+// per page, at most searchMaxPages pages) and picks the exact match. The
+// search is fuzzy on GitLab's side, so a common local part can return more
+// candidates than hallpass will read; then the answer is unknown.
 func (c *Connection) adminSearch(ctx context.Context, email string) (user, error) {
 	var users []user
-	if _, err := c.client.GetJSON(ctx, "/users", url.Values{"search": {email}, "per_page": {"100"}}, &users); err != nil {
-		return user{}, c.classify(err, "search users")
+	full := true
+	for page := 1; page <= searchMaxPages && full; page++ {
+		var batch []user
+		q := url.Values{"search": {email}, "per_page": {strconv.Itoa(searchPerPage)}, "page": {strconv.Itoa(page)}}
+		if _, err := c.client.GetJSON(ctx, "/users", q, &batch); err != nil {
+			return user{}, c.classify(err, "search users")
+		}
+		users = append(users, batch...)
+		full = len(batch) >= searchPerPage
 	}
-	return matchEmail(users, email, "the token's user is not an administrator, so private emails are not searchable; use an administrator's token or another identity_mode")
+	found, err := matchEmail(users, email, "the token's user is not an administrator, so private emails are not searchable; use an administrator's token or another identity_mode")
+	if err != nil && full && integration.ToDecision(err).Code == integration.CodeUserNotFound {
+		return user{}, integration.Errorf(integration.CodeUnsupported, "too many candidates: the search for %s filled %d pages of %d users without an exact match", email, searchMaxPages, searchPerPage)
+	}
+	return found, err
 }
 
 func (c *Connection) enterpriseUser(ctx context.Context, email string) (user, error) {
@@ -233,7 +365,8 @@ func (c *Connection) enterpriseUser(ctx context.Context, email string) (user, er
 }
 
 // matchEmail picks the one user whose email (or, absent that, public_email)
-// equals the searched email, ignoring case.
+// or one of whose confirmed secondary emails equals the searched email,
+// ignoring case. Never a substring match.
 func matchEmail(users []user, email, noEmailHint string) (user, error) {
 	var matches []user
 	comparable := false
@@ -242,11 +375,21 @@ func matchEmail(users []user, email, noEmailHint string) (user, error) {
 		if e == "" {
 			e = u.PublicEmail
 		}
-		if e == "" {
-			continue
+		matched := false
+		if e != "" {
+			comparable = true
+			matched = strings.EqualFold(e, email)
 		}
-		comparable = true
-		if strings.EqualFold(e, email) {
+		for _, sec := range u.Emails {
+			if sec.email == "" {
+				continue
+			}
+			comparable = true
+			if sec.confirmed && strings.EqualFold(sec.email, email) {
+				matched = true
+			}
+		}
+		if matched {
 			matches = append(matches, u)
 		}
 	}
@@ -358,7 +501,7 @@ type memberRecord struct {
 
 // member reads GET /<projects|groups>/:id/members/all/:user_id.
 // 404 means "not a member", or that the project or group is not visible;
-// the caller tells the two apart with visibility.
+// the caller tells the two apart by reading the record (see read).
 func (c *Connection) member(ctx context.Context, scope, id, userID string) (membership, error) {
 	path := "/" + scope + "s/" + httpx.PathEscape(id) + "/members/all/" + httpx.PathEscape(userID)
 	var rec memberRecord
@@ -381,22 +524,34 @@ func (c *Connection) member(ctx context.Context, scope, id, userID string) (memb
 	return m, nil
 }
 
-// visibility reads the project or group and returns its visibility. A 404
-// means the token cannot see it.
-func (c *Connection) visibility(ctx context.Context, t target) (string, error) {
-	var out struct {
-		Visibility string `json:"visibility"`
-	}
+// resource is what hallpass reads of a project or group record.
+type resource struct {
+	Visibility string `json:"visibility"`
+	// IssuesAccessLevel is "disabled", "private" or "enabled" on projects.
+	IssuesAccessLevel string `json:"issues_access_level"`
+	// IssuesEnabled is the older boolean form of the same setting.
+	IssuesEnabled *bool `json:"issues_enabled"`
+}
+
+// issuesDisabled reports whether the project has the issues feature off.
+func (r resource) issuesDisabled() bool {
+	return r.IssuesAccessLevel == "disabled" || (r.IssuesEnabled != nil && !*r.IssuesEnabled)
+}
+
+// read reads the project or group record. A 404 means the token cannot see
+// it.
+func (c *Connection) read(ctx context.Context, t target) (resource, error) {
+	var out resource
 	if _, err := c.client.GetJSON(ctx, "/"+t.scope+"s/"+httpx.PathEscape(t.id), nil, &out); err != nil {
 		switch httpx.Status(err) {
 		case 404:
-			return "", integration.Wrap(integration.CodeResourceNotVisible, err, "%s %s is not visible to the token (HTTP 404)", t.scope, t.id)
+			return resource{}, integration.Wrap(integration.CodeResourceNotVisible, err, "%s %s is not visible to the token (HTTP 404)", t.scope, t.id)
 		case 403:
-			return "", integration.Wrap(integration.CodeCredentialRejected, err, "the token may not read %s %s (HTTP 403)", t.scope, t.id)
+			return resource{}, integration.Wrap(integration.CodeCredentialRejected, err, "the token may not read %s %s (HTTP 403)", t.scope, t.id)
 		}
-		return "", httpx.Classify(err)
+		return resource{}, httpx.Classify(err)
 	}
-	return out.Visibility, nil
+	return out, nil
 }
 
 // Check evaluates one action against the user's effective access level.
@@ -413,11 +568,14 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	if who == "" {
 		who = "user " + r.Identity.ID
 	}
-	if state := r.Identity.Attr("state"); state != "active" {
-		if state == "" {
-			state = "of unknown state"
-		}
+	switch state := r.Identity.Attr("state"); {
+	case state == "active":
+	case state == "":
+		return integration.Unsupported("GitLab account %s has no state in the record the token can see", who), nil
+	case inactiveStates[state]:
 		return integration.Denied("GitLab account %s is %s", who, state), nil
+	default:
+		return integration.Unsupported("GitLab account %s is in state %q, which hallpass does not know", who, state), nil
 	}
 	if r.Identity.Attr("bot") == "true" {
 		return integration.Denied("GitLab account %s is a bot account", who), nil
@@ -428,14 +586,7 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		return integration.Decision{}, err
 	}
 	if !m.found {
-		vis, err := c.visibility(ctx, t)
-		if err != nil {
-			return integration.Decision{}, err
-		}
-		if spec.grantsNonMember(vis) {
-			return integration.Allowed("%s is not a member of %s %s, but the %s is %s and %s is open to every signed-in user", who, t.scope, t.id, t.scope, vis, spec.name), nil
-		}
-		return integration.Denied("%s is not a member of %s %s (%s); %s needs %s", who, t.scope, t.id, vis, spec.name, levelNames(spec.levels)), nil
+		return c.checkNonMember(ctx, spec, t, r.Identity, who)
 	}
 	if m.state != "active" && m.state != "" {
 		return integration.Denied("the membership of %s in %s %s is %s", who, t.scope, t.id, m.state), nil
@@ -445,10 +596,15 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		role = fmt.Sprintf("custom role %q (base %s)", m.customRole, levelName(m.level))
 	}
 
-	if t.branch != "" && spec.branch != "" {
+	if spec.branch != "" {
 		rules, err := c.protectedBranches(ctx, t)
 		if err != nil {
 			return integration.Decision{}, err
+		}
+		if t.branch == "" && len(rules) > 0 {
+			// The level alone cannot answer: a protected branch may restrict
+			// (Maintainers only) or widen (a named user) what the level says.
+			return integration.Unsupported("project %s has %d protected-branch rules, which decide %s per branch; add @branch to the resource", t.id, len(rules), spec.name), nil
 		}
 		var matched []protectedBranch
 		for _, pb := range rules {
@@ -472,12 +628,47 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	return integration.Denied("%s has %s access to %s %s; %s needs %s", who, role, t.scope, t.id, spec.name, levelNames(spec.levels)), nil
 }
 
+// checkNonMember answers for an account with no membership of the project
+// or group: administrators, the project's visibility and its issue settings
+// decide.
+func (c *Connection) checkNonMember(ctx context.Context, spec actionSpec, t target, id integration.Identity, who string) (integration.Decision, error) {
+	res, err := c.read(ctx, t)
+	if err != nil {
+		return integration.Decision{}, err
+	}
+	vis := res.Visibility
+	if spec.name == "issue.create" && res.issuesDisabled() {
+		return integration.Denied("issues are disabled on project %s, so no one can create one", t.id), nil
+	}
+	if id.Attr("is_admin") == "true" {
+		return integration.Allowed("%s is an instance administrator, which grants %s on every %s", who, spec.name, t.scope), nil
+	}
+	if spec.name == "issue.create" && res.IssuesAccessLevel == "private" {
+		return integration.Denied("%s is not a member of project %s and its issues are restricted to project members", who, t.id), nil
+	}
+	if spec.grantsNonMember(vis) {
+		if vis == "internal" {
+			// External users cannot see internal projects.
+			switch id.Attr("external") {
+			case "true":
+				return integration.Denied("%s is not a member of %s %s, and as an external user cannot see %s projects", who, t.scope, t.id, vis), nil
+			case "false":
+			default:
+				return integration.Unsupported("%s is not a member of %s %s; the %s is %s, which external users cannot see, and the token cannot tell whether the account is external", who, t.scope, t.id, t.scope, vis), nil
+			}
+		}
+		return integration.Allowed("%s is not a member of %s %s, but the %s is %s and %s is open to every signed-in user", who, t.scope, t.id, t.scope, vis, spec.name), nil
+	}
+	return integration.Denied("%s is not a member of %s %s (%s); %s needs %s", who, t.scope, t.id, vis, spec.name, levelNames(spec.levels)), nil
+}
+
 // accessEntry is one "allowed to push/merge" entry of a protected branch.
 type accessEntry struct {
 	AccessLevel  int   `json:"access_level"`
 	UserID       int64 `json:"user_id"`
 	GroupID      int64 `json:"group_id"`
 	MemberRoleID int64 `json:"member_role_id"`
+	DeployKeyID  int64 `json:"deploy_key_id"`
 }
 
 type protectedBranch struct {
@@ -541,6 +732,10 @@ func (c *Connection) checkProtected(ctx context.Context, r integration.CheckRequ
 	var unresolved []string
 	for _, e := range entries {
 		switch {
+		case e.DeployKeyID != 0:
+			// A deploy key may push, but it is never the user; the entry's
+			// access_level describes the key, not a role.
+			anyone = true
 		case e.UserID != 0:
 			anyone = true
 			if e.UserID == userID {

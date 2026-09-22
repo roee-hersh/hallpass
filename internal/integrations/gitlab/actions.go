@@ -92,7 +92,7 @@ type actionSpec struct {
 	// conditions hallpass does not evaluate; the answer is unknown.
 	conditional []int
 	// nonMember lists project visibilities that grant the action to
-	// authenticated non-members.
+	// authenticated non-members (external users excepted on internal).
 	nonMember []string
 	// branch is the protected-branch rule consulted when the resource has an
 	// @branch suffix: branchPush, branchMerge or "".
@@ -101,7 +101,7 @@ type actionSpec struct {
 
 var actionList = []actionSpec{
 	{name: "project.read", desc: "view the project, its code and issues", scope: scopeProject, levels: guestUp, nonMember: []string{"public", "internal"}},
-	{name: "issue.create", desc: "create an issue", scope: scopeProject, levels: guestUp, nonMember: []string{"internal"}},
+	{name: "issue.create", desc: "create an issue", scope: scopeProject, levels: guestUp, nonMember: []string{"public", "internal"}},
 	// UNVERIFIED: Security Manager (25) is assumed to edit issues like Reporter.
 	{name: "issue.edit", desc: "edit any issue (assign, label, close)", scope: scopeProject, levels: plannerUp},
 	{name: "mr.create", desc: "create a merge request", scope: scopeProject, levels: developerUp},
