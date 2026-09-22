@@ -58,8 +58,38 @@ func (Integration) Fields() []integration.Field {
 			Description: "how an email becomes a login: saml (organization SAML identities), template (login_template) or map_file (user_map_file)"},
 		{Name: "login_template", Default: "{local}", Validate: validateTemplate,
 			Description: "template mode: placeholders {email}, {local}, {domain}, e.g. {local}-acme"},
+		{Name: "email_domains", Validate: validateEmailDomains,
+			Description: "template mode (required): comma-separated email domains the template applies to; other domains are unknown"},
 		{Name: "user_map_file", Description: "map_file mode: path to a file of \"email login\" or \"email=login\" lines, # comments; re-read every 60 s"},
 	}
+}
+
+// emailDomainRe is one entry of email_domains.
+var emailDomainRe = regexp.MustCompile(`^[a-z0-9.-]+$`)
+
+// parseEmailDomains splits the comma-separated email_domains value and
+// validates each entry.
+func parseEmailDomains(v string) ([]string, error) {
+	var out []string
+	for _, d := range strings.Split(v, ",") {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if !emailDomainRe.MatchString(d) {
+			return nil, fmt.Errorf("%q is not a lowercase domain name", d)
+		}
+		out = append(out, d)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("must list at least one domain")
+	}
+	return out, nil
+}
+
+func validateEmailDomains(v string) error {
+	_, err := parseEmailDomains(v)
+	return err
 }
 
 func validateLogin(v string) error {
@@ -148,6 +178,17 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		if err := validateTemplate(c.template); err != nil {
 			return nil, fmt.Errorf("login_template: %w", err)
 		}
+		if s.Get("email_domains") == "" {
+			return nil, errors.New("identity_mode template requires email_domains: the template would otherwise map any domain's local part to a login")
+		}
+		domains, err := parseEmailDomains(s.Get("email_domains"))
+		if err != nil {
+			return nil, fmt.Errorf("email_domains: %w", err)
+		}
+		c.emailDomains = map[string]bool{}
+		for _, d := range domains {
+			c.emailDomains[d] = true
+		}
 	case modeMapFile:
 		if c.mapFile == "" {
 			return nil, errors.New("identity_mode map_file requires user_map_file")
@@ -179,6 +220,7 @@ type Connection struct {
 	installationID string
 	mode           string
 	template       string
+	emailDomains   map[string]bool // template mode: lowercase domains the template applies to
 	mapFile        string
 	graphqlURL     string
 	logger         *slog.Logger
@@ -193,7 +235,7 @@ type Connection struct {
 	discoveredInst string
 
 	samlMu      sync.Mutex
-	samlEntries map[string]samlEntry
+	samlIndex   *samlIndex
 	samlLoaded  time.Time
 	samlLoading chan struct{}
 
@@ -462,6 +504,35 @@ type permissionRecord struct {
 	} `json:"user"`
 }
 
+// builtinRole reports whether a role_name is one of GitHub's five base
+// roles (or "none"). Anything else is a custom repository role, whose extra
+// abilities the five permission booleans do not describe.
+func builtinRole(name string) bool {
+	switch name {
+	case "", "none", "read", "pull", "triage", "write", "push", "maintain", "admin":
+		return true
+	}
+	return false
+}
+
+// repoMeta is the part of GET /repos/{owner}/{repo} the checks read.
+type repoMeta struct {
+	HasIssues    *bool  `json:"has_issues"`
+	AllowForking *bool  `json:"allow_forking"`
+	Visibility   string `json:"visibility"`
+}
+
+func (c *Connection) repoMeta(ctx context.Context, repoPath, repo string) (repoMeta, error) {
+	var meta repoMeta
+	if _, err := c.get(ctx, repoPath, &meta); err != nil {
+		if apiStatus(err) == http.StatusNotFound {
+			return meta, integration.Errorf(integration.CodeResourceNotVisible, "repository %s is not visible to the App", repo)
+		}
+		return meta, c.classify(err, "read repository "+repo)
+	}
+	return meta, nil
+}
+
 func (c *Connection) checkRepo(ctx context.Context, a action, t target, login string) (integration.Decision, error) {
 	repoPath := "/repos/" + httpx.PathEscape(t.owner) + "/" + httpx.PathEscape(t.repo)
 	var rec permissionRecord
@@ -472,14 +543,18 @@ func (c *Connection) checkRepo(ctx context.Context, a action, t target, login st
 		}
 		return integration.Decision{}, c.classify(err, "read collaborator permissions on "+t.owner+"/"+t.repo)
 	}
+	repo := t.owner + "/" + t.repo
 	var perms permissions
 	switch {
 	case rec.User != nil && rec.User.Permissions != nil:
 		perms = *rec.User.Permissions
 	case rec.Permission != "":
+		if !builtinRole(rec.Permission) {
+			return integration.Unsupported("GitHub reported permission %q for %s on %s, which hallpass does not model", rec.Permission, login, repo), nil
+		}
 		perms = fromString(rec.Permission)
 	default:
-		return integration.Unsupported("GitHub reported no permissions for %s on %s/%s", login, t.owner, t.repo), nil
+		return integration.Unsupported("GitHub reported no permissions for %s on %s", login, repo), nil
 	}
 	role := rec.RoleName
 	if role == "" {
@@ -488,22 +563,19 @@ func (c *Connection) checkRepo(ctx context.Context, a action, t target, login st
 	if role == "" {
 		role = "none"
 	}
-	repo := t.owner + "/" + t.repo
 	if !perms.has(a.level) {
+		if !builtinRole(rec.RoleName) {
+			return integration.Unsupported("%s has custom repository role %s on %s; extra abilities not modeled, so %s cannot be evaluated", login, role, repo, a.level), nil
+		}
 		return integration.Denied("%s has %s on %s, which does not include %s", login, role, repo, a.level), nil
 	}
 	text := fmt.Sprintf("%s has %s on %s, which includes %s", login, role, repo, a.level)
 
 	switch a.name {
 	case "issue.create":
-		var meta struct {
-			HasIssues *bool `json:"has_issues"`
-		}
-		if _, err := c.get(ctx, repoPath, &meta); err != nil {
-			if apiStatus(err) == http.StatusNotFound {
-				return integration.UnknownDecision(integration.CodeResourceNotVisible, "repository %s is not visible to the App", repo), nil
-			}
-			return integration.Decision{}, c.classify(err, "read repository "+repo)
+		meta, err := c.repoMeta(ctx, repoPath, repo)
+		if err != nil {
+			return integration.Decision{}, err
 		}
 		if meta.HasIssues == nil {
 			return integration.Unsupported("%s; GitHub did not report whether issues are enabled on %s", text, repo), nil
@@ -514,37 +586,199 @@ func (c *Connection) checkRepo(ctx context.Context, a action, t target, login st
 		text += "; issues are enabled"
 	case "pr.create":
 		if !perms.Push {
-			text += " (via fork; pushing a branch to the repository itself needs push)"
+			// Without push the branch must come from a fork, so forking
+			// must be possible on this repository.
+			meta, err := c.repoMeta(ctx, repoPath, repo)
+			if err != nil {
+				return integration.Decision{}, err
+			}
+			if meta.AllowForking == nil {
+				return integration.Unsupported("%s but not push; GitHub did not report whether %s may be forked", text, repo), nil
+			}
+			if !*meta.AllowForking {
+				return integration.Denied("forking disabled on %s; pull request needs push access, and %s has only %s", repo, login, role), nil
+			}
+			// UNVERIFIED: allow_forking on a private or internal repository
+			// is assumed to reflect the organization's "members can fork"
+			// policy; the visibility is quoted so a reader can tell.
+			text += " (via fork; pushing a branch to the repository itself needs push"
+			if meta.Visibility != "" {
+				text += "; the repository is " + meta.Visibility
+			}
+			text += ")"
 		}
 	case "repo.push", "pr.merge":
 		if t.branch != "" {
-			return c.annotateBranch(ctx, a, t, repoPath, text)
+			return c.annotateBranch(ctx, a, t, repoPath, login, perms, text)
 		}
 	}
 	return integration.Allowed("%s", text), nil
 }
 
+// --- branch rules and protection --------------------------------------------
+
 type branchRule struct {
 	Type string `json:"type"`
 }
 
-// annotateBranch reads the rules that apply to the branch and adds them to
-// an allow. A pull_request rule turns an allowed direct push into unknown.
-func (c *Connection) annotateBranch(ctx context.Context, a action, t target, repoPath, text string) (integration.Decision, error) {
+// branchProtection is the part of the classic branch protection record
+// (GET /repos/{owner}/{repo}/branches/{branch}/protection) that hallpass
+// evaluates. Every object is optional: absent means the setting is off.
+// UNVERIFIED: the field shapes follow GitHub's OpenAPI description
+// (restrictions.users[].login, restrictions.teams[].slug,
+// required_pull_request_reviews present, enforce_admins.enabled); no live
+// response was captured.
+type branchProtection struct {
+	EnforceAdmins *struct {
+		Enabled bool `json:"enabled"`
+	} `json:"enforce_admins"`
+	RequiredPullRequestReviews *struct {
+		RequiredApprovingReviewCount int `json:"required_approving_review_count"`
+	} `json:"required_pull_request_reviews"`
+	Restrictions *struct {
+		Users []struct {
+			Login string `json:"login"`
+		} `json:"users"`
+		Teams []struct {
+			Slug string `json:"slug"`
+		} `json:"teams"`
+		Apps []struct {
+			Slug string `json:"slug"`
+		} `json:"apps"`
+	} `json:"restrictions"`
+}
+
+// pushBlockingRules are the ruleset rule types under which a direct push to
+// an existing branch is only possible for bypass actors, with what each
+// means. creation and deletion do not affect a push to an existing branch.
+var pushBlockingRules = []struct{ typ, means string }{
+	{"pull_request", "requires pull requests"},
+	{"update", "restricts updates to bypass actors"},
+	{"merge_queue", "requires the merge queue"},
+}
+
+// forbidden maps a 403 on a read that needs an extra App permission: a
+// rate-limit 403 keeps its meaning, anything else is unknown (unsupported)
+// with a hint at the permission to grant.
+func (c *Connection) forbidden(err error, text string) error {
+	if ie := c.classify(err, ""); ie.Code == integration.CodeUpstreamRateLimit {
+		return ie
+	}
+	return integration.Wrap(integration.CodeUnsupported, err, "%s", text)
+}
+
+// branchRules reads the ruleset rules that apply to the branch. The endpoint
+// answers 200 with an empty list when no rule applies, so a 404 means the
+// repository or branch is not visible.
+func (c *Connection) branchRules(ctx context.Context, t target, repoPath string) ([]branchRule, error) {
 	var rules []branchRule
 	_, err := c.get(ctx, repoPath+"/rules/branches/"+httpx.PathEscape(t.branch), &rules)
 	if err != nil {
 		switch apiStatus(err) {
-		case http.StatusNotFound, http.StatusForbidden:
-			// UNVERIFIED: which of 403/404 GitHub returns when the App
-			// lacks the permission to read rulesets; both are ignored.
-			return integration.Allowed("%s; the rules for branch %s could not be read", text, t.branch), nil
+		case http.StatusForbidden:
+			return nil, c.forbidden(err, fmt.Sprintf("branch rules of %s not readable; grant the App Repository Administration: read", t.String()))
+		case http.StatusNotFound:
+			return nil, integration.Errorf(integration.CodeResourceNotVisible, "branch %s does not exist or is not visible to the App", t.String())
 		}
-		return integration.Decision{}, c.classify(err, "read branch rules of "+t.owner+"/"+t.repo)
+		return nil, c.classify(err, "read branch rules of "+t.owner+"/"+t.repo)
 	}
-	if len(rules) == 0 {
-		return integration.Allowed("%s; branch %s has no rules", text, t.branch), nil
+	return rules, nil
+}
+
+// branchProtection reads the classic protection of the branch; nil when the
+// branch has none (GitHub answers 404 "Branch not protected").
+func (c *Connection) branchProtection(ctx context.Context, t target, repoPath string) (*branchProtection, error) {
+	var prot branchProtection
+	_, err := c.get(ctx, repoPath+"/branches/"+httpx.PathEscape(t.branch)+"/protection", &prot)
+	if err != nil {
+		switch apiStatus(err) {
+		case http.StatusNotFound:
+			return nil, nil
+		case http.StatusForbidden:
+			return nil, c.forbidden(err, fmt.Sprintf("branch protection of %s not readable; grant the App Repository Administration: read", t.String()))
+		}
+		return nil, c.classify(err, "read branch protection of "+t.owner+"/"+t.repo)
 	}
+	return &prot, nil
+}
+
+// inRestrictions reports whether the login may push under the branch's push
+// restrictions: listed directly, or an active member of a listed team.
+// Apps are not people and are skipped.
+func (c *Connection) inRestrictions(ctx context.Context, t target, prot *branchProtection, login string) (bool, error) {
+	for _, u := range prot.Restrictions.Users {
+		if strings.EqualFold(u.Login, login) {
+			return true, nil
+		}
+	}
+	for _, team := range prot.Restrictions.Teams {
+		if !slugRe.MatchString(team.Slug) || len(team.Slug) > 255 {
+			return false, integration.Errorf(integration.CodeUnsupported, "branch %s restricts pushes to a team whose slug hallpass cannot look up", t.String())
+		}
+		var m membershipRecord
+		_, err := c.get(ctx, "/orgs/"+httpx.PathEscape(t.owner)+"/teams/"+httpx.PathEscape(team.Slug)+"/memberships/"+httpx.PathEscape(login), &m)
+		if err != nil {
+			switch apiStatus(err) {
+			case http.StatusNotFound:
+				continue
+			case http.StatusForbidden:
+				return false, c.forbidden(err, fmt.Sprintf("branch %s restricts pushes to team %s, whose members the App may not read", t.String(), team.Slug))
+			}
+			return false, c.classify(err, "read memberships of team "+t.owner+"/"+team.Slug)
+		}
+		switch m.State {
+		case "active":
+			return true, nil
+		case "":
+			return false, integration.Errorf(integration.CodeUnsupported, "GitHub reported no membership state for %s in team %s/%s", login, t.owner, team.Slug)
+		}
+	}
+	return false, nil
+}
+
+// annotateBranch evaluates the branch's ruleset rules and classic protection
+// on top of an allowed push or merge. A push restriction that excludes the
+// login is a deny; a rule that routes changes through pull requests turns an
+// allowed direct push into unknown.
+func (c *Connection) annotateBranch(ctx context.Context, a action, t target, repoPath, login string, perms permissions, text string) (integration.Decision, error) {
+	rules, err := c.branchRules(ctx, t, repoPath)
+	if err != nil {
+		return integration.Decision{}, err
+	}
+	prot, err := c.branchProtection(ctx, t, repoPath)
+	if err != nil {
+		return integration.Decision{}, err
+	}
+	branch := t.branch
+
+	// Classic protection. UNVERIFIED: the restrictions of a classic rule are
+	// assumed not to apply to repository admins unless enforce_admins is
+	// enabled ("Do not allow bypassing the above settings"); when GitHub
+	// does not report enforce_admins for an admin the answer is unknown.
+	adminBypass := false
+	if prot != nil && perms.Admin {
+		if prot.EnforceAdmins == nil {
+			return integration.Unsupported("%s, but branch %s is protected and GitHub did not report whether admins are exempt", text, branch), nil
+		}
+		adminBypass = !prot.EnforceAdmins.Enabled
+	}
+	if prot != nil && prot.Restrictions != nil && !adminBypass {
+		listed, err := c.inRestrictions(ctx, t, prot, login)
+		if err != nil {
+			return integration.Decision{}, err
+		}
+		if !listed {
+			if a.name == "repo.push" {
+				return integration.Denied("branch %s restricts pushes to listed users, teams and apps, and %s is not among them", branch, login), nil
+			}
+			// UNVERIFIED: whether a push restriction also blocks merging a
+			// pull request into the branch; treated as unknown.
+			return integration.Unsupported("%s, but branch %s restricts pushes and %s is not among the listed users and teams; merging may be rejected", text, branch, login), nil
+		}
+		text += fmt.Sprintf("; %s is among those allowed to push to branch %s", login, branch)
+	}
+
+	// Ruleset rules.
 	seen := map[string]bool{}
 	var types []string
 	for _, r := range rules {
@@ -554,13 +788,29 @@ func (c *Connection) annotateBranch(ctx context.Context, a action, t target, rep
 		}
 	}
 	sort.Strings(types)
-	if seen["pull_request"] && a.name == "repo.push" {
-		// UNVERIFIED: bypass actors of the ruleset may still push directly;
-		// hallpass does not evaluate bypass lists.
-		return integration.Unsupported("%s, but branch %s requires pull requests; direct push not allowed by rules", text, t.branch), nil
+	if a.name == "repo.push" {
+		for _, r := range pushBlockingRules {
+			if seen[r.typ] {
+				// UNVERIFIED: bypass actors of the ruleset may still push
+				// directly; hallpass does not evaluate bypass lists.
+				return integration.Unsupported("%s, but branch %s %s (%s rule); direct push not allowed by rules", text, branch, r.means, r.typ), nil
+			}
+		}
+		if prot != nil && prot.RequiredPullRequestReviews != nil && !adminBypass {
+			return integration.Unsupported("%s, but branch %s requires pull request reviews; direct push not allowed by its protection", text, branch), nil
+		}
+	}
+	if adminBypass {
+		text += fmt.Sprintf("; %s is an admin and branch %s does not enforce its protection for admins", login, branch)
+	}
+	switch {
+	case len(rules) == 0 && prot == nil:
+		return integration.Allowed("%s; branch %s has no rules and no classic protection", text, branch), nil
+	case len(rules) == 0:
+		return integration.Allowed("%s; branch %s has classic protection: a direct push may still be rejected", text, branch), nil
 	}
 	return integration.Allowed("%s; branch %s has %d rules (types %s): a direct push may still be rejected",
-		text, t.branch, len(rules), strings.Join(types, ", ")), nil
+		text, branch, len(rules), strings.Join(types, ", ")), nil
 }
 
 type membershipRecord struct {
@@ -588,8 +838,11 @@ func (c *Connection) checkOrg(ctx context.Context, a action, t target, login str
 	if !member {
 		return integration.Denied("%s is not a member of organization %s", login, t.owner), nil
 	}
+	if m.State == "" {
+		return integration.Unsupported("GitHub reported no membership state for %s in organization %s", login, t.owner), nil
+	}
 	if m.State != "active" {
-		return integration.Denied("%s's membership in organization %s is %s, not active", login, t.owner, orEmpty(m.State, "unknown")), nil
+		return integration.Denied("%s's membership in organization %s is %s, not active", login, t.owner, m.State), nil
 	}
 	switch a.name {
 	case "org.member":
@@ -655,8 +908,11 @@ func (c *Connection) checkTeam(ctx context.Context, a action, t target, login st
 		}
 		return integration.Denied("%s is not a member of team %s", login, t.String()), nil
 	}
+	if m.State == "" {
+		return integration.Unsupported("GitHub reported no membership state for %s in team %s", login, t.String()), nil
+	}
 	if m.State != "active" {
-		return integration.Denied("%s's membership in team %s is %s, not active", login, t.String(), orEmpty(m.State, "unknown")), nil
+		return integration.Denied("%s's membership in team %s is %s, not active", login, t.String(), m.State), nil
 	}
 	if a.name == "team.maintainer" {
 		if m.Role == "maintainer" {

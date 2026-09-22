@@ -24,11 +24,13 @@ const (
 const (
 	// samlCacheTTL is how long the full external-identity map is reused.
 	samlCacheTTL = 10 * time.Minute
-	// samlMaxIdentities caps the map built by the paginated fallback.
-	samlMaxIdentities = 5000
 	// mapFileTTL is the shortest interval between two reads of user_map_file.
 	mapFileTTL = 60 * time.Second
 )
+
+// samlMaxIdentities caps the map built by the paginated fallback. A variable
+// so tests can exercise the truncated path.
+var samlMaxIdentities = 5000
 
 // validEmail is a shape check only. The email goes into a GraphQL variable
 // (JSON, so no injection) or a file lookup; this keeps garbage out of both.
@@ -109,8 +111,12 @@ type samlData struct {
 }
 
 // samlEntry is one cached identity: login "" means the identity is not
-// linked to a GitHub account.
-type samlEntry struct{ login string }
+// linked to a GitHub account; conflict means the address belongs to
+// identities linked to different accounts.
+type samlEntry struct {
+	login    string
+	conflict bool
+}
 
 // errNoSAML is returned when the organization has no SAML identity provider.
 var errNoSAML = integration.Errorf(integration.CodeUnsupported,
@@ -127,19 +133,25 @@ func (c *Connection) resolveSAML(ctx context.Context, email string) (string, err
 	if data.Organization.SAMLIdentityProvider == nil {
 		return "", errNoSAML
 	}
-	nodes := data.Organization.SAMLIdentityProvider.ExternalIdentities.Nodes
+	nodes := matchingIdentities(data.Organization.SAMLIdentityProvider.ExternalIdentities.Nodes, email)
 	if len(nodes) > 0 {
 		return pickIdentity(nodes, email)
 	}
 	// userName did not match: the IdP may send an email only as nameId.
 	// Build (or reuse) the full map and look the address up there.
-	m, err := c.samlMap(ctx)
+	idx, err := c.samlMap(ctx)
 	if err != nil {
 		return "", err
 	}
-	e, ok := m[strings.ToLower(email)]
+	e, ok := idx.entries[strings.ToLower(email)]
 	if !ok {
+		if idx.truncated {
+			return "", integration.Errorf(integration.CodeUnsupported, "no SAML identity in %s for %s in the first %d identities; identity list truncated", c.org, email, idx.total)
+		}
 		return "", integration.UserNotFound("no SAML identity in %s for %s", c.org, email)
+	}
+	if e.conflict {
+		return "", integration.UserAmbiguous("SAML identity %s is linked to several GitHub accounts", email)
 	}
 	if e.login == "" {
 		return "", integration.Errorf(integration.CodeUnsupported, "SAML identity for %s is not linked to a GitHub account", email)
@@ -147,8 +159,29 @@ func (c *Connection) resolveSAML(ctx context.Context, email string) (string, err
 	return e.login, nil
 }
 
-// pickIdentity chooses among the identities GitHub returned for a userName
-// match: the first linked one wins; only unlinked ones is unsupported.
+// matchingIdentities keeps the nodes whose SAML nameId, SAML username or
+// SCIM username equals the email case-insensitively. GitHub's userName
+// filter is not trusted to have matched exactly.
+func matchingIdentities(nodes []externalIdentity, email string) []externalIdentity {
+	var out []externalIdentity
+	for _, n := range nodes {
+		if identityMatches(n, email) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func identityMatches(n externalIdentity, email string) bool {
+	if n.SAMLIdentity != nil && (strings.EqualFold(n.SAMLIdentity.NameID, email) || strings.EqualFold(n.SAMLIdentity.Username, email)) {
+		return true
+	}
+	return n.SCIMIdentity != nil && strings.EqualFold(n.SCIMIdentity.Username, email)
+}
+
+// pickIdentity chooses among the identities that match the email: the
+// linked login when there is exactly one; several different logins is
+// ambiguous; only unlinked ones is unsupported.
 func pickIdentity(nodes []externalIdentity, email string) (string, error) {
 	var logins []string
 	for _, n := range nodes {
@@ -163,21 +196,29 @@ func pickIdentity(nodes []externalIdentity, email string) (string, error) {
 		return logins[0], nil
 	}
 	for _, l := range logins[1:] {
-		if l != logins[0] {
+		if !strings.EqualFold(l, logins[0]) {
 			return "", integration.UserAmbiguous("SAML identity %s is linked to several GitHub accounts", email)
 		}
 	}
 	return logins[0], nil
 }
 
-// samlMap returns the email -> entry map of every external identity,
-// loading it at most every samlCacheTTL. Concurrent loaders share one fetch.
-func (c *Connection) samlMap(ctx context.Context) (map[string]samlEntry, error) {
+// samlIndex is the address -> entry map of every external identity, with
+// whether the listing stopped before the end (a miss is then not a deny).
+type samlIndex struct {
+	entries   map[string]samlEntry
+	truncated bool
+	total     int
+}
+
+// samlMap returns the index of every external identity, loading it at most
+// every samlCacheTTL. Concurrent loaders share one fetch.
+func (c *Connection) samlMap(ctx context.Context) (*samlIndex, error) {
 	c.samlMu.Lock()
-	if c.samlEntries != nil && c.now().Sub(c.samlLoaded) < samlCacheTTL {
-		m := c.samlEntries
+	if c.samlIndex != nil && c.now().Sub(c.samlLoaded) < samlCacheTTL {
+		idx := c.samlIndex
 		c.samlMu.Unlock()
-		return m, nil
+		return idx, nil
 	}
 	if c.samlLoading != nil {
 		ch := c.samlLoading
@@ -193,19 +234,23 @@ func (c *Connection) samlMap(ctx context.Context) (map[string]samlEntry, error) 
 	c.samlLoading = ch
 	c.samlMu.Unlock()
 
-	m, err := c.fetchSAMLMap(ctx)
+	idx, err := c.fetchSAMLMap(ctx)
 	c.samlMu.Lock()
 	c.samlLoading = nil
 	if err == nil {
-		c.samlEntries, c.samlLoaded = m, c.now()
+		c.samlIndex, c.samlLoaded = idx, c.now()
 	}
 	c.samlMu.Unlock()
 	close(ch)
-	return m, err
+	return idx, err
 }
 
-func (c *Connection) fetchSAMLMap(ctx context.Context) (map[string]samlEntry, error) {
-	m := map[string]samlEntry{}
+// fetchSAMLMap lists every external identity. Two linked identities that
+// carry the same address for different logins mark the address as
+// conflicting, so a lookup is ambiguous rather than whichever came last.
+func (c *Connection) fetchSAMLMap(ctx context.Context) (*samlIndex, error) {
+	idx := &samlIndex{entries: map[string]samlEntry{}}
+	m := idx.entries
 	var cursor *string
 	total := 0
 	for page := 0; page < httpx.MaxPages; page++ {
@@ -228,22 +273,39 @@ func (c *Connection) fetchSAMLMap(ctx context.Context) (map[string]samlEntry, er
 				e.login = n.User.Login
 			}
 			for _, v := range identityEmails(n) {
-				if _, dup := m[v]; !dup || e.login != "" {
+				prev, dup := m[v]
+				switch {
+				case !dup:
 					m[v] = e
+				case prev.conflict || e.login == "":
+					// Keep the conflict, or the linked entry over an unlinked one.
+				case prev.login == "":
+					m[v] = e
+				case !strings.EqualFold(prev.login, e.login):
+					m[v] = samlEntry{conflict: true}
 				}
 			}
 		}
-		if !ids.PageInfo.HasNextPage || total >= samlMaxIdentities {
-			return m, nil
+		idx.total = total
+		if !ids.PageInfo.HasNextPage {
+			return idx, nil
+		}
+		if total >= samlMaxIdentities {
+			c.logger.Warn("github: SAML identity listing stopped at the identity limit", "organization", c.org, "identities", total)
+			idx.truncated = true
+			return idx, nil
 		}
 		next := ids.PageInfo.EndCursor
 		if next == "" {
-			return m, nil
+			c.logger.Warn("github: SAML identity listing reported a next page without a cursor", "organization", c.org)
+			idx.truncated = true
+			return idx, nil
 		}
 		cursor = &next
 	}
-	c.logger.Warn("github: SAML identity listing stopped at the page limit", "organization", c.org)
-	return m, nil
+	c.logger.Warn("github: SAML identity listing stopped at the page limit", "organization", c.org, "identities", total)
+	idx.truncated = true
+	return idx, nil
 }
 
 // identityEmails returns the address-shaped values of an identity, lowercased.
@@ -308,6 +370,10 @@ type userRecord struct {
 }
 
 func (c *Connection) resolveTemplate(ctx context.Context, email string) (string, error) {
+	_, domain, _ := strings.Cut(email, "@")
+	if !c.emailDomains[strings.ToLower(domain)] {
+		return "", integration.Errorf(integration.CodeUnsupported, "email domain %s is not in email_domains; login_template is not applied to it", strings.ToLower(domain))
+	}
 	login := applyTemplate(c.template, email)
 	if !validLogin(login) {
 		return "", integration.UserNotFound("login_template renders %s to %q, which is not a GitHub login", email, login)

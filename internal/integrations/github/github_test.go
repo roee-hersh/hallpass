@@ -89,13 +89,22 @@ type fake struct {
 	permStatus  int // override for the permission endpoint (0: normal)
 	permHeader  http.Header
 	repos       map[string]map[string]any
+	repoStatus  int // override for GET /repos/acme/{repo} (0: normal)
 	members     map[string]membership
 	org         map[string]any
 	teams       map[string]map[string]membership
 	rules       map[string][]map[string]any // "repo@branch" -> rules
 	rulesStatus int
-	saml        bool
-	identities  []map[string]any
+	// protection is the classic branch protection, "repo@branch" -> body;
+	// a branch without an entry answers 404 as GitHub does.
+	protection       map[string]map[string]any
+	protectionStatus int
+	teamMemberStatus int // override for the team membership endpoint (0: normal)
+	saml             bool
+	identities       []map[string]any
+	// filterNodes, when set, is what the userName filter returns whatever
+	// the email: GitHub's filter is not trusted to match exactly.
+	filterNodes []map[string]any
 	pageSize    int
 	pageQueries int
 	gqlErrors   []map[string]any
@@ -112,7 +121,7 @@ func newFake(t *testing.T) *fake {
 		minted:    tok,
 		accepted:  tok,
 		instPerms: map[string]string{"metadata": "read", "members": "read"},
-		users:     map[string]string{"dana": "User", "bob": "User", "carol": "User", "acme": "Organization"},
+		users:     map[string]string{"dana": "User", "bob": "User", "carol": "User", "frank": "User", "mallory": "User", "acme": "Organization"},
 		perms: map[string]map[string]permRecord{
 			"dana": {
 				"api":    {role: "admin", perms: &all, str: "admin"},
@@ -122,6 +131,8 @@ func newFake(t *testing.T) *fake {
 			"bob": {
 				"api":    {role: "read", perms: &read, str: "read"},
 				"webapp": {role: "read", perms: &read, str: "read"},
+				"custom": {role: "security-champion", perms: &read, str: "read"},
+				"legacy": {str: "security-champion"},
 			},
 			"carol": {
 				"api":    {role: "none", perms: &permissions{}, str: "none"},
@@ -129,14 +140,16 @@ func newFake(t *testing.T) *fake {
 			},
 		},
 		repos: map[string]map[string]any{
-			"api":    {"name": "api", "has_issues": true},
-			"webapp": {"name": "webapp", "has_issues": false},
+			"api":    {"name": "api", "has_issues": true, "allow_forking": true, "visibility": "public"},
+			"webapp": {"name": "webapp", "has_issues": false, "allow_forking": false, "visibility": "private"},
+			"custom": {"name": "custom", "has_issues": true, "allow_forking": true, "visibility": "private"},
 			"legacy": {"name": "legacy"},
 		},
 		members: map[string]membership{
-			"dana": {"active", "admin"},
-			"bob":  {"active", "member"},
-			"eve":  {"pending", "member"},
+			"dana":  {"active", "admin"},
+			"bob":   {"active", "member"},
+			"eve":   {"pending", "member"},
+			"frank": {"", "member"},
 		},
 		org: map[string]any{
 			"login":                                   "acme",
@@ -145,14 +158,19 @@ func newFake(t *testing.T) *fake {
 			"members_can_create_private_repositories": true,
 		},
 		teams: map[string]map[string]membership{
-			"platform": {"dana": {"active", "maintainer"}, "bob": {"active", "member"}, "eve": {"pending", "member"}},
+			"platform": {"dana": {"active", "maintainer"}, "bob": {"active", "member"}, "eve": {"pending", "member"}, "frank": {"", "member"}},
+			"release":  {"bob": {"active", "member"}},
 		},
 		rules: map[string][]map[string]any{
-			"api@main":    {{"type": "pull_request"}, {"type": "required_status_checks"}, {"type": "pull_request"}},
-			"api@release": {{"type": "required_signatures"}},
+			"api@main":         {{"type": "pull_request"}, {"type": "required_status_checks"}, {"type": "pull_request"}},
+			"api@release":      {{"type": "required_signatures"}},
+			"webapp@dev":       {{"type": "update"}},
+			"webapp@queue":     {{"type": "merge_queue"}, {"type": "required_status_checks"}},
+			"webapp@lifecycle": {{"type": "creation"}, {"type": "deletion"}},
 		},
-		saml:     true,
-		pageSize: 2,
+		protection: map[string]map[string]any{},
+		saml:       true,
+		pageSize:   2,
 		identities: []map[string]any{
 			{"user": map[string]any{"login": "dana"}, "samlIdentity": map[string]any{"nameId": "dana@example.com", "username": "dana@example.com"}, "scimIdentity": nil},
 			{"user": map[string]any{"login": "bob"}, "samlIdentity": map[string]any{"nameId": "bob@example.com", "username": nil}, "scimIdentity": map[string]any{"username": "bob@example.com"}},
@@ -312,6 +330,10 @@ func (f *fake) rest(w http.ResponseWriter, r *http.Request, seg []string) {
 		}
 		writeJSON(w, 200, map[string]any{"login": seg[1], "type": typ})
 	case len(seg) == 3 && seg[0] == "repos" && seg[1] == "acme":
+		if f.repoStatus != 0 {
+			writeJSON(w, f.repoStatus, map[string]any{"message": "override", "note": itest.Canary + "repo"})
+			return
+		}
 		body, ok := f.repos[seg[2]]
 		if !ok {
 			notFound()
@@ -351,6 +373,22 @@ func (f *fake) rest(w http.ResponseWriter, r *http.Request, seg []string) {
 			rules = []map[string]any{}
 		}
 		writeJSON(w, 200, rules)
+	case len(seg) == 6 && seg[0] == "repos" && seg[1] == "acme" && seg[3] == "branches" && seg[5] == "protection":
+		if f.protectionStatus != 0 {
+			writeJSON(w, f.protectionStatus, map[string]any{"message": "override", "note": itest.Canary + "prot"})
+			return
+		}
+		if _, ok := f.repos[seg[2]]; !ok {
+			notFound()
+			return
+		}
+		branch, _ := url.PathUnescape(seg[4])
+		prot, ok := f.protection[seg[2]+"@"+branch]
+		if !ok {
+			writeJSON(w, 404, map[string]any{"message": "Branch not protected", "note": itest.Canary + "404"})
+			return
+		}
+		writeJSON(w, 200, prot)
 	case len(seg) == 2 && seg[0] == "orgs" && seg[1] == "acme":
 		writeJSON(w, 200, f.org)
 	case len(seg) == 4 && seg[0] == "orgs" && seg[1] == "acme" && seg[2] == "memberships":
@@ -367,6 +405,10 @@ func (f *fake) rest(w http.ResponseWriter, r *http.Request, seg []string) {
 		}
 		writeJSON(w, 200, map[string]any{"slug": seg[3]})
 	case len(seg) == 6 && seg[0] == "orgs" && seg[1] == "acme" && seg[2] == "teams" && seg[4] == "memberships":
+		if f.teamMemberStatus != 0 {
+			writeJSON(w, f.teamMemberStatus, map[string]any{"message": "override", "note": itest.Canary + "team"})
+			return
+		}
 		m, ok := f.teams[seg[3]][seg[5]]
 		if !ok {
 			notFound()
@@ -418,6 +460,9 @@ func (f *fake) graphql(w http.ResponseWriter, r *http.Request) {
 			if strings.EqualFold(identityUsername(id, "samlIdentity"), email) || strings.EqualFold(identityUsername(id, "scimIdentity"), email) {
 				nodes = append(nodes, id)
 			}
+		}
+		if f.filterNodes != nil {
+			nodes = f.filterNodes
 		}
 		ext = map[string]any{"nodes": nodes}
 	} else {
@@ -604,7 +649,7 @@ func TestBadKeyAndMissingInstallation(t *testing.T) {
 	api := newFake(t)
 	srv.Handle("", "/api/*", api.handle)
 	deps, _ := itest.Deps(t, srv)
-	v := map[string]string{"url": srv.URL, "organization": "acme", "app_id": testAppID, "identity_mode": "template"}
+	v := map[string]string{"url": srv.URL, "organization": "acme", "app_id": testAppID, "identity_mode": "template", "email_domains": "example.com"}
 	s := itest.Settings("gh", "github", v, map[string]secret.Secret{"credential": itest.Literal("not-a-key")})
 	c, err := Integration{}.New(context.Background(), s, deps)
 	if err != nil {
@@ -616,7 +661,7 @@ func TestBadKeyAndMissingInstallation(t *testing.T) {
 		t.Error("an unparsable key reached the API")
 	}
 
-	e := setup(t, map[string]string{"organization": "other", "identity_mode": "template"})
+	e := setup(t, map[string]string{"organization": "other", "identity_mode": "template", "email_domains": "example.com"})
 	d = e.check(t, dana, "repo.read", "repo:other/api")
 	expectText(t, d, integration.CodeCredentialRejected, "not installed")
 }
@@ -687,6 +732,161 @@ func TestIdentitySAML(t *testing.T) {
 	}
 }
 
+// TestIdentitySAMLConflicts: the same address on identities linked to
+// different accounts is ambiguous, never whichever came last.
+func TestIdentitySAMLConflicts(t *testing.T) {
+	e := setup(t, nil)
+	e.api.with(func() {
+		e.api.identities = append(e.api.identities,
+			map[string]any{"user": map[string]any{"login": "dupone"}, "samlIdentity": map[string]any{"nameId": "dup@example.com", "username": "dup-one"}, "scimIdentity": nil},
+			map[string]any{"user": map[string]any{"login": "duptwo"}, "samlIdentity": map[string]any{"nameId": "Dup@example.com", "username": "dup-two"}, "scimIdentity": nil},
+			// The same account twice is not a conflict; an unlinked twin does not override.
+			map[string]any{"user": map[string]any{"login": "twin"}, "samlIdentity": map[string]any{"nameId": "twin@example.com", "username": "twin-a"}, "scimIdentity": nil},
+			map[string]any{"user": map[string]any{"login": "Twin"}, "samlIdentity": map[string]any{"nameId": "twin@example.com", "username": "twin-b"}, "scimIdentity": nil},
+			map[string]any{"user": nil, "samlIdentity": map[string]any{"nameId": "twin@example.com", "username": "twin-c"}, "scimIdentity": nil},
+		)
+	})
+	ctx := context.Background()
+	_, err := e.conn.ResolveIdentity(ctx, integration.User{Email: "dup@example.com"})
+	expectText(t, integration.ToDecision(err), integration.CodeUserAmbiguous, "several GitHub accounts")
+	id, err := e.conn.ResolveIdentity(ctx, integration.User{Email: "twin@example.com"})
+	if err != nil || id.ID != "twin" {
+		t.Errorf("twin: %+v %v", id, err)
+	}
+	// A conflict through the userName filter is ambiguous too.
+	e.api.with(func() {
+		e.api.filterNodes = []map[string]any{
+			{"user": map[string]any{"login": "dupone"}, "samlIdentity": map[string]any{"nameId": "dup@example.com", "username": "dup@example.com"}, "scimIdentity": nil},
+			{"user": map[string]any{"login": "duptwo"}, "samlIdentity": map[string]any{"nameId": "x", "username": "x"}, "scimIdentity": map[string]any{"username": "dup@example.com"}},
+		}
+	})
+	_, err = e.conn.ResolveIdentity(ctx, integration.User{Email: "dup@example.com"})
+	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserAmbiguous)
+}
+
+// TestIdentitySAMLTruncated: a miss on a partial identity list is unknown,
+// not user_not_found. Both the identity cap and the page cap truncate.
+func TestIdentitySAMLTruncated(t *testing.T) {
+	ctx := context.Background()
+	old := samlMaxIdentities
+	samlMaxIdentities = 4 // 7 identities, 2 per page: the listing stops after page 2
+	t.Cleanup(func() { samlMaxIdentities = old })
+	e := setup(t, nil)
+	id, err := e.conn.ResolveIdentity(ctx, integration.User{Email: "zed@example.com"}) // 4th identity: still listed
+	if err != nil || id.ID != "zed" {
+		t.Fatalf("zed: %+v %v", id, err)
+	}
+	if n := e.api.pageCount(); n != 2 {
+		t.Errorf("page queries = %d, want 2", n)
+	}
+	_, err = e.conn.ResolveIdentity(ctx, integration.User{Email: "nobody@example.com"})
+	expectText(t, integration.ToDecision(err), integration.CodeUnsupported, "identity list truncated")
+	if !strings.Contains(e.logs.String(), "identity limit") {
+		t.Error("truncation not logged")
+	}
+	samlMaxIdentities = old
+
+	// The page cap (httpx.MaxPages) truncates as well.
+	e2 := setup(t, nil)
+	e2.api.with(func() {
+		e2.api.pageSize = 1
+		var ids []map[string]any
+		for i := 0; i < 60; i++ {
+			n := strconv.Itoa(i)
+			ids = append(ids, map[string]any{"user": map[string]any{"login": "u" + n}, "samlIdentity": map[string]any{"nameId": "u" + n + "@example.com", "username": "u" + n}, "scimIdentity": nil})
+		}
+		e2.api.identities = ids
+	})
+	id, err = e2.conn.ResolveIdentity(ctx, integration.User{Email: "u10@example.com"})
+	if err != nil || id.ID != "u10" {
+		t.Fatalf("u10: %+v %v", id, err)
+	}
+	_, err = e2.conn.ResolveIdentity(ctx, integration.User{Email: "u59@example.com"})
+	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUnsupported)
+	// A complete listing still answers user_not_found for a miss.
+	e2.api.with(func() { e2.api.identities = e2.api.identities[:20] })
+	e2.clock.advance(11 * time.Minute)
+	_, err = e2.conn.ResolveIdentity(ctx, integration.User{Email: "u59@example.com"})
+	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserNotFound)
+}
+
+// TestIdentitySAMLFilterMismatch: GitHub's userName filter is not trusted;
+// a returned identity must carry the email itself.
+func TestIdentitySAMLFilterMismatch(t *testing.T) {
+	e := setup(t, nil)
+	ctx := context.Background()
+	e.api.with(func() {
+		e.api.filterNodes = []map[string]any{
+			{"user": map[string]any{"login": "mallory"}, "samlIdentity": map[string]any{"nameId": "mallory@example.com", "username": "mallory@example.com"}, "scimIdentity": nil},
+		}
+	})
+	// The non-matching node is ignored; the fallback listing finds zed.
+	id, err := e.conn.ResolveIdentity(ctx, integration.User{Email: "zed@example.com"})
+	if err != nil || id.ID != "zed" {
+		t.Fatalf("zed: %+v %v", id, err)
+	}
+	if e.api.pageCount() == 0 {
+		t.Error("fallback listing not used")
+	}
+	_, err = e.conn.ResolveIdentity(ctx, integration.User{Email: "nobody@example.com"})
+	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserNotFound)
+	// A node matching case-insensitively through nameId is accepted without listing.
+	byNameID := []map[string]any{
+		{"user": map[string]any{"login": "bob"}, "samlIdentity": map[string]any{"nameId": "Bob@Example.com", "username": "bob"}, "scimIdentity": nil},
+	}
+	e3 := setup(t, nil)
+	e3.api.with(func() { e3.api.filterNodes = byNameID })
+	id, err = e3.conn.ResolveIdentity(ctx, bob)
+	if err != nil || id.ID != "bob" || e3.api.pageCount() != 0 {
+		t.Errorf("bob: %+v %v (pages %d)", id, err, e3.api.pageCount())
+	}
+}
+
+// TestTemplateEmailDomains: the template applies only to listed domains,
+// so root@attacker.example never becomes the login "root".
+func TestTemplateEmailDomains(t *testing.T) {
+	e := setup(t, map[string]string{"identity_mode": "template", "login_template": "{local}", "email_domains": "example.com, corp.example"})
+	itest.ExpectCode(t, e.check(t, dana, "repo.read", "repo:acme/api"), integration.CodeAllowed)
+	itest.ExpectCode(t, e.check(t, integration.User{Email: "dana@CORP.example"}, "repo.read", "repo:acme/api"), integration.CodeAllowed)
+	e.srv.Reset()
+	d := e.check(t, integration.User{Email: "dana@attacker.example"}, "repo.read", "repo:acme/api")
+	expectText(t, d, integration.CodeUnsupported, "not in email_domains")
+	if e.calls("/users/") != 0 {
+		t.Error("an unlisted domain reached the API")
+	}
+	itest.AssertNoCanary(t, d.Text)
+
+	// New requires and validates the field in template mode.
+	srv := itest.NewServer(t)
+	deps, _ := itest.Deps(t, srv)
+	build := func(v map[string]string) error {
+		base := map[string]string{"organization": "acme", "app_id": testAppID, "identity_mode": "template"}
+		for k, val := range v {
+			base[k] = val
+		}
+		_, err := (Integration{}).New(context.Background(), itest.Settings("gh", "github", base, map[string]secret.Secret{"credential": keySecret()}), deps)
+		return err
+	}
+	if err := build(nil); err == nil || !strings.Contains(err.Error(), "email_domains") {
+		t.Errorf("template without email_domains: %v", err)
+	}
+	for _, bad := range []string{"Example.com", "a b.com", ",", "exa_mple.com"} {
+		if err := build(map[string]string{"email_domains": bad}); err == nil {
+			t.Errorf("email_domains %q accepted", bad)
+		}
+		if err := validateEmailDomains(bad); err == nil {
+			t.Errorf("validateEmailDomains(%q) accepted", bad)
+		}
+	}
+	if err := build(map[string]string{"email_domains": "acme.com,acme.io"}); err != nil {
+		t.Error(err)
+	}
+	// Other modes do not need it.
+	if err := build(map[string]string{"identity_mode": "saml"}); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestIdentitySAMLNoProviderAndErrors(t *testing.T) {
 	e := setup(t, nil)
 	e.api.with(func() { e.api.saml = false })
@@ -709,7 +909,7 @@ func TestIdentitySAMLNoProviderAndErrors(t *testing.T) {
 }
 
 func TestIdentityTemplate(t *testing.T) {
-	e := setup(t, map[string]string{"identity_mode": "template", "login_template": "{local}"})
+	e := setup(t, map[string]string{"identity_mode": "template", "login_template": "{local}", "email_domains": "example.com"})
 	d := e.check(t, dana, "repo.read", "repo:acme/api")
 	itest.ExpectCode(t, d, integration.CodeAllowed)
 	if e.calls("/api/graphql") != 0 || e.calls("/users/dana") != 1 {
@@ -721,7 +921,7 @@ func TestIdentityTemplate(t *testing.T) {
 	d = e.check(t, integration.User{Email: "acme@example.com"}, "repo.read", "repo:acme/api")
 	expectText(t, d, integration.CodeUserNotFound, "organization")
 	// A template producing an invalid login never hits the API.
-	e2 := setup(t, map[string]string{"identity_mode": "template", "login_template": "{local}.{domain}"})
+	e2 := setup(t, map[string]string{"identity_mode": "template", "login_template": "{local}.{domain}", "email_domains": "example.com"})
 	d = e2.check(t, dana, "repo.read", "repo:acme/api")
 	itest.ExpectCode(t, d, integration.CodeUserNotFound)
 	if e2.calls("/users/") != 0 {
@@ -909,10 +1109,11 @@ func TestBranchRules(t *testing.T) {
 	d = e.check(t, dana, "repo.push", "repo:acme/api@release")
 	expectText(t, d, integration.CodeAllowed, "branch release has 1 rules (types required_signatures)")
 
+	e.srv.Reset()
 	d = e.check(t, dana, "repo.push", "repo:acme/api@feature/x")
 	expectText(t, d, integration.CodeAllowed, "no rules")
-	if last := e.srv.LastCall(); !strings.HasSuffix(last.Path, "/api/rules/branches/feature/x") {
-		t.Errorf("branch path %s", last.Path)
+	if e.calls("/api/rules/branches/feature/x") != 1 || e.calls("/api/branches/feature/x/protection") != 1 {
+		t.Errorf("branch paths: %d rules, %d protection calls", e.calls("/api/rules/branches/feature/x"), e.calls("/api/branches/feature/x/protection"))
 	}
 
 	// A deny needs no rules lookup.
@@ -921,12 +1122,18 @@ func TestBranchRules(t *testing.T) {
 	if e.calls("/rules/") != 0 {
 		t.Error("rules fetched for a deny")
 	}
-	// Rules endpoint not readable: allow with a note.
-	for _, st := range []int{403, 404} {
-		e.api.with(func() { e.api.rulesStatus = st })
-		d = e.check(t, dana, "repo.push", "repo:acme/api@main")
-		expectText(t, d, integration.CodeAllowed, "could not be read")
-	}
+	// Rules endpoint not readable: the App lacks Administration: read, so
+	// the branch cannot be evaluated. Never an allow.
+	e.api.with(func() { e.api.rulesStatus = 403 })
+	d = e.check(t, dana, "repo.push", "repo:acme/api@main")
+	expectText(t, d, integration.CodeUnsupported, "Repository Administration: read")
+	d = e.check(t, dana, "pr.merge", "repo:acme/api@main")
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	// The endpoint answers 200 [] for a branch without rules, so 404 means
+	// the repository or branch is not visible.
+	e.api.with(func() { e.api.rulesStatus = 404 })
+	d = e.check(t, dana, "repo.push", "repo:acme/api@main")
+	expectText(t, d, integration.CodeResourceNotVisible, "not visible")
 	e.api.with(func() { e.api.rulesStatus = 500 })
 	itest.ExpectCode(t, e.check(t, dana, "repo.push", "repo:acme/api@main"), integration.CodeUpstreamError)
 	// Other repo actions ignore @branch.
@@ -936,6 +1143,188 @@ func TestBranchRules(t *testing.T) {
 	if e.calls("/rules/") != 0 {
 		t.Error("rules fetched for repo.read")
 	}
+}
+
+// TestBranchRuleTypes: update and merge_queue rules route changes through
+// bypass actors or the queue like pull_request does; creation and deletion
+// do not affect a push to an existing branch.
+func TestBranchRuleTypes(t *testing.T) {
+	e := setup(t, nil)
+	d := e.check(t, dana, "repo.push", "repo:acme/webapp@dev")
+	expectText(t, d, integration.CodeUnsupported, "update rule")
+	d = e.check(t, dana, "repo.push", "repo:acme/webapp@queue")
+	expectText(t, d, integration.CodeUnsupported, "merge_queue rule")
+	d = e.check(t, dana, "repo.push", "repo:acme/webapp@lifecycle")
+	expectText(t, d, integration.CodeAllowed, "types creation, deletion")
+	// Merges are not direct pushes.
+	itest.ExpectCode(t, e.check(t, dana, "pr.merge", "repo:acme/webapp@dev"), integration.CodeAllowed)
+	itest.ExpectCode(t, e.check(t, dana, "pr.merge", "repo:acme/webapp@queue"), integration.CodeAllowed)
+}
+
+// TestBranchProtection covers classic branch protection: push restrictions
+// by user and team, required reviews, admin enforcement and endpoint errors.
+func TestBranchProtection(t *testing.T) {
+	e := setup(t, nil)
+	set := func(key string, prot map[string]any) {
+		e.api.with(func() { e.api.protection[key] = prot })
+	}
+	restrict := func(users, teams []string) map[string]any {
+		u, tm := []map[string]any{}, []map[string]any{}
+		for _, x := range users {
+			u = append(u, map[string]any{"login": x})
+		}
+		for _, x := range teams {
+			tm = append(tm, map[string]any{"slug": x})
+		}
+		return map[string]any{"users": u, "teams": tm, "apps": []map[string]any{}}
+	}
+
+	// dana has write (not admin) on webapp: no admin bypass to consider.
+	set("webapp@main", map[string]any{"restrictions": restrict([]string{"Dana"}, nil), "enforce_admins": map[string]any{"enabled": false}})
+	d := e.check(t, dana, "repo.push", "repo:acme/webapp@main")
+	expectText(t, d, integration.CodeAllowed, "among those allowed to push")
+
+	// Not listed, not in the listed team (release has bob only): a positive no.
+	set("webapp@main", map[string]any{"restrictions": restrict([]string{"carol"}, []string{"release"})})
+	e.srv.Reset()
+	d = e.check(t, dana, "repo.push", "repo:acme/webapp@main")
+	expectText(t, d, integration.CodeDenied, "restricts pushes")
+	if e.calls("/teams/release/memberships/dana") != 1 {
+		t.Error("team membership not consulted")
+	}
+	// UNVERIFIED in the code: whether the restriction blocks merges; unknown.
+	d = e.check(t, dana, "pr.merge", "repo:acme/webapp@main")
+	expectText(t, d, integration.CodeUnsupported, "merging may be rejected")
+
+	// Member of a listed team.
+	set("webapp@main", map[string]any{"restrictions": restrict(nil, []string{"release", "platform"})})
+	d = e.check(t, dana, "repo.push", "repo:acme/webapp@main")
+	expectText(t, d, integration.CodeAllowed, "among those allowed to push")
+	// A pending team membership does not count; an empty state is unknown.
+	e.api.with(func() { e.api.teams["release"]["dana"] = membership{"pending", "member"} })
+	set("webapp@main", map[string]any{"restrictions": restrict(nil, []string{"release"})})
+	itest.ExpectCode(t, e.check(t, dana, "repo.push", "repo:acme/webapp@main"), integration.CodeDenied)
+	e.api.with(func() { e.api.teams["release"]["dana"] = membership{"", "member"} })
+	itest.ExpectCode(t, e.check(t, dana, "repo.push", "repo:acme/webapp@main"), integration.CodeUnsupported)
+	e.api.with(func() { delete(e.api.teams["release"], "dana") })
+
+	// Teams that cannot be checked: unknown, never a deny.
+	e.api.with(func() { e.api.teamMemberStatus = 403 })
+	d = e.check(t, dana, "repo.push", "repo:acme/webapp@main")
+	expectText(t, d, integration.CodeUnsupported, "may not read")
+	e.api.with(func() { e.api.teamMemberStatus = 500 })
+	itest.ExpectCode(t, e.check(t, dana, "repo.push", "repo:acme/webapp@main"), integration.CodeUpstreamError)
+	e.api.with(func() { e.api.teamMemberStatus = 0 })
+	set("webapp@main", map[string]any{"restrictions": restrict(nil, []string{"Not A Slug"})})
+	e.srv.Reset()
+	itest.ExpectCode(t, e.check(t, dana, "repo.push", "repo:acme/webapp@main"), integration.CodeUnsupported)
+	if e.calls("/teams/") != 0 {
+		t.Error("an invalid team slug reached the API")
+	}
+
+	// Required reviews: a direct push is unknown, a merge is not affected.
+	set("webapp@main", map[string]any{"required_pull_request_reviews": map[string]any{"required_approving_review_count": 1}})
+	d = e.check(t, dana, "repo.push", "repo:acme/webapp@main")
+	expectText(t, d, integration.CodeUnsupported, "requires pull request reviews")
+	d = e.check(t, dana, "pr.merge", "repo:acme/webapp@main")
+	expectText(t, d, integration.CodeAllowed, "classic protection")
+
+	// Admins: exempt unless enforce_admins is enabled; unknown when GitHub
+	// does not say. dana is admin on api.
+	prot := map[string]any{
+		"restrictions":                  restrict([]string{"carol"}, nil),
+		"required_pull_request_reviews": map[string]any{"required_approving_review_count": 2},
+		"enforce_admins":                map[string]any{"enabled": false},
+	}
+	set("api@release", prot)
+	d = e.check(t, dana, "repo.push", "repo:acme/api@release")
+	expectText(t, d, integration.CodeAllowed, "does not enforce its protection for admins")
+	prot["enforce_admins"] = map[string]any{"enabled": true}
+	set("api@release", prot)
+	expectText(t, e.check(t, dana, "repo.push", "repo:acme/api@release"), integration.CodeDenied, "restricts pushes")
+	delete(prot, "enforce_admins")
+	set("api@release", prot)
+	expectText(t, e.check(t, dana, "repo.push", "repo:acme/api@release"), integration.CodeUnsupported, "admins are exempt")
+
+	// The protection endpoint itself.
+	e.api.with(func() { e.api.protectionStatus = 403 })
+	d = e.check(t, dana, "repo.push", "repo:acme/webapp@main")
+	expectText(t, d, integration.CodeUnsupported, "Repository Administration: read")
+	e.api.with(func() { e.api.protectionStatus = 500 })
+	itest.ExpectCode(t, e.check(t, dana, "repo.push", "repo:acme/webapp@main"), integration.CodeUpstreamError)
+	e.api.with(func() { e.api.protectionStatus = 0 })
+	// 404 is "not protected": the allow stands.
+	d = e.check(t, dana, "repo.push", "repo:acme/webapp@other")
+	expectText(t, d, integration.CodeAllowed, "no classic protection")
+	// Denied by permissions: neither endpoint is read.
+	e.srv.Reset()
+	itest.ExpectCode(t, e.check(t, bob, "repo.push", "repo:acme/webapp@main"), integration.CodeDenied)
+	if e.calls("/protection") != 0 || e.calls("/rules/") != 0 {
+		t.Error("branch endpoints read for a deny")
+	}
+	for _, d := range []integration.Decision{
+		e.check(t, dana, "repo.push", "repo:acme/webapp@main"),
+		e.check(t, dana, "pr.merge", "repo:acme/webapp@main"),
+	} {
+		itest.AssertNoCanary(t, d.Text)
+	}
+}
+
+// TestPRCreateForking: without push a pull request needs a fork, so
+// allow_forking decides; absent it is unknown.
+func TestPRCreateForking(t *testing.T) {
+	e := setup(t, nil)
+	d := e.check(t, bob, "pr.create", "repo:acme/webapp")
+	expectText(t, d, integration.CodeDenied, "forking disabled")
+	if !strings.Contains(d.Text, "pull request needs push access") {
+		t.Errorf("text %q", d.Text)
+	}
+	e.api.with(func() { delete(e.api.repos["api"], "allow_forking") })
+	d = e.check(t, bob, "pr.create", "repo:acme/api")
+	expectText(t, d, integration.CodeUnsupported, "may be forked")
+	e.api.with(func() { e.api.repos["api"]["allow_forking"] = true })
+	d = e.check(t, bob, "pr.create", "repo:acme/api")
+	expectText(t, d, integration.CodeAllowed, "via fork")
+	// With push the repository record is not needed.
+	e.srv.Reset()
+	itest.ExpectCode(t, e.check(t, dana, "pr.create", "repo:acme/webapp"), integration.CodeAllowed)
+	if e.calls("/repos/acme/webapp") != 1 { // the permission call only
+		t.Errorf("repository read for a pusher: %d calls", e.calls("/repos/acme/webapp"))
+	}
+	// Repository record not readable: unknown, never a deny or an allow.
+	e.api.with(func() { e.api.repoStatus = 404 })
+	itest.ExpectCode(t, e.check(t, bob, "pr.create", "repo:acme/api"), integration.CodeResourceNotVisible)
+	e.api.with(func() { e.api.repoStatus = 403 })
+	itest.ExpectCode(t, e.check(t, bob, "pr.create", "repo:acme/api"), integration.CodeCredentialRejected)
+	e.api.with(func() { e.api.repoStatus = 0 })
+}
+
+// TestCustomRepositoryRole: a custom role may grant abilities the five
+// booleans do not show, so a missing level is unknown, not a deny.
+func TestCustomRepositoryRole(t *testing.T) {
+	e := setup(t, nil)
+	d := e.check(t, bob, "repo.push", "repo:acme/custom")
+	expectText(t, d, integration.CodeUnsupported, "custom repository role")
+	if !strings.Contains(d.Text, "extra abilities not modeled") {
+		t.Errorf("text %q", d.Text)
+	}
+	// When the booleans grant the level, allow as for any role.
+	expectText(t, e.check(t, bob, "repo.read", "repo:acme/custom"), integration.CodeAllowed, "security-champion")
+	// A lossy record whose permission string is not a base role is unknown.
+	itest.ExpectCode(t, e.check(t, bob, "repo.read", "repo:acme/legacy"), integration.CodeUnsupported)
+	// The base roles still deny.
+	itest.ExpectCode(t, e.check(t, bob, "repo.push", "repo:acme/api"), integration.CodeDenied)
+	itest.ExpectCode(t, e.check(t, carol, "repo.read", "repo:acme/api"), integration.CodeDenied)
+}
+
+// TestEmptyMembershipState: a membership record without a state is unknown.
+func TestEmptyMembershipState(t *testing.T) {
+	e := setup(t, map[string]string{"identity_mode": "template", "email_domains": "example.com"})
+	frank := integration.User{Email: "frank@example.com"}
+	expectText(t, e.check(t, frank, "org.member", "org:acme"), integration.CodeUnsupported, "no membership state")
+	itest.ExpectCode(t, e.check(t, frank, "org.admin", "org:acme"), integration.CodeUnsupported)
+	expectText(t, e.check(t, frank, "team.member", "team:acme/platform"), integration.CodeUnsupported, "no membership state")
+	itest.ExpectCode(t, e.check(t, frank, "team.maintainer", "team:acme/platform"), integration.CodeUnsupported)
 }
 
 // --- organization and team checks ------------------------------------------
@@ -971,7 +1360,7 @@ func TestFailures(t *testing.T) {
 		return e.check(t, dana, "repo.read", "repo:acme/api")
 	})
 	// Also before any token exists: the failure hits the token exchange.
-	e2 := setup(t, map[string]string{"identity_mode": "template"})
+	e2 := setup(t, map[string]string{"identity_mode": "template", "email_domains": "example.com"})
 	itest.FailureCases(t, e2.srv, func() integration.Decision {
 		return e2.check(t, dana, "repo.read", "repo:acme/api")
 	})
