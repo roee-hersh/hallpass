@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/roee-hersh/hallpass/internal/config"
 	"github.com/roee-hersh/hallpass/internal/engine"
 	"github.com/roee-hersh/hallpass/internal/integration"
@@ -72,6 +74,106 @@ func dropRequiredParam(name string) patch {
 	}
 }
 
+// normalise converts yaml.v3 maps with interface keys into string-keyed maps.
+func normalise(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, val := range x {
+			x[k] = normalise(val)
+		}
+		return x
+	case map[any]any:
+		m := make(map[string]any, len(x))
+		for k, val := range x {
+			m[fmt.Sprint(k)] = normalise(val)
+		}
+		return m
+	case []any:
+		for i := range x {
+			x[i] = normalise(x[i])
+		}
+		return x
+	}
+	return v
+}
+
+// prefixPaths moves every path under a prefix: the github integration talks
+// to a configured url the way it talks to GitHub Enterprise Server, under
+// /api/v3, while the api.github.com description has no prefix.
+func prefixPaths(prefix string) patch {
+	return func(doc map[string]any) {
+		paths, _ := doc["paths"].(map[string]any)
+		out := map[string]any{}
+		for p, v := range paths {
+			out[prefix+p] = v
+		}
+		doc["paths"] = out
+	}
+}
+
+// addMediaType makes every application/json response also available as
+// mediaType (GitHub answers requests that Accept application/vnd.github+json
+// with JSON; the description lists only application/json).
+func addMediaType(mediaType string) patch {
+	return func(doc map[string]any) {
+		var walk func(v any)
+		walk = func(v any) {
+			switch x := v.(type) {
+			case map[string]any:
+				if c, ok := x["content"].(map[string]any); ok {
+					if j, ok := c["application/json"]; ok {
+						if _, has := c[mediaType]; !has {
+							c[mediaType] = j
+						}
+					}
+				}
+				for _, child := range x {
+					walk(child)
+				}
+			case []any:
+				for _, child := range x {
+					walk(child)
+				}
+			}
+		}
+		walk(doc["paths"])
+		walk(doc["components"])
+	}
+}
+
+// addGitLabUsers adds the users endpoints GitLab's description omits, with
+// the user entity the description itself defines, so identity lookups can
+// be exercised.
+func addGitLabUsers() patch {
+	return func(doc map[string]any) {
+		defs, _ := doc["definitions"].(map[string]any)
+		entity := ""
+		for _, name := range []string{"API_Entities_UserPublic", "API_Entities_UserWithAdmin", "API_Entities_UserBasic", "API_Entities_UserSafe"} {
+			if _, ok := defs[name]; ok {
+				entity = name
+				break
+			}
+		}
+		if entity == "" {
+			return
+		}
+		ref := map[string]any{"$ref": "#/definitions/" + entity}
+		paths, _ := doc["paths"].(map[string]any)
+		paths["/api/v4/users"] = map[string]any{"get": map[string]any{
+			"parameters": []any{
+				map[string]any{"name": "username", "in": "query", "type": "string"},
+				map[string]any{"name": "search", "in": "query", "type": "string"},
+				map[string]any{"name": "page", "in": "query", "type": "integer"},
+				map[string]any{"name": "per_page", "in": "query", "type": "integer"},
+			},
+			"responses": map[string]any{"200": map[string]any{"description": "users", "schema": map[string]any{"type": "array", "items": ref}}},
+		}}
+		paths["/api/v4/user"] = map[string]any{"get": map[string]any{
+			"responses": map[string]any{"200": map[string]any{"description": "the current user", "schema": ref}},
+		}}
+	}
+}
+
 // startPrism runs `prism mock` on the description and returns its base URL.
 func startPrism(t *testing.T, spec string, patches ...patch) string {
 	return startPrismMode(t, spec, false, patches...)
@@ -99,7 +201,11 @@ func startPrismMode(t *testing.T, spec string, dynamic bool, patches ...patch) s
 	if len(patches) > 0 {
 		var doc map[string]any
 		if err := json.Unmarshal(data, &doc); err != nil {
-			t.Fatalf("patching needs a JSON description: %v", err)
+			doc = map[string]any{}
+			if err := yaml.Unmarshal(data, &doc); err != nil {
+				t.Fatalf("description is neither JSON nor YAML: %v", err)
+			}
+			doc = normalise(doc).(map[string]any)
 		}
 		for _, p := range patches {
 			p(doc)
@@ -210,7 +316,7 @@ func run(t *testing.T, eng *engine.Engine, conn string, cases [][3]string) {
 }
 
 func TestGitHubAgainstPrism(t *testing.T) {
-	base := startPrism(t, specPath(t, "github"))
+	base := startPrism(t, specPath(t, "github"), prefixPaths("/api/v3"), addMediaType("application/vnd.github+json"))
 	key := filepath.Join(t.TempDir(), "app.pem")
 	if err := os.WriteFile(key, []byte(testRSAKey), 0o600); err != nil {
 		t.Fatal(err)
@@ -269,7 +375,7 @@ func TestSlackAgainstPrism(t *testing.T) {
 }
 
 func TestGitLabAgainstPrism(t *testing.T) {
-	base := startPrism(t, specPath(t, "gitlab"))
+	base := startPrismMode(t, specPath(t, "gitlab"), true, addGitLabUsers())
 	t.Setenv("GITLAB_TOKEN", "contract-token")
 	eng := build(t, fmt.Sprintf(`  - id: gl
     integration: gitlab
