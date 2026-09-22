@@ -170,6 +170,7 @@ made only of validated pieces before it reaches a URL or query; CI runs them nig
 - Request and response bodies of upstream calls are never logged. Secrets print as `[REDACTED]`.
 - The decision log is JSON lines, one per answered check.
 - Allow and deny answers are cached for 30 seconds by default; unknown answers are never cached.
+  Both caches key on the connection, the user and the exact list of groups the caller sent.
 
 ## License
 

@@ -40,7 +40,7 @@ reference it with `credential: file:/path` and hallpass re-reads it on every use
 | `url` | API server URL |
 | `credential` | ServiceAccount token, `env:` or `file:` |
 | `username_template` | How the API server names your users. Placeholders `{email}`, `{local}`, `{domain}`. Must contain `{email}` or `{local}` |
-| `group_prefix` | Prefix the API server puts on groups from your identity provider |
+| `group_prefix` | Prefix the API server puts on groups from your identity provider. Without it a caller group starting with `system:` is rejected (`invalid_request`), since it would name a built-in group such as `system:masters` |
 | `add_authenticated_group` | Also send `system:authenticated`, as the API server would for any logged-in user |
 
 hallpass has no user directory to consult. The Kubernetes username is a pure transform of the email, so
@@ -48,7 +48,10 @@ the template must match the API server's `--oidc-username-prefix` / `--oidc-user
 structured authentication config. A wrong template silently denies everyone. Run one check for a user
 you know is allowed after configuring.
 
-Groups come from the caller's `groups` field. hallpass cannot look them up.
+Groups come from the caller's `groups` field. hallpass cannot look them up, so every holder of the API
+key can assert any group. Set `group_prefix` to match your identity provider; then a caller's value can
+never name a group the API server reserves. Without a prefix, groups starting with `system:` are
+rejected with `invalid_request` rather than sent.
 
 ## Resources
 
@@ -101,7 +104,8 @@ anything beyond that one rule, listing the extra verbs and resources.
 - Admission: ValidatingAdmissionPolicy, admission webhooks, Pod Security admission and resource quotas
   run after authorization and can still reject a request hallpass allowed.
 - A wrong `username_template` denies everyone silently.
-- Groups are whatever the caller sends.
+- Groups are whatever the caller sends. Only the `system:` namespace is protected, and only when
+  `group_prefix` is unset.
 
 ## Managed clusters (UNVERIFIED)
 

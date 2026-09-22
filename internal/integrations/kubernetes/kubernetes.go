@@ -139,11 +139,21 @@ func (c *Connection) Get(ctx context.Context, path string, out any) error {
 // Username applies the template to an email.
 func (c *Connection) Username(email string) string { return c.template.Render(email) }
 
+// reservedGroupPrefix marks the groups the API server assigns itself
+// (system:masters, system:authenticated, system:nodes, ...).
+const reservedGroupPrefix = "system:"
+
 // ResolveIdentity is a string transform; Kubernetes has no user directory.
 func (c *Connection) ResolveIdentity(_ context.Context, u integration.User) (integration.Identity, error) {
 	name := c.Username(u.Email)
 	groups := make([]string, 0, len(u.Groups)+1)
 	for _, g := range u.Groups {
+		if c.prefix == "" && strings.HasPrefix(g, reservedGroupPrefix) {
+			// Without a prefix the caller's value reaches the review as
+			// is, and system:masters is cluster-admin on most clusters.
+			return integration.Identity{}, integration.Errorf(integration.CodeInvalidRequest,
+				"group %q is reserved by Kubernetes; hallpass only sends %s groups it adds itself unless the connection sets group_prefix", g, reservedGroupPrefix)
+		}
 		groups = append(groups, c.prefix+g)
 	}
 	if c.addAuth {

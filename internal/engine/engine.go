@@ -298,7 +298,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 
 	groups := normalizeGroups(req.Groups)
 	user := integration.User{Email: req.User, Groups: groups}
-	decKey := strings.Join([]string{req.Connection, req.User, strings.Join(groups, ","), req.Action, req.Resource}, "\x00")
+	decKey := strings.Join([]string{req.Connection, req.User, groupsKey(groups), req.Action, req.Resource}, "\x00")
 	if e.decTTL > 0 {
 		if d, ok := e.decs.Get(decKey); ok {
 			return Result{Decision: d, Status: http.StatusOK, Cached: true}
@@ -331,6 +331,14 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 		e.decs.Set(decKey, d, e.decTTL)
 	}
 	return Result{Decision: d, Status: http.StatusOK}
+}
+
+// groupsKey encodes a normalized group list for a cache key. Groups are
+// joined with \x01 and the surrounding fields with \x00; validation rejects
+// both bytes everywhere, so two different lists never share a key (a bare
+// comma would let ["a","b,c"] and ["a,b","c"] collide).
+func groupsKey(groups []string) string {
+	return strings.Join(groups, "\x01")
 }
 
 // normalizeGroups returns the caller's groups sorted and deduplicated, so

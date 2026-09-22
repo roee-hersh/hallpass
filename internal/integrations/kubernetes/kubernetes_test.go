@@ -164,6 +164,29 @@ func TestNonResource(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, bob, "raw:get", "namespace:payments?resource=pods"), integration.CodeAllowed)
 }
 
+func TestReservedGroupsNeedPrefix(t *testing.T) {
+	masters := integration.User{Email: "dana@example.com", Groups: []string{"platform-team", "system:masters"}}
+	srv, _, c := setup(t, nil)
+	d := check(t, c, masters, "raw:get:pods", "namespace:payments")
+	itest.ExpectCode(t, d, integration.CodeInvalidRequest)
+	if !strings.Contains(d.Text, "system:masters") {
+		t.Errorf("%+v", d)
+	}
+	for _, call := range srv.Calls() {
+		if strings.HasSuffix(call.Path, "/subjectaccessreviews") {
+			t.Errorf("review sent with a reserved group: %+v", call)
+		}
+	}
+	// With a prefix the value cannot name a built-in group.
+	srv, _, c = setup(t, map[string]string{"group_prefix": "oidc:"})
+	itest.ExpectCode(t, check(t, c, masters, "raw:delete:secrets", "namespace:kube-system"), integration.CodeDenied)
+	var req sarRequest
+	srv.LastCall().JSON(t, &req)
+	if len(req.Spec.Groups) != 3 || req.Spec.Groups[1] != "oidc:system:masters" {
+		t.Errorf("%+v", req.Spec)
+	}
+}
+
 func TestTemplateAndPrefix(t *testing.T) {
 	srv, _, c := setup(t, map[string]string{"username_template": "oidc:{email}", "group_prefix": "oidc:", "add_authenticated_group": "false"})
 	itest.ExpectCode(t, check(t, c, dana, "raw:get:pods", "namespace:payments"), integration.CodeAllowed)

@@ -585,6 +585,43 @@ func LinkNext(h http.Header) string {
 	return ""
 }
 
+// NextLink returns the rel="next" URL of an RFC 8288 Link header when it
+// stays within the client's base URL, "" when there is none, and an error
+// when the upstream points elsewhere: the client attaches its credential
+// to every request, so a next link on another host would carry the
+// credential there.
+func (c *Client) NextLink(h http.Header) (string, error) {
+	next := LinkNext(h)
+	if next == "" {
+		return "", nil
+	}
+	if !c.within(next) {
+		return "", fmt.Errorf("next page link %s is outside the client's base URL", redactURL(next))
+	}
+	return next, nil
+}
+
+// within reports whether rawURL is a page under c.Base: same scheme and
+// host, and a path under the base path. A relative path always is.
+func (c *Client) within(rawURL string) bool {
+	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "http://") {
+		return true
+	}
+	base, err := url.Parse(c.Base)
+	if err != nil || base.Host == "" {
+		return false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.User != nil {
+		return false
+	}
+	if u.Scheme != base.Scheme || !strings.EqualFold(u.Host, base.Host) {
+		return false
+	}
+	prefix := strings.TrimRight(base.Path, "/")
+	return u.Path == prefix || strings.HasPrefix(u.Path, prefix+"/")
+}
+
 // ErrTooManyPages is returned when pagination exceeds MaxPages.
 var ErrTooManyPages = errors.New("pagination exceeded the page limit")
 

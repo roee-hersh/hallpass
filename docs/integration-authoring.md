@@ -70,7 +70,8 @@ JQL/SOQL string, or anything else. Git hosts use `catalog.SplitBranch` for `@bra
 ## HTTP
 
 `httpx.Client` handles TLS, retries (idempotent calls only), 429 with Retry-After, the body cap and
-redaction. Use `GetJSON`, `PostJSON`, `Do`, `Paginate` and `LinkNext`. Bodies are never logged. Use
+redaction. Use `GetJSON`, `PostJSON`, `Do`, `Paginate` and `NextLink` (which refuses a next page on
+another host, so the credential never travels there). Bodies are never logged. Use
 `httpx.Status(err)` to branch on 403/404, and `httpx.Classify(err)` for everything else.
 
 ## Auth (`internal/authx`)

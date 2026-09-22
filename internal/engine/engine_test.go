@@ -259,6 +259,26 @@ func TestNegativeIdentityNotSharedAcrossGroups(t *testing.T) {
 	}
 }
 
+// Group boundaries are part of the decision cache key: ["a","b,c"] and
+// ["a,b","c"] are different requests, whatever the join character.
+func TestDecisionCacheKeyGroupBoundaries(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}}
+	e, _ := build(t, c, Options{DecisionCache: 30 * time.Second})
+	ctx := context.Background()
+	if r := e.Check(ctx, groupsReq("a@x.com", "a", "b,c")); r.Cached || r.Decision.Outcome != integration.Allow {
+		t.Fatalf("first partition: %+v", r)
+	}
+	if r := e.Check(ctx, groupsReq("a@x.com", "a,b", "c")); r.Cached {
+		t.Fatalf("second partition served from the first's entry: %+v", r)
+	}
+	if r := e.Check(ctx, groupsReq("a@x.com", "b,c", "a")); !r.Cached {
+		t.Fatalf("first partition not cached on repeat: %+v", r)
+	}
+	if c.checks.Load() != 2 {
+		t.Fatalf("checks = %d", c.checks.Load())
+	}
+}
+
 func TestNoCaches(t *testing.T) {
 	c := &counting{Integration: fake.Integration{}}
 	e, _ := build(t, c, Options{})
