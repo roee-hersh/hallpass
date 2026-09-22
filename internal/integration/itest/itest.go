@@ -172,6 +172,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case FailTimeout:
 		select {
 		case <-r.Context().Done():
+			// The client gave up. Returning normally would make the server
+			// write an empty 200 that can race the client's cancellation;
+			// aborting sends nothing, so the client only sees its timeout.
+			panic(http.ErrAbortHandler)
 		case <-time.After(5 * time.Second):
 		}
 		return
