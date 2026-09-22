@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/roee-hersh/hallpass/internal/cache"
 )
 
 func TestTokenSourceCachesAndRefreshesEarly(t *testing.T) {
@@ -108,5 +110,110 @@ func TestTokenSourceSingleflightAndErrors(t *testing.T) {
 	}
 	if _, err := (&TokenSource{}).Get(context.Background()); err == nil {
 		t.Fatal("no fetch")
+	}
+}
+
+func TestTokenSourceFetchPanicDoesNotWedge(t *testing.T) {
+	var fetches atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	src := &TokenSource{Fetch: func(context.Context) (Token, error) {
+		if fetches.Add(1) == 1 {
+			close(entered)
+			<-release
+			panic("boom")
+		}
+		return Token{Value: "ok"}, nil
+	}}
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := src.Get(context.Background())
+		leaderErr <- err
+	}()
+	<-entered
+	waiterErr := make(chan error, 3)
+	for i := 0; i < 3; i++ {
+		go func() {
+			_, err := src.Get(context.Background())
+			waiterErr <- err
+		}()
+	}
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	var pe *cache.PanicError
+	if err := <-leaderErr; !errors.As(err, &pe) || pe.Value != "boom" {
+		t.Fatalf("leader err = %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case err := <-waiterErr:
+			if !errors.As(err, &pe) {
+				t.Fatalf("waiter err = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("waiter wedged after fetch panic")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	v, err := src.Get(ctx)
+	if err != nil || v != "ok" {
+		t.Fatalf("after panic: %q %v", v, err)
+	}
+	if fetches.Load() != 2 {
+		t.Fatalf("fetches = %d, want 2", fetches.Load())
+	}
+}
+
+func TestTokenSourceLeaderCancelDoesNotAbortWaiters(t *testing.T) {
+	var fetches atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	src := &TokenSource{Fetch: func(ctx context.Context) (Token, error) {
+		fetches.Add(1)
+		close(entered)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		if err := ctx.Err(); err != nil {
+			return Token{}, err
+		}
+		return Token{Value: "t"}, nil
+	}}
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := src.Get(leaderCtx)
+		leaderErr <- err
+	}()
+	<-entered
+	waiterDone := make(chan struct{})
+	var wv string
+	var werr error
+	go func() {
+		defer close(waiterDone)
+		wv, werr = src.Get(context.Background())
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancelLeader()
+	if err := <-leaderErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader err = %v", err)
+	}
+	select {
+	case <-waiterDone:
+		t.Fatal("waiter returned before the fetch finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-waiterDone
+	if werr != nil || wv != "t" {
+		t.Fatalf("waiter got %q %v; the leader's cancellation aborted the shared fetch", wv, werr)
+	}
+	if fetches.Load() != 1 {
+		t.Fatalf("fetches = %d", fetches.Load())
+	}
+	if v, err := src.Get(context.Background()); err != nil || v != "t" {
+		t.Fatalf("token not cached: %q %v", v, err)
 	}
 }

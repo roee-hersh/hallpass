@@ -3,11 +3,15 @@ package argocd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integration/itest"
 	"github.com/roee-hersh/hallpass/internal/integrations/kubernetes"
@@ -449,3 +453,98 @@ func TestAction_extension_invoke_allow(t *testing.T) {
 	allowDeny(t, "extension.invoke", "extensions:x")
 }
 func TestAction_extension_invoke_deny(t *testing.T) { allowDeny(t, "extension.invoke", "extensions:x") }
+
+func TestLoadFetchPanicDoesNotWedge(t *testing.T) {
+	_, ic, _ := setup(t, defaultCluster(), "none")
+	c := ic.(*Connection)
+	k8s := c.k8s
+	c.k8s = nil // fetch dereferences it and panics
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := c.load(context.Background())
+		leaderErr <- err
+	}()
+	waiterErr := make(chan error, 3)
+	for i := 0; i < 3; i++ {
+		go func() {
+			_, err := c.load(context.Background())
+			waiterErr <- err
+		}()
+	}
+	var pe *cache.PanicError
+	for i := 0; i < 4; i++ {
+		var err error
+		select {
+		case err = <-leaderErr:
+		case err = <-waiterErr:
+		case <-time.After(2 * time.Second):
+			t.Fatal("load wedged after fetch panic")
+		}
+		if !errors.As(err, &pe) {
+			t.Fatalf("err = %v, want *cache.PanicError", err)
+		}
+	}
+	c.k8s = k8s
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	b, err := c.load(ctx)
+	if err != nil || b == nil {
+		t.Fatalf("after panic: %v %v", b, err)
+	}
+}
+
+func TestLoadLeaderCancelDoesNotAbortWaiters(t *testing.T) {
+	cl := defaultCluster()
+	srv, ic, _ := setup(t, cl, "none")
+	c := ic.(*Connection)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	var hits atomic.Int32
+	srv.Handle("GET", "/api/v1/namespaces/argocd/configmaps/argocd-rbac-cm", func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		once.Do(func() { close(entered) })
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": cl.rbacCM})
+	})
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := c.load(leaderCtx)
+		leaderErr <- err
+	}()
+	<-entered
+	waiterDone := make(chan struct{})
+	var wb *bundle
+	var werr error
+	go func() {
+		defer close(waiterDone)
+		wb, werr = c.load(context.Background())
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancelLeader()
+	if err := <-leaderErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader err = %v", err)
+	}
+	select {
+	case <-waiterDone:
+		t.Fatal("waiter returned before the fetch finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-waiterDone
+	if werr != nil || wb == nil {
+		t.Fatalf("waiter got %v %v; the leader's cancellation aborted the shared fetch", wb, werr)
+	}
+	if wb.userPolicy == "" {
+		t.Fatal("waiter's bundle has no policy")
+	}
+	// The abandoned leader's fetch was reused, not aborted and repeated.
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("rbac config map fetched %d times, want 1", n)
+	}
+}

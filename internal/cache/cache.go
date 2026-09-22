@@ -4,6 +4,9 @@ package cache
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -111,37 +114,90 @@ func (c *TTL[K, V]) evictLocked() {
 	}
 }
 
+// DefaultFillTimeout bounds a fill whose caller's context carries no
+// deadline. See Detach.
+const DefaultFillTimeout = 30 * time.Second
+
+// PanicError is returned by Do to every caller when the fill panicked. The
+// panic is not re-raised: net/http would only recover it in the leader and
+// the waiters would still need an answer.
+type PanicError struct {
+	Value any    // the value passed to panic
+	Stack []byte // the fill goroutine's stack at the time of the panic
+}
+
+func (e *PanicError) Error() string { return fmt.Sprintf("fill panicked: %v", e.Value) }
+
+// Detach derives the context a shared fill runs on: it keeps ctx's values
+// (loggers, trace ids) but not its cancellation, so one caller
+// disconnecting does not abort the lookup for the others, and it carries
+// ctx's remaining deadline (or fallback when ctx has none) so an abandoned
+// fill still ends.
+func Detach(ctx context.Context, fallback time.Duration) (context.Context, context.CancelFunc) {
+	timeout := fallback
+	if dl, ok := ctx.Deadline(); ok {
+		timeout = time.Until(dl)
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
+}
+
 // Do returns the cached value for k or calls fill once, sharing the result
 // with concurrent callers. The fill decides the TTL by returning it; a TTL
 // of 0 means "do not store". Errors are never stored.
+//
+// The fill runs in its own goroutine on a context detached from the first
+// caller's cancellation (see Detach) rather than on ctx itself: otherwise
+// that caller going away would abort the fill and hand every waiter a
+// context.Canceled that is not theirs. Each caller, the first included,
+// stops waiting when its own ctx is done. A panic in fill becomes a
+// *PanicError for everyone waiting on it.
 func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
 	if v, ok := c.Get(k); ok {
 		return v, nil
 	}
 	c.mu.Lock()
-	if cl, ok := c.inflight[k]; ok {
-		c.mu.Unlock()
-		select {
-		case <-cl.done:
-			return cl.v, cl.err
-		case <-ctx.Done():
-			var zero V
-			return zero, ctx.Err()
-		}
+	cl, ok := c.inflight[k]
+	if !ok {
+		cl = &call[V]{done: make(chan struct{})}
+		c.inflight[k] = cl
+		fctx, cancel := Detach(ctx, DefaultFillTimeout)
+		go func() {
+			defer cancel()
+			c.fill(k, cl, fctx, fill)
+		}()
 	}
-	cl := &call[V]{done: make(chan struct{})}
-	c.inflight[k] = cl
 	c.mu.Unlock()
+	select {
+	case <-cl.done:
+		return cl.v, cl.err
+	case <-ctx.Done():
+		var zero V
+		return zero, ctx.Err()
+	}
+}
 
-	v, ttl, err := fill(ctx)
-	cl.v, cl.err = v, err
-	c.mu.Lock()
-	delete(c.inflight, k)
-	if err == nil && ttl > 0 {
-		c.evictLocked()
-		c.items[k] = entry[V]{v: v, exp: c.now().Add(ttl)}
-	}
-	c.mu.Unlock()
-	close(cl.done)
-	return v, err
+// fill runs one fill for k, then always removes the inflight entry and
+// closes cl.done, whether fill returned, panicked or called runtime.Goexit.
+func (c *TTL[K, V]) fill(k K, cl *call[V], ctx context.Context, fill func(ctx context.Context) (V, time.Duration, error)) {
+	var ttl time.Duration
+	returned := false
+	defer func() {
+		if r := recover(); r != nil {
+			var zero V
+			cl.v, cl.err = zero, &PanicError{Value: r, Stack: debug.Stack()}
+		} else if !returned {
+			var zero V
+			cl.v, cl.err = zero, errors.New("fill exited without returning")
+		}
+		c.mu.Lock()
+		delete(c.inflight, k)
+		if cl.err == nil && ttl > 0 {
+			c.evictLocked()
+			c.items[k] = entry[V]{v: cl.v, exp: c.now().Add(ttl)}
+		}
+		c.mu.Unlock()
+		close(cl.done)
+	}()
+	cl.v, ttl, cl.err = fill(ctx)
+	returned = true
 }
