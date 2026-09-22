@@ -25,7 +25,7 @@ jobs:
         if: runner.os == 'Linux'
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - run: go vet ./...
-      - run: go vet -tags "e2e differential live" ./test/...
+      - run: go vet -tags "e2e differential live contract" ./test/...
       - run: go test -race -count=1 ./...
       - run: go build -o /dev/null ./cmd/hallpass
         if: runner.os == 'Linux'
@@ -49,6 +49,28 @@ jobs:
         run: test/specs/fetch.sh .specs
       - name: test against the descriptions
         run: HALLPASS_SPECS_DIR=$PWD/.specs go test -race -count=1 ./internal/integrations/...
+
+  contract:
+    # Integrations against Prism, a mock server answering from the vendor's
+    # OpenAPI description with request validation.
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/cache@v4
+        with:
+          path: .specs
+          key: api-specs-${{ github.run_id }}
+          restore-keys: api-specs-
+      - run: test/specs/fetch.sh .specs
+      - run: npx --yes @stoplight/prism-cli@5 --version
+      - run: HALLPASS_SPECS_DIR=$PWD/.specs go test -tags contract -count=1 -v ./test/contract/
 
   kind:
     runs-on: ubuntu-latest
