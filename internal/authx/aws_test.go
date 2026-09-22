@@ -346,3 +346,62 @@ func TestCachedProviderRefresh(t *testing.T) {
 		t.Fatal("not refreshed 5 minutes before expiry")
 	}
 }
+
+// A panicking Fetch must not wedge the provider, and a cancelled leader must
+// not abort the fetch for a waiter with a live context.
+func TestCachedProviderPanicAndLeaderCancel(t *testing.T) {
+	calls := 0
+	p := &CachedProvider{Fetch: func(context.Context) (AWSCredentials, error) {
+		calls++
+		if calls == 1 {
+			panic("boom")
+		}
+		return AWSCredentials{AccessKeyID: "AKIA", SecretAccessKey: "s"}, nil
+	}}
+	if _, err := p.Credentials(context.Background()); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("panic not reported: %v", err)
+	}
+	if c, err := p.Credentials(context.Background()); err != nil || c.AccessKeyID != "AKIA" {
+		t.Fatalf("provider wedged after panic: %v %v", c, err)
+	}
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	fetches := 0
+	p2 := &CachedProvider{Fetch: func(ctx context.Context) (AWSCredentials, error) {
+		fetches++
+		close(started)
+		select {
+		case <-release:
+			return AWSCredentials{AccessKeyID: "AKIA2", SecretAccessKey: "s"}, nil
+		case <-ctx.Done():
+			return AWSCredentials{}, ctx.Err()
+		}
+	}}
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := p2.Credentials(leaderCtx)
+		leaderErr <- err
+	}()
+	<-started
+	waiter := make(chan AWSCredentials, 1)
+	go func() {
+		c, err := p2.Credentials(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		waiter <- c
+	}()
+	cancelLeader()
+	if err := <-leaderErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader: %v", err)
+	}
+	close(release)
+	if c := <-waiter; c.AccessKeyID != "AKIA2" {
+		t.Fatalf("waiter got %+v", c)
+	}
+	if fetches != 1 {
+		t.Fatalf("fetches %d, want 1", fetches)
+	}
+}
