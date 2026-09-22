@@ -1,0 +1,35 @@
+# The one permission hallpass needs on a cluster: create SubjectAccessReviews.
+# SubjectAccessReviews are never persisted; creating one only asks the
+# API server "may this subject do that?".
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hallpass
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hallpass
+  namespace: hallpass
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hallpass-subjectaccessreview
+rules:
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hallpass-subjectaccessreview
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hallpass-subjectaccessreview
+subjects:
+  - kind: ServiceAccount
+    name: hallpass
+    namespace: hallpass

@@ -1,0 +1,104 @@
+# hallpass configuration. One flat list of connections.
+#
+# An integration is the product (kubernetes, jira). A connection is one
+# configured system of that product. Callers name the connection by id.
+#
+# Secrets are never written here. Every credential is a reference:
+#   env:NAME      read from the environment
+#   file:/path    read from a file on every use (rotating tokens keep working)
+#
+# Every connection also accepts ca_file, tls_server_name, proxy_url and timeout.
+# `hallpass catalog <integration>` lists the keys and actions of an integration;
+# docs/integrations/<integration>.md explains the credential to create.
+
+api_key: env:HALLPASS_API_KEY
+
+# listen: ":8080"
+# decision_log: /var/log/hallpass/decisions.log   # or stderr (default), stdout, none
+# decision_cache_seconds: 30                       # allow/deny answers reused this long; 0 disables
+# identity_cache_seconds: 900                      # email -> account lookups reused this long
+
+connections:
+  # Smoke-test connection. Talks to nothing. Remove it once real connections work.
+  - id: demo
+    integration: fake
+    users: dana@example.com
+    admins: admin@example.com
+
+  # - id: k8s-prod-eu
+  #   integration: kubernetes
+  #   url: https://10.20.0.5:6443
+  #   ca_file: /etc/hallpass/ca/prod-eu.pem
+  #   tls_server_name: kubernetes
+  #   credential: file:/secrets/k8s-prod-eu-token     # ServiceAccount token, see test/kind/hallpass-rbac.yaml
+  #   username_template: "oidc:{email}"
+  #   group_prefix: "oidc:"
+
+  # - id: argocd-prod
+  #   integration: argocd
+  #   kubernetes_connection: k8s-prod-eu
+  #   namespace: argocd
+  #   user_subject: none                              # or email, when the IdP subject is the email
+
+  # - id: gitlab-main
+  #   integration: gitlab
+  #   url: https://gitlab.example.com
+  #   credential: env:GITLAB_TOKEN                    # read_api token of an administrator
+  #   identity_mode: admin_search
+
+  # - id: github-acme
+  #   integration: github
+  #   organization: acme
+  #   app_id: Iv1.abcdef0123456789
+  #   credential: file:/secrets/github-app.pem        # GitHub App private key
+  #   identity_mode: saml
+
+  # - id: jira-main
+  #   integration: jira
+  #   url: https://acme.atlassian.net
+  #   username: hallpass-bot@acme.com
+  #   credential: env:JIRA_TOKEN
+
+  # - id: confluence-main
+  #   integration: confluence
+  #   url: https://acme.atlassian.net
+  #   username: hallpass-bot@acme.com
+  #   credential: env:JIRA_TOKEN
+  #   identity_connection: jira-main                  # Confluence cannot look users up by email itself
+
+  # - id: slack-acme
+  #   integration: slack
+  #   credential: env:SLACK_BOT_TOKEN                 # xoxb- token of an internal app with read scopes
+
+  # - id: aws-prod
+  #   integration: aws
+  #   account_id: "123456789012"
+  #   region: eu-west-1
+  #   role_arn: arn:aws:iam::123456789012:role/hallpass-read   # iam:SimulatePrincipalPolicy, iam:ListRoles
+  #   credential: env:HALLPASS_AWS_CRED               # the literal ambient:auto, or JSON {access_key_id, secret_access_key}
+  #   identity_mode: identity_center
+  #   identity_center_role_arn: arn:aws:iam::210987654321:role/hallpass-identity-center-read
+  #   identity_center_region: eu-west-1
+  #   identity_store_id: d-936712345a
+  #   sso_instance_arn: arn:aws:sso:::instance/ssoins-1234567890abcdef
+  #   implicit_deny_as: deny
+
+  # - id: m365-contoso
+  #   integration: microsoft365
+  #   tenant_id: contoso.onmicrosoft.com
+  #   client_id: 00000000-0000-0000-0000-000000000000
+  #   credential: file:/secrets/m365-app.key            # PEM private key, with certificate_file; or the client secret
+  #   certificate_file: /etc/hallpass/m365-app.crt
+
+  # - id: google-acme
+  #   integration: googleworkspace
+  #   credential: file:/secrets/google-sa.json          # service-account key with domain-wide delegation
+  #   admin_email: hallpass-admin@acme.com              # custom admin role: Users > Read, Groups > Read
+
+  # - id: salesforce-prod                             # UNVERIFIED integration, see docs/integrations/salesforce.md
+  #   integration: salesforce
+  #   url: https://acme.my.salesforce.com
+  #   client_id: 3MVG9...                              # consumer key of the External Client App
+  #   credential: file:/secrets/salesforce.key          # PEM private key of the app certificate
+  #   username: hallpass@acme.com
+  #   api_version: v66.0

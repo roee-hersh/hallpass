@@ -1,0 +1,372 @@
+package engine
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/roee-hersh/hallpass/internal/catalog"
+	"github.com/roee-hersh/hallpass/internal/config"
+	"github.com/roee-hersh/hallpass/internal/declog"
+	"github.com/roee-hersh/hallpass/internal/integration"
+	"github.com/roee-hersh/hallpass/internal/integrations/fake"
+)
+
+// counting wraps the fake to count upstream calls and to inject behaviour.
+type counting struct {
+	integration.Integration
+	resolves atomic.Int32
+	checks   atomic.Int32
+	slow     time.Duration
+	badAllow bool
+	// needGroup, when set, makes ResolveIdentity answer user_not_found unless
+	// the request carries that group (like aws static_map).
+	needGroup string
+
+	mu sync.Mutex
+	// identityGroups is Identity.Groups as the last Check saw it.
+	identityGroups []string
+}
+
+type countingConn struct {
+	integration.Connection
+	p *counting
+}
+
+func (c *counting) Name() string { return "counting" }
+func (c *counting) Fields() []integration.Field {
+	return append(c.Integration.Fields(), integration.ConnectionRefField("fake_connection", "fake", false, ""))
+}
+func (c *counting) New(ctx context.Context, s *integration.Settings, d integration.Deps) (integration.Connection, error) {
+	if s.Get("fake_connection") != "" {
+		if _, err := d.Connection(s.Get("fake_connection")); err != nil {
+			return nil, err
+		}
+		if _, err := d.Connection("not-referenced"); err == nil {
+			return nil, errors.New("unreferenced connection resolvable")
+		}
+	}
+	inner, err := c.Integration.New(ctx, s, d)
+	if err != nil {
+		return nil, err
+	}
+	return &countingConn{Connection: inner, p: c}, nil
+}
+
+// ResolveIdentity embeds the request's groups in the identity, as the
+// kubernetes and argocd integrations do.
+func (c *countingConn) ResolveIdentity(ctx context.Context, u integration.User) (integration.Identity, error) {
+	c.p.resolves.Add(1)
+	if c.p.needGroup != "" && !slices.Contains(u.Groups, c.p.needGroup) {
+		return integration.Identity{}, integration.UserNotFound("%s and its groups are not mapped", u.Email)
+	}
+	id, err := c.Connection.ResolveIdentity(ctx, u)
+	if err != nil {
+		return id, err
+	}
+	id.Groups = append([]string(nil), u.Groups...)
+	return id, nil
+}
+
+func (c *countingConn) Check(ctx context.Context, r integration.CheckRequest) (integration.Decision, error) {
+	c.p.checks.Add(1)
+	c.p.mu.Lock()
+	c.p.identityGroups = append([]string(nil), r.Identity.Groups...)
+	c.p.mu.Unlock()
+	if c.p.slow > 0 {
+		select {
+		case <-ctx.Done():
+			return integration.Decision{}, ctx.Err()
+		case <-time.After(c.p.slow):
+		}
+	}
+	if c.p.badAllow {
+		return integration.Decision{Outcome: integration.Allow, Code: integration.CodeUnsupported, Text: "bug"}, nil
+	}
+	return c.Connection.Check(ctx, r)
+}
+
+const cfgYAML = `
+api_key: env:K
+connections:
+  - id: f
+    integration: fake
+    users: u@x.com
+    admins: a@x.com
+  - id: c
+    integration: counting
+    fake_connection: f
+    users: u@x.com
+    admins: a@x.com
+    timeout: 300ms
+`
+
+func build(t *testing.T, c *counting, o Options) (*Engine, *bytes.Buffer) {
+	t.Helper()
+	reg := integration.NewRegistry()
+	reg.Register(fake.Integration{})
+	reg.Register(c)
+	cfg, err := config.Parse("t.yaml", []byte(cfgYAML), reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logbuf bytes.Buffer
+	o.DecisionLog = declog.New(&logbuf)
+	o.Logger = slog.New(slog.NewJSONHandler(&logbuf, nil))
+	e, err := Build(context.Background(), cfg, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, &logbuf
+}
+
+func req(user, action, resource string) Request {
+	return Request{User: user, Groups: []string{"g"}, Connection: "c", Action: action, Resource: resource}
+}
+
+func TestFlowAndCaches(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}}
+	e, logs := build(t, c, Options{DecisionCache: 30 * time.Second, IdentityCache: 15 * time.Minute})
+	ctx := context.Background()
+
+	r := e.Check(ctx, req("a@x.com", "thing.write", "thing:1"))
+	if r.Status != 200 || r.Decision.Outcome != integration.Allow || r.Cached {
+		t.Fatalf("%+v", r)
+	}
+	r = e.Check(ctx, req("a@x.com", "thing.write", "thing:1"))
+	if !r.Cached || r.Decision.Outcome != integration.Allow {
+		t.Fatalf("decision not cached: %+v", r)
+	}
+	if c.checks.Load() != 1 {
+		t.Fatalf("checks = %d", c.checks.Load())
+	}
+	// Same user, different resource: identity cached, check runs.
+	r = e.Check(ctx, req("a@x.com", "thing.write", "thing:2"))
+	if r.Cached || c.resolves.Load() != 1 || c.checks.Load() != 2 {
+		t.Fatalf("identity cache: resolves=%d checks=%d", c.resolves.Load(), c.checks.Load())
+	}
+	// Unknown decisions are not cached.
+	r = e.Check(ctx, req("u@x.com", "thing.read", "thing:hidden"))
+	if r.Decision.Code != integration.CodeResourceNotVisible {
+		t.Fatal(r)
+	}
+	r = e.Check(ctx, req("u@x.com", "thing.read", "thing:hidden"))
+	if r.Cached {
+		t.Fatal("unknown was cached")
+	}
+	// Negative identity is cached.
+	before := c.resolves.Load()
+	e.Check(ctx, req("nobody@x.com", "thing.read", "thing:1"))
+	r = e.Check(ctx, req("nobody@x.com", "thing.read", "thing:1"))
+	if r.Decision.Code != integration.CodeUserNotFound || r.Decision.Outcome != integration.Deny || c.resolves.Load() != before+1 {
+		t.Fatalf("negative identity: %+v resolves=%d", r, c.resolves.Load())
+	}
+	// Decision log has one line per check with the right fields.
+	lines := 0
+	for _, l := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var ent map[string]any
+		if json.Unmarshal([]byte(l), &ent) == nil && ent["decision"] != nil {
+			lines++
+			if ent["connection"] != "c" || ent["action"] == nil || ent["status"] == nil {
+				t.Errorf("bad log entry: %s", l)
+			}
+		}
+	}
+	if lines != 7 {
+		t.Errorf("decision log lines = %d", lines)
+	}
+}
+
+func groupsReq(user string, groups ...string) Request {
+	return Request{User: user, Groups: groups, Connection: "c", Action: "thing.read", Resource: "thing:1"}
+}
+
+// The identity cache is keyed by the request's groups too: integrations
+// that embed the caller's groups in the Identity must not serve a later
+// request with the first request's groups.
+func TestIdentityCacheKeyedByGroups(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}}
+	e, _ := build(t, c, Options{IdentityCache: 15 * time.Minute})
+	ctx := context.Background()
+	seen := func() []string {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return append([]string(nil), c.identityGroups...)
+	}
+
+	r := e.Check(ctx, groupsReq("a@x.com", "system:masters"))
+	if r.Decision.Outcome != integration.Allow || c.resolves.Load() != 1 {
+		t.Fatalf("%+v resolves=%d", r, c.resolves.Load())
+	}
+	if g := seen(); !slices.Equal(g, []string{"system:masters"}) {
+		t.Fatalf("identity groups = %v", g)
+	}
+	// Same user, no groups: a second resolve, and Check sees no groups.
+	r = e.Check(ctx, groupsReq("a@x.com"))
+	if r.Decision.Outcome != integration.Allow || c.resolves.Load() != 2 {
+		t.Fatalf("%+v resolves=%d, want 2", r, c.resolves.Load())
+	}
+	if g := seen(); len(g) != 0 {
+		t.Fatalf("identity groups = %v, want none (cached identity carried the first request's groups)", g)
+	}
+	// The first key is still cached.
+	e.Check(ctx, groupsReq("a@x.com", "system:masters"))
+	if c.resolves.Load() != 2 || !slices.Equal(seen(), []string{"system:masters"}) {
+		t.Fatalf("resolves=%d groups=%v", c.resolves.Load(), seen())
+	}
+	// Order and duplicates do not matter for the key.
+	e.Check(ctx, groupsReq("a@x.com", "b", "a", "a"))
+	e.Check(ctx, groupsReq("a@x.com", "a", "b"))
+	if c.resolves.Load() != 3 || !slices.Equal(seen(), []string{"a", "b"}) {
+		t.Fatalf("resolves=%d groups=%v", c.resolves.Load(), seen())
+	}
+	// Negative entries are keyed the same way.
+	before := c.resolves.Load()
+	e.Check(ctx, groupsReq("nobody@x.com", "x"))
+	e.Check(ctx, groupsReq("nobody@x.com", "y"))
+	e.Check(ctx, groupsReq("nobody@x.com", "x"))
+	if c.resolves.Load() != before+2 {
+		t.Fatalf("negative resolves = %d, want %d", c.resolves.Load(), before+2)
+	}
+}
+
+// A user_not_found for one set of groups must not be served to the same
+// user arriving with a group that does map (aws static_map).
+func TestNegativeIdentityNotSharedAcrossGroups(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}, needGroup: "platform"}
+	e, _ := build(t, c, Options{IdentityCache: 15 * time.Minute})
+	ctx := context.Background()
+	r := e.Check(ctx, groupsReq("u@x.com"))
+	if r.Decision.Code != integration.CodeUserNotFound {
+		t.Fatalf("%+v", r)
+	}
+	r = e.Check(ctx, groupsReq("u@x.com", "platform"))
+	if r.Decision.Outcome != integration.Allow || c.resolves.Load() != 2 {
+		t.Fatalf("mapped group after a miss: %+v resolves=%d", r, c.resolves.Load())
+	}
+	// The miss is still remembered for the unmapped shape.
+	r = e.Check(ctx, groupsReq("u@x.com"))
+	if r.Decision.Code != integration.CodeUserNotFound || c.resolves.Load() != 2 {
+		t.Fatalf("%+v resolves=%d", r, c.resolves.Load())
+	}
+}
+
+func TestNoCaches(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}}
+	e, _ := build(t, c, Options{})
+	ctx := context.Background()
+	e.Check(ctx, req("a@x.com", "thing.write", "thing:1"))
+	r := e.Check(ctx, req("a@x.com", "thing.write", "thing:1"))
+	if r.Cached || c.checks.Load() != 2 || c.resolves.Load() != 2 {
+		t.Fatalf("caches disabled: %+v %d %d", r, c.checks.Load(), c.resolves.Load())
+	}
+}
+
+func TestBadRequests(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}}
+	e, _ := build(t, c, Options{})
+	ctx := context.Background()
+	cases := []struct {
+		r    Request
+		code integration.Code
+	}{
+		{Request{User: "", Connection: "c", Action: "thing.read", Resource: "thing:1"}, integration.CodeInvalidRequest},
+		{Request{User: "not-an-email", Connection: "c", Action: "thing.read", Resource: "thing:1"}, integration.CodeInvalidRequest},
+		{Request{User: "a@x.com", Groups: []string{""}, Connection: "c", Action: "thing.read", Resource: "thing:1"}, integration.CodeInvalidRequest},
+		{Request{User: "a@x.com", Connection: "", Action: "thing.read", Resource: "thing:1"}, integration.CodeInvalidRequest},
+		{Request{User: "a@x.com", Connection: "c", Action: "", Resource: "thing:1"}, integration.CodeInvalidRequest},
+		{Request{User: "a@x.com", Connection: "c", Action: "thing.read", Resource: ""}, integration.CodeInvalidRequest},
+		{Request{User: "a@x.com", Connection: "c", Action: "thing.read", Resource: "Thing:1"}, integration.CodeInvalidRequest},
+		{Request{User: "a@x.com", Connection: "zzz", Action: "thing.read", Resource: "thing:1"}, integration.CodeUnknownConnection},
+		{Request{User: "a@x.com", Connection: "c", Action: "thing.fly", Resource: "thing:1"}, integration.CodeUnknownAction},
+	}
+	for _, cs := range cases {
+		r := e.Check(ctx, cs.r)
+		if r.Status != 400 || r.Decision.Code != cs.code || r.Decision.Outcome != integration.Unknown {
+			t.Errorf("%+v -> %+v", cs.r, r)
+		}
+	}
+	if c.checks.Load() != 0 {
+		t.Error("bad requests reached the integration")
+	}
+}
+
+func TestTimeoutAndBadAllow(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}, slow: 2 * time.Second}
+	e, _ := build(t, c, Options{})
+	start := time.Now()
+	r := e.Check(context.Background(), req("a@x.com", "thing.read", "thing:1"))
+	if r.Decision.Code != integration.CodeUpstreamTimeout || r.Decision.Outcome != integration.Unknown {
+		t.Fatalf("%+v", r)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("timeout not enforced")
+	}
+	c2 := &counting{Integration: fake.Integration{}, badAllow: true}
+	e2, _ := build(t, c2, Options{})
+	r = e2.Check(context.Background(), req("a@x.com", "thing.read", "thing:1"))
+	if r.Decision.Outcome != integration.Unknown {
+		t.Fatalf("allow with a non-allow code got through: %+v", r)
+	}
+}
+
+func TestProbeAndConnections(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}}
+	e, _ := build(t, c, Options{})
+	if got := e.Connections(); len(got) != 2 || got[0] != "f" {
+		t.Fatal(got)
+	}
+	reps := e.Probe(context.Background())
+	if len(reps) != 2 || reps[0].Err != nil || reps[1].Err != nil {
+		t.Fatalf("%+v", reps)
+	}
+	reps = e.Probe(context.Background(), "nope")
+	if len(reps) != 1 || reps[0].Err == nil {
+		t.Fatal(reps)
+	}
+	if _, ok := e.Connection("c"); !ok {
+		t.Fatal("Connection")
+	}
+}
+
+func TestValidateUser(t *testing.T) {
+	for _, ok := range []string{"a@b", "dana@example.com", "o'neil+x@ex.co.uk"} {
+		if err := ValidateUser(ok); err != nil {
+			t.Error(ok, err)
+		}
+	}
+	for _, bad := range []string{"", "a", "@b", "a@", "a b@c", "a@b@c", "a\n@b", strings.Repeat("a", 320) + "@b"} {
+		if err := ValidateUser(bad); err == nil {
+			t.Error(bad, "accepted")
+		}
+	}
+}
+
+func TestBuildErrors(t *testing.T) {
+	reg := integration.NewRegistry()
+	reg.Register(failing{})
+	cfg, err := config.Parse("t.yaml", []byte("api_key: env:K\nconnections:\n  - id: a\n    integration: failing\n"), reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(context.Background(), cfg, Options{}); err == nil || !strings.Contains(err.Error(), `connection "a" (failing)`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+type failing struct{}
+
+func (failing) Name() string                { return "failing" }
+func (failing) Fields() []integration.Field { return nil }
+func (failing) Actions() []catalog.Action   { return nil }
+func (failing) New(context.Context, *integration.Settings, integration.Deps) (integration.Connection, error) {
+	return nil, errors.New("cannot build")
+}

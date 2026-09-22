@@ -1,0 +1,3 @@
+# Test vectors and recorded fixtures are byte-exact; never convert their line endings.
+internal/authx/testdata/** -text
+**/testdata/** -text
