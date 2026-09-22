@@ -108,6 +108,8 @@ jobs:
       - run: go test -run '^$' -fuzz='^FuzzParseResource$' -fuzztime=30s ./internal/integrations/confluence/
       - run: go test -run '^$' -fuzz='^FuzzValidateResource$' -fuzztime=30s ./internal/integrations/slack/
       - run: go test -run '^$' -fuzz='^FuzzParseResource$' -fuzztime=60s ./internal/integrations/aws/
+      - run: go test -run '^$' -fuzz='^FuzzParseTarget$' -fuzztime=60s ./internal/integrations/salesforce/
+      - run: go test -run '^$' -fuzz='^FuzzSOQLString$' -fuzztime=60s ./internal/integrations/salesforce/
 
   differential:
     # Compares the Argo CD RBAC evaluator with the real argocd CLI.
