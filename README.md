@@ -6,6 +6,8 @@
 
 **Permission checks for AI agents and bots, answered live by the system they act in.**
 
+![hallpass demo: an admin is allowed, dana is denied, an unknown user is denied](docs/assets/demo.svg)
+
 hallpass is a small self-hosted service that answers one question:
 
 > May user X do action Y on resource Z in system C?
@@ -25,6 +27,20 @@ hallpass asks the source of truth instead: Kubernetes `SubjectAccessReview`, Jir
 GitHub collaborator roles, AWS IAM policy simulation, and so on. One API, eleven systems, no
 synced copy of anyone's permissions.
 
+```mermaid
+sequenceDiagram
+    actor Dana
+    participant Agent as Your agent or bot
+    participant HP as hallpass
+    participant Sys as Jira / K8s / GitHub / ...
+    Dana->>Agent: "delete issue PAY-123"
+    Agent->>HP: POST /check (dana, jira-main, DELETE_ISSUES, issue:PAY-123)
+    HP->>Sys: may dana do this? (read-only credential)
+    Sys-->>HP: no
+    HP-->>Agent: {"decision":"deny"}
+    Agent-->>Dana: "You don't have permission to do that."
+```
+
 - **Read-only.** It only checks and never performs the action.
 - **Fails closed.** Anything it cannot evaluate is `unknown`, not `allow`.
 - **Single static binary.** One YAML file and one dependency (`yaml.v3`). No database.
@@ -39,6 +55,16 @@ docker pull ghcr.io/roee-hersh/hallpass:latest
 ```
 
 ## Try it
+
+With Docker, no clone needed:
+
+```sh
+curl -sO https://raw.githubusercontent.com/roee-hersh/hallpass/main/examples/hallpass.yaml
+docker run --rm -p 8080:8080 -e HALLPASS_API_KEY=change-me \
+  -v "$PWD/hallpass.yaml:/etc/hallpass/hallpass.yaml:ro" ghcr.io/roee-hersh/hallpass
+```
+
+Or from source:
 
 ```sh
 export HALLPASS_API_KEY=change-me
