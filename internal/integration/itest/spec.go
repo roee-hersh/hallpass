@@ -672,17 +672,16 @@ func (b *botocore) Validate(r *http.Request, body []byte) error {
 // AnySpec accepts a request when one of several descriptions does: for a
 // fake that serves several APIs (Confluence v1 and v2, the AWS services).
 // A request whose path no description knows is rejected with every error.
+// When any description is missing (nil) the result is nil and nothing is
+// validated: a partial set would reject the requests meant for the absent
+// one.
 func AnySpec(specs ...Spec) Spec {
-	var live []Spec
 	for _, s := range specs {
-		if s != nil {
-			live = append(live, s)
+		if s == nil {
+			return nil
 		}
 	}
-	if len(live) == 0 {
-		return nil
-	}
-	return anySpec(live)
+	return anySpec(specs)
 }
 
 type anySpec []Spec

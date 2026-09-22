@@ -212,9 +212,12 @@ func TestOptionalParams(t *testing.T) {
 	if err := s.Validate(WithOptional(r, []string{"email"}), nil); err != nil {
 		t.Fatal(err)
 	}
-	a := AnySpec(nil, s)
-	if a == nil || AnySpec(nil) != nil {
-		t.Fatal("AnySpec nil handling")
+	if AnySpec(nil, s) != nil || AnySpec(nil) != nil {
+		t.Fatal("AnySpec must skip validation when a description is missing")
+	}
+	a := AnySpec(s, s)
+	if a == nil {
+		t.Fatal("AnySpec with every description present")
 	}
 	if err := a.Validate(req("GET", "https://x/nope", ""), nil); err == nil {
 		t.Fatal("AnySpec accepted unknown path")
