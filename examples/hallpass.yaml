@@ -6,6 +6,10 @@
 # Secrets are never written here. Every credential is a reference:
 #   env:NAME      read from the environment
 #   file:/path    read from a file on every use (rotating tokens keep working)
+#
+# Every connection also accepts ca_file, tls_server_name, proxy_url and timeout.
+# `hallpass catalog <integration>` lists the keys and actions of an integration;
+# docs/integrations/<integration>.md explains the credential to create.
 
 api_key: env:HALLPASS_API_KEY
 
@@ -20,3 +24,48 @@ connections:
     integration: fake
     users: dana@example.com
     admins: admin@example.com
+
+  # - id: k8s-prod-eu
+  #   integration: kubernetes
+  #   url: https://10.20.0.5:6443
+  #   ca_file: /etc/hallpass/ca/prod-eu.pem
+  #   tls_server_name: kubernetes
+  #   credential: file:/secrets/k8s-prod-eu-token     # ServiceAccount token, see test/kind/hallpass-rbac.yaml
+  #   username_template: "oidc:{email}"
+  #   group_prefix: "oidc:"
+
+  # - id: argocd-prod
+  #   integration: argocd
+  #   kubernetes_connection: k8s-prod-eu
+  #   namespace: argocd
+  #   user_subject: none                              # or email, when the IdP subject is the email
+
+  # - id: gitlab-main
+  #   integration: gitlab
+  #   url: https://gitlab.example.com
+  #   credential: env:GITLAB_TOKEN                    # read_api token of an administrator
+  #   identity_mode: admin_search
+
+  # - id: github-acme
+  #   integration: github
+  #   organization: acme
+  #   app_id: Iv1.abcdef0123456789
+  #   credential: file:/secrets/github-app.pem        # GitHub App private key
+  #   identity_mode: saml
+
+  # - id: jira-main
+  #   integration: jira
+  #   url: https://acme.atlassian.net
+  #   username: hallpass-bot@acme.com
+  #   credential: env:JIRA_TOKEN
+
+  # - id: confluence-main
+  #   integration: confluence
+  #   url: https://acme.atlassian.net
+  #   username: hallpass-bot@acme.com
+  #   credential: env:JIRA_TOKEN
+  #   identity_connection: jira-main                  # Confluence cannot look users up by email itself
+
+  # - id: slack-acme
+  #   integration: slack
+  #   credential: env:SLACK_BOT_TOKEN                 # xoxb- token of an internal app with read scopes
