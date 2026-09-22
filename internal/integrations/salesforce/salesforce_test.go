@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/authx"
+	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integration/itest"
 	"github.com/roee-hersh/hallpass/internal/secret"
@@ -69,6 +70,13 @@ const (
 	twinB    = "005000000000009AAA"
 	ambA     = "00500000000000AAAA"
 	ambB     = "00500000000000BAAA"
+	manyA    = "00500000000000CAAA"
+	manyB    = "00500000000000DAAA"
+	manyC    = "00500000000000EAAA"
+	manyD    = "00500000000000FAAA"
+	manyE    = "00500000000000GAAA"
+	dupA     = "00500000000000HAAA"
+	dupB     = "00500000000000IAAA"
 	acctID   = "001000000000001AAA"
 	hiddenID = "001000000000009AAA"
 	groupID  = "0PG000000000001AAA"
@@ -92,26 +100,37 @@ type fakeSF struct {
 	srv *itest.Server
 	pub *rsa.PublicKey
 
-	mu             sync.Mutex
-	instanceURL    string // token response instance_url; "" omits the field
-	validTokens    map[string]bool
-	tokenCalls     int
-	queries        []string
-	revokeNext     bool // the next API call answers 401 INVALID_SESSION_ID and forgets the token
-	alwaysRevoke   bool
-	lenientJWT     bool // do not fail the test on a bad assertion
-	users          []userRow
-	frozen         map[string]bool
-	recordAccess   map[string]recordAccessRow
-	objectPerms    map[string][]objectPermRow
-	fieldPerms     map[string][]fieldPermRow
-	sysPerms       map[string]map[string]string
-	permSets       map[string][]string
-	groups         map[string][]string
+	mu           sync.Mutex
+	instanceURL  string // token response instance_url; "" omits the field
+	validTokens  map[string]bool
+	tokenCalls   int
+	queries      []string
+	revokeNext   bool // the next API call answers 401 INVALID_SESSION_ID and forgets the token
+	alwaysRevoke bool
+	lenientJWT   bool // do not fail the test on a bad assertion
+	users        []userRow
+	frozen       map[string]bool
+	recordAccess map[string]recordAccessRow
+	objectPerms  map[string][]objectPermRow
+	// sessionObjectPerms are rows granted through session-based or expired
+	// assignments: a real org returns them only when the assignment
+	// sub-select carries no activation/expiry filter.
+	sessionObjectPerms map[string][]objectPermRow
+	fieldPerms         map[string][]fieldPermRow
+	sysPerms           map[string]map[string]string
+	// permSets lists assigned permission sets as Name or ns__Name.
+	permSets map[string][]string
+	groups   map[string][]string
+	// objects are the sObjects whose describe answers 200.
+	objects        map[string]bool
 	groupStatus    map[string]string
 	describeFields []string
 	errors         map[string]sfErr
-	remaining      int
+	// rejectAssignmentFilter makes any query whose assignment sub-select
+	// filters on HasActivationRequired/ExpirationDate answer 400
+	// INVALID_FIELD, like an org whose API version lacks those fields.
+	rejectAssignmentFilter bool
+	remaining              int
 }
 
 var (
@@ -119,6 +138,12 @@ var (
 	whereRe = regexp.MustCompile(`WHERE (\w+) = '((?:[^'\\]|\\.)*)'`)
 	permRe  = regexp.MustCompile(`WHERE (Permissions\w+) = true`)
 	inRe    = regexp.MustCompile(`IN \(('[^)]*')\)`)
+	limitRe = regexp.MustCompile(` LIMIT (\d+)$`)
+	// assignFilterRe is the activation/expiry filter every assignment
+	// sub-select must carry (finding: session-based and expired assignments
+	// must not grant).
+	assignFilterRe = regexp.MustCompile(`\(SELECT PermissionSetId FROM PermissionSetAssignment WHERE AssigneeId = '\w+' AND PermissionSet\.HasActivationRequired = false AND \(ExpirationDate = null OR ExpirationDate > (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\)\)`)
+	assignLooseRe  = regexp.MustCompile(`\(SELECT PermissionSetId FROM PermissionSetAssignment WHERE AssigneeId = '\w+'\)`)
 )
 
 // lit extracts the escaped literal compared to field and unescapes it.
@@ -178,6 +203,17 @@ func newFake(t *testing.T) *fakeSF {
 			// amb: two active Standard rows, neither username matches.
 			{ID: ambA, IsActive: true, Username: "amb1@example.com", Email: "amb@example.com", UserType: "Standard", Name: "Amb 1"},
 			{ID: ambB, IsActive: true, Username: "amb2@example.com", Email: "amb@example.com", UserType: "Standard", Name: "Amb 2"},
+			// many: five rows share the email; only one is an active Standard
+			// user, but the query limit is reached so nothing may be picked.
+			{ID: manyA, IsActive: true, Username: "many1@example.com", Email: "many@example.com", UserType: "Standard", Name: "Many 1"},
+			{ID: manyB, IsActive: false, Username: "many2@example.com", Email: "many@example.com", UserType: "Standard", Name: "Many 2"},
+			{ID: manyC, IsActive: true, Username: "many3@example.com", Email: "many@example.com", UserType: "CspLitePortal", Name: "Many 3"},
+			{ID: manyD, IsActive: false, Username: "many4@example.com", Email: "many@example.com", UserType: "Standard", Name: "Many 4"},
+			{ID: manyE, IsActive: true, Username: "many5@example.com", Email: "many@example.com", UserType: "Guest", Name: "Many 5"},
+			// dup: two rows with the same Username, which Salesforce should
+			// never allow; the exact lookup must not pick one.
+			{ID: dupA, IsActive: true, Username: "dup@example.com", Email: "dup-a@example.com", UserType: "Standard", Name: "Dup A"},
+			{ID: dupB, IsActive: true, Username: "dup@example.com", Email: "dup-b@example.com", UserType: "Standard", Name: "Dup B"},
 		},
 		frozen: map[string]bool{fredID: true},
 		recordAccess: map[string]recordAccessRow{
@@ -191,6 +227,16 @@ func newFake(t *testing.T) *fakeSF {
 				{Parent: parentRef{Name: "Empty_Set"}},
 			},
 		},
+		sessionObjectPerms: map[string][]objectPermRow{
+			// Bob's session-based set grants Edit only while activated, and
+			// an expired assignment grants Delete: neither is in force.
+			bobID + "|Account": {
+				{PermissionsRead: true, PermissionsEdit: true, Parent: parentRef{Name: "Session_Editors"}},
+				{PermissionsRead: true, PermissionsDelete: true, Parent: parentRef{Name: "Expired_Deleters"}},
+			},
+			bobID + "|Invoice__c": {{PermissionsRead: true, Parent: parentRef{Name: "Session_Invoices"}}},
+		},
+		objects: map[string]bool{"Account": true, "Invoice__c": true, "Contact": true},
 		fieldPerms: map[string][]fieldPermRow{
 			danaID + "|Account.Rating": {{PermissionsRead: true, PermissionsEdit: true, Parent: parentRef{IsOwnedByProfile: true, Name: "Sales"}}},
 			bobID + "|Account.Rating":  {{PermissionsRead: true, Parent: parentRef{Name: "Readers"}}},
@@ -202,7 +248,7 @@ func newFake(t *testing.T) *fakeSF {
 			danaID: {"PermissionsApiEnabled": "Sales", "PermissionsViewSetup": "Sales"},
 			bobID:  {"PermissionsApiEnabled": "Minimum Access"},
 		},
-		permSets:       map[string][]string{danaID: {"Sales_Ops"}},
+		permSets:       map[string][]string{danaID: {"Sales_Ops", "acme__Billing"}, bobID: {"Billing"}},
 		groups:         map[string][]string{},
 		groupStatus:    map[string]string{groupID: "Updated"},
 		describeFields: []string{"Id", "Name", "IsOwnedByProfile", "PermissionsApiEnabled", "PermissionsViewSetup", "PermissionsModifyAllData"},
@@ -350,8 +396,66 @@ func (f *fakeSF) handleAPI(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"name": "PermissionSet", "fields": out})
 	default:
+		if name, ok := strings.CutPrefix(rest, "/sobjects/"); ok && strings.HasSuffix(name, "/describe") {
+			name = strings.TrimSuffix(name, "/describe")
+			f.mu.Lock()
+			e, failing := f.errors["describe:"+name]
+			exists := f.objects[name]
+			f.mu.Unlock()
+			switch {
+			case failing:
+				writeSFError(w, e.status, e.code)
+			case exists:
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"name": name, "queryable": true, "fields": []any{}})
+			default:
+				writeSFError(w, 404, "NOT_FOUND")
+			}
+			return
+		}
 		writeSFError(w, 404, "NOT_FOUND")
 	}
+}
+
+// describeCalls counts the sObject describes of name.
+func (f *fakeSF) describeCalls(name string) int {
+	n := 0
+	for _, call := range f.srv.Calls() {
+		if strings.HasSuffix(call.Path, "/sobjects/"+name+"/describe") {
+			n++
+		}
+	}
+	return n
+}
+
+// checkAssignmentFilter enforces the finding on the assignment sub-select:
+// the query carries the activation/expiry filter with a current timestamp,
+// or (when the org is set to reject it) it is the loose form of a retry.
+// It reports whether the query is loose.
+func (f *fakeSF) checkAssignmentFilter(w http.ResponseWriter, q string) (loose, failed bool) {
+	if !strings.Contains(q, "(SELECT PermissionSetId FROM PermissionSetAssignment") {
+		return false, false
+	}
+	if m := assignFilterRe.FindStringSubmatch(q); m != nil {
+		if f.rejectAssignmentFilter {
+			writeSFError(w, 400, "INVALID_FIELD")
+			return false, true
+		}
+		ts, err := time.Parse("2006-01-02T15:04:05Z", m[1])
+		if err != nil || ts.Before(time.Now().Add(-time.Minute)) || ts.After(time.Now().Add(time.Minute)) {
+			f.t.Errorf("assignment filter timestamp %q is not now: %s", m[1], q)
+		}
+		return false, false
+	}
+	if assignLooseRe.MatchString(q) {
+		if !f.rejectAssignmentFilter {
+			f.t.Errorf("assignment sub-select lacks the activation/expiry filter: %s", q)
+		}
+		return true, false
+	}
+	f.t.Errorf("unrecognised assignment sub-select: %s", q)
+	writeSFError(w, 400, "MALFORMED_QUERY")
+	return false, true
 }
 
 func (f *fakeSF) handleQuery(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +475,10 @@ func (f *fakeSF) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	records := []any{}
 	uid := lit(q, "AssigneeId")
+	loose, failed := f.checkAssignmentFilter(w, q)
+	if failed {
+		return
+	}
 	switch obj {
 	case "User":
 		wm := whereRe.FindStringSubmatch(q)
@@ -379,7 +487,16 @@ func (f *fakeSF) handleQuery(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		field, val := wm[1], unescape(wm[2])
+		limit := len(f.users)
+		if lm := limitRe.FindStringSubmatch(q); lm != nil {
+			fmt.Sscan(lm[1], &limit)
+		} else if strings.HasPrefix(q, "SELECT Id, IsActive, Username, Email") {
+			f.t.Errorf("identity query without LIMIT: %s", q)
+		}
 		for _, u := range f.users {
+			if len(records) >= limit {
+				break
+			}
 			var have string
 			switch field {
 			case "Email":
@@ -409,8 +526,14 @@ func (f *fakeSF) handleQuery(w http.ResponseWriter, r *http.Request) {
 			records = append(records, row)
 		}
 	case "ObjectPermissions":
-		for _, row := range f.objectPerms[uid+"|"+lit(q, "SobjectType")] {
+		key := uid + "|" + lit(q, "SobjectType")
+		for _, row := range f.objectPerms[key] {
 			records = append(records, row)
+		}
+		if loose {
+			for _, row := range f.sessionObjectPerms[key] {
+				records = append(records, row)
+			}
 		}
 	case "FieldPermissions":
 		for _, row := range f.fieldPerms[uid+"|"+lit(q, "Field")] {
@@ -432,8 +555,16 @@ func (f *fakeSF) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			name := lit(q, "PermissionSet.Name")
+			want := name
+			switch {
+			case strings.HasSuffix(q, " AND PermissionSet.NamespacePrefix = null"):
+			case lit(q, "PermissionSet.NamespacePrefix") != "":
+				want = lit(q, "PermissionSet.NamespacePrefix") + "__" + name
+			default:
+				f.t.Errorf("permission set query without a NamespacePrefix condition: %s", q)
+			}
 			for _, n := range f.permSets[uid] {
-				if n == name {
+				if n == want {
 					records = append(records, map[string]any{"Id": "0Pa000000000001AAA"})
 				}
 			}
@@ -518,6 +649,16 @@ func setup(t *testing.T) (*fakeSF, integration.Connection) {
 func check(t *testing.T, c integration.Connection, u integration.User, action, resource string) integration.Decision {
 	t.Helper()
 	return itest.Check(t, c, Integration{}, u, action, resource)
+}
+
+// expectQuery compares one recorded query with want, in which "<assigned>"
+// stands for the filtered assignment sub-select (its timestamp is now).
+func expectQuery(t *testing.T, qs []string, want string) {
+	t.Helper()
+	re := regexp.MustCompile("^" + strings.ReplaceAll(regexp.QuoteMeta(want), "<assigned>", assignFilterRe.String()) + "$")
+	if len(qs) != 1 || !re.MatchString(qs[0]) {
+		t.Errorf("query %q\nwant  %q", qs, want)
+	}
 }
 
 func expect(t *testing.T, d integration.Decision, code integration.Code, textPart string) {
@@ -618,11 +759,13 @@ func TestIdentityEscaping(t *testing.T) {
 		t.Fatalf("%+v %v", id, err)
 	}
 	qs := f.queriesFrom("User")
-	if len(qs) != 1 || !strings.Contains(qs[0], `WHERE Email = 'o\'neil@example.com' LIMIT 3`) {
-		t.Errorf("user query: %q", qs)
+	if len(qs) != 2 || !strings.HasSuffix(qs[0], `WHERE Username = 'o\'neil@example.com' LIMIT 2`) || !strings.HasSuffix(qs[1], `WHERE Email = 'o\'neil@example.com' LIMIT 4`) {
+		t.Errorf("user queries: %q", qs)
 	}
-	if !strings.HasPrefix(qs[0], "SELECT Id, IsActive, Username, Email, FederationIdentifier, UserType, Name FROM User WHERE") {
-		t.Errorf("user query columns: %q", qs[0])
+	for _, q := range qs {
+		if !strings.HasPrefix(q, "SELECT Id, IsActive, Username, Email, FederationIdentifier, UserType, Name FROM User WHERE") {
+			t.Errorf("user query columns: %q", q)
+		}
 	}
 	if id.Attr(attrActive) != "true" || id.Attr(attrFrozen) != "false" || id.Display != "oneil@example.com.acme" {
 		t.Errorf("identity %+v", id)
@@ -633,7 +776,7 @@ func TestIdentityEscaping(t *testing.T) {
 			t.Errorf("email %q -> %s", bad, d.Code)
 		}
 	}
-	if len(f.queriesFrom("User")) != 1 {
+	if len(f.queriesFrom("User")) != 2 {
 		t.Error("an invalid email reached the query")
 	}
 }
@@ -696,9 +839,266 @@ func TestInactiveAndFrozen(t *testing.T) {
 func TestFrozenCheckSkippedWhenUserLoginMissing(t *testing.T) {
 	f, c := setup(t)
 	f.errors["UserLogin"] = sfErr{400, "INVALID_TYPE"}
-	expect(t, check(t, c, fred, "user.active", "user:fred@example.com"), integration.CodeAllowed, "")
+	// The user is still allowed, but the identity records that freezing
+	// was not evaluated and user.active says so.
+	id, err := c.ResolveIdentity(context.Background(), fred)
+	if err != nil || id.Attr(attrFrozen) != frozenUnknown {
+		t.Errorf("identity with UserLogin missing: %+v %v", id, err)
+	}
+	expect(t, check(t, c, fred, "user.active", "user:fred@example.com"), integration.CodeAllowed, "frozen users are not detected")
+	// The probe reports the gap by trying the query on the integration user.
+	r, err := c.Probe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range r.Warnings {
+		if strings.Contains(w, "frozen users are not detected: UserLogin not queryable") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("probe warnings %q lack the frozen warning", r.Warnings)
+	}
+	if qs := f.queriesFrom("UserLogin"); len(qs) == 0 || !strings.Contains(qs[len(qs)-1], "WHERE UserId = '005000000000000AAA'") {
+		t.Errorf("probe UserLogin queries: %q", qs)
+	}
 	f.errors["UserLogin"] = sfErr{403, "INSUFFICIENT_ACCESS"}
 	expect(t, check(t, c, fred, "user.active", "user:fred@example.com"), integration.CodeCredentialRejected, "UserLogin")
+	if _, err := c.Probe(context.Background()); integration.ToDecision(err).Code != integration.CodeCredentialRejected {
+		t.Errorf("probe with UserLogin forbidden: %v", err)
+	}
+	// With a frozen user the attribute is definite and the check denies.
+	delete(f.errors, "UserLogin")
+	id, err = c.ResolveIdentity(context.Background(), fred)
+	if err != nil || id.Attr(attrFrozen) != frozenTrue {
+		t.Errorf("identity of a frozen user: %+v %v", id, err)
+	}
+	// client_credentials has no username: UserLogin is probed unfiltered.
+	f2 := newFake(t)
+	f2.errors["UserLogin"] = sfErr{400, "INVALID_FIELD"}
+	c2 := newConn(t, f2, map[string]string{"auth_flow": flowClientCredentials, "username": ""}, itest.Literal("consumer"))
+	r, err = c2.Probe(context.Background())
+	if err != nil || len(r.Warnings) != 2 || !strings.Contains(r.Warnings[0], "frozen users are not detected") {
+		t.Errorf("client_credentials probe: %+v %v", r, err)
+	}
+	if qs := f2.queriesFrom("UserLogin"); len(qs) != 1 || qs[0] != "SELECT IsFrozen FROM UserLogin LIMIT 1" {
+		t.Errorf("unfiltered UserLogin probe: %q", qs)
+	}
+}
+
+// Finding: session-based permission sets and expired time-bound assignments
+// must not grant, and when the org cannot filter them out an allow is unknown.
+func TestSessionAndExpiredAssignmentsExcluded(t *testing.T) {
+	f, c := setup(t)
+	// Bob's session-based set grants Edit and his expired assignment
+	// Delete; the filtered sub-select hides both.
+	expect(t, check(t, c, bob, "object.edit", "object:Account"), integration.CodeDenied, "PermissionsEdit")
+	expect(t, check(t, c, bob, "object.delete", "object:Account"), integration.CodeDenied, "PermissionsDelete")
+	expect(t, check(t, c, bob, "object.read", "object:Invoice__c"), integration.CodeDenied, "Invoice__c")
+	if n := len(f.queriesFrom("ObjectPermissions")); n != 3 {
+		t.Errorf("%d ObjectPermissions queries, want 3 (no retry)", n)
+	}
+	// An org whose API version lacks the filter fields: the loose retry may
+	// deny but never allow.
+	f.mu.Lock()
+	f.rejectAssignmentFilter = true
+	f.mu.Unlock()
+	f.srv.Reset()
+	f.queries = nil
+	expect(t, check(t, c, bob, "object.edit", "object:Account"), integration.CodeUnsupported, "could not exclude session-based or expired assignments")
+	qs := f.queriesFrom("ObjectPermissions")
+	if len(qs) != 2 || !assignFilterRe.MatchString(qs[0]) || !assignLooseRe.MatchString(qs[1]) {
+		t.Errorf("fallback queries: %q", qs)
+	}
+	expect(t, check(t, c, bob, "object.create", "object:Account"), integration.CodeDenied, "PermissionsCreate")
+	expect(t, check(t, c, bob, "object.read", "object:Contact"), integration.CodeDenied, "Contact")
+	expect(t, check(t, c, dana, "field.read", "field:Account.Rating"), integration.CodeUnsupported, "could not exclude")
+	expect(t, check(t, c, bob, "field.edit", "field:Account.Rating"), integration.CodeDenied, "PermissionsEdit")
+	expect(t, check(t, c, dana, "system.permission", "permission:PermissionsApiEnabled"), integration.CodeUnsupported, "could not exclude")
+	expect(t, check(t, c, bob, "system.permission", "permission:PermissionsViewSetup"), integration.CodeDenied, "PermissionsViewSetup")
+	// An INVALID_FIELD that the loose retry also hits is reported as such.
+	f.errors["ObjectPermissions"] = sfErr{400, "INVALID_FIELD"}
+	expect(t, check(t, c, bob, "object.read", "object:Account"), integration.CodeUnsupported, "INVALID_FIELD")
+}
+
+// Finding: the identity lookup is an exact Username match first, then a
+// bounded match_field query from which nothing is picked when the bound is
+// reached.
+func TestIdentityExactUsernameFirst(t *testing.T) {
+	f, c := setup(t)
+	ctx := context.Background()
+	id, err := c.ResolveIdentity(ctx, dana)
+	if err != nil || id.ID != danaID {
+		t.Fatalf("%+v %v", id, err)
+	}
+	if qs := f.queriesFrom("User"); len(qs) != 1 || !strings.HasSuffix(qs[0], "WHERE Username = 'dana@example.com' LIMIT 2") {
+		t.Errorf("a Username match should need one query: %q", qs)
+	}
+	// Five rows share the email and exactly one is an active Standard user,
+	// but the query limit is reached: the rows are a subset, so ambiguous.
+	_, err = c.ResolveIdentity(ctx, integration.User{Email: "many@example.com"})
+	if d := integration.ToDecision(err); d.Code != integration.CodeUserAmbiguous || !strings.Contains(d.Text, "at least 4") {
+		t.Errorf("limit reached: %v", err)
+	}
+	if qs := f.queriesFrom("User"); !strings.HasSuffix(qs[len(qs)-1], "WHERE Email = 'many@example.com' LIMIT 4") {
+		t.Errorf("match_field query: %q", qs[len(qs)-1])
+	}
+	// Two rows with one Username: the exact lookup does not pick either.
+	_, err = c.ResolveIdentity(ctx, integration.User{Email: "dup@example.com"})
+	if d := integration.ToDecision(err); d.Code != integration.CodeUserAmbiguous {
+		t.Errorf("duplicate Username: %v", err)
+	}
+	// match_field Username is one exact query, LIMIT 2.
+	f2 := newFake(t)
+	byUsername := newConn(t, f2, map[string]string{"match_field": matchUsername}, secret.Secret{})
+	if _, err := byUsername.ResolveIdentity(ctx, integration.User{Email: "nobody@example.com"}); integration.ToDecision(err).Code != integration.CodeUserNotFound {
+		t.Errorf("unknown username: %v", err)
+	}
+	if qs := f2.queriesFrom("User"); len(qs) != 1 || !strings.HasSuffix(qs[0], "WHERE Username = 'nobody@example.com' LIMIT 2") {
+		t.Errorf("username queries: %q", qs)
+	}
+	if _, err := byUsername.ResolveIdentity(ctx, integration.User{Email: "dup@example.com"}); integration.ToDecision(err).Code != integration.CodeUserAmbiguous {
+		t.Errorf("duplicate username by Username: %v", err)
+	}
+	// match_field FederationIdentifier never consults Username: a federation
+	// id that happens to equal another user's Username must not resolve.
+	f3 := newFake(t)
+	f3.users = append(f3.users, userRow{ID: "00500000000000JAAA", IsActive: true, Username: "fed@example.com", Email: "fed-other@example.com", FederationIdentifier: "someone-else", UserType: "Standard"})
+	byFed := newConn(t, f3, map[string]string{"match_field": matchFederationID}, secret.Secret{})
+	if _, err := byFed.ResolveIdentity(ctx, integration.User{Email: "fed@example.com"}); integration.ToDecision(err).Code != integration.CodeUserNotFound {
+		t.Errorf("federation id equal to a Username: %v", err)
+	}
+	if qs := f3.queriesFrom("User"); len(qs) != 1 || !strings.Contains(qs[0], "WHERE FederationIdentifier = 'fed@example.com' LIMIT 4") {
+		t.Errorf("federation queries: %q", qs)
+	}
+}
+
+// Finding: zero ObjectPermissions rows for an object that does not exist is
+// unknown, not deny; the describe that tells them apart is cached.
+func TestObjectMissingIsUnknown(t *testing.T) {
+	f, c := setup(t)
+	expect(t, check(t, c, bob, "object.read", "object:Ghost__c"), integration.CodeResourceNotVisible, "does not exist or is not visible")
+	expect(t, check(t, c, bob, "object.edit", "object:Ghost__c"), integration.CodeResourceNotVisible, "Ghost__c")
+	if n := f.describeCalls("Ghost__c"); n != 1 {
+		t.Errorf("Ghost__c described %d times, want 1 (cached)", n)
+	}
+	// An object that exists with no rows is still a deny, and its describe
+	// is cached too.
+	expect(t, check(t, c, bob, "object.read", "object:Invoice__c"), integration.CodeDenied, "Invoice__c")
+	expect(t, check(t, c, bob, "object.create", "object:Invoice__c"), integration.CodeDenied, "Invoice__c")
+	if n := f.describeCalls("Invoice__c"); n != 1 {
+		t.Errorf("Invoice__c described %d times, want 1 (cached)", n)
+	}
+	// Rows present: no describe at all.
+	expect(t, check(t, c, bob, "object.edit", "object:Account"), integration.CodeDenied, "")
+	if n := f.describeCalls("Account"); n != 0 {
+		t.Errorf("Account described %d times, want 0", n)
+	}
+	// Describe failures other than 404 are errors, never deny.
+	f.errors["describe:Nope__c"] = sfErr{403, "INSUFFICIENT_ACCESS"}
+	expect(t, check(t, c, bob, "object.read", "object:Nope__c"), integration.CodeCredentialRejected, "Nope__c")
+	f.errors["describe:Nope__c"] = sfErr{500, "UNKNOWN_EXCEPTION"}
+	expect(t, check(t, c, bob, "object.read", "object:Nope__c"), integration.CodeUpstreamError, "")
+	// The describe path is the sObject's own.
+	for _, call := range f.srv.Calls() {
+		if strings.Contains(call.Path, "/sobjects/Ghost__c") && call.Path != "/inst/services/data/"+testVersion+"/sobjects/Ghost__c/describe" {
+			t.Errorf("describe path %s", call.Path)
+		}
+	}
+}
+
+// Finding: a managed package's permission set is permset:<ns>__<Name> and
+// the namespace is part of the match.
+func TestPermSetNamespace(t *testing.T) {
+	f, c := setup(t)
+	expect(t, check(t, c, dana, "permset.assigned", "permset:acme__Billing"), integration.CodeAllowed, "acme__Billing")
+	qs := f.queriesFrom("PermissionSetAssignment")
+	if len(qs) != 1 || qs[0] != "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '"+danaID+"' AND PermissionSet.Name = 'Billing' AND PermissionSet.NamespacePrefix = 'acme'" {
+		t.Errorf("query %q", qs)
+	}
+	// The unprefixed name matches only sets without a namespace, and the
+	// prefixed one only the package's set.
+	expect(t, check(t, c, dana, "permset.assigned", "permset:Billing"), integration.CodeDenied, "Billing")
+	expect(t, check(t, c, bob, "permset.assigned", "permset:Billing"), integration.CodeAllowed, "Billing")
+	expect(t, check(t, c, bob, "permset.assigned", "permset:acme__Billing"), integration.CodeDenied, "acme__Billing")
+	expect(t, check(t, c, dana, "permset.assigned", "permset:other__Billing"), integration.CodeDenied, "other__Billing")
+	before := len(f.queriesFrom("PermissionSetAssignment"))
+	for _, bad := range []string{"permset:acme__", "permset:__Billing", "permset:a__b__c", "permset:1ns__Billing", "permset:acme__Bill'ing", "permset:ac me__Billing"} {
+		expect(t, check(t, c, dana, "permset.assigned", bad), integration.CodeInvalidRequest, "")
+	}
+	if n := len(f.queriesFrom("PermissionSetAssignment")); n != before {
+		t.Error("a malformed permset resource reached the query")
+	}
+}
+
+// Finding: upstream error codes and MaxAccessLevel are validated before they
+// reach a decision text or a log line.
+func TestUpstreamStringsSanitised(t *testing.T) {
+	f, c := setup(t)
+	f.errors["UserRecordAccess"] = sfErr{400, "INVALID_TYPE " + itest.Canary}
+	expect(t, check(t, c, dana, "record.read", "record:"+acctID), integration.CodeUpstreamError, "")
+	f.errors["UserRecordAccess"] = sfErr{403, "insufficient-access " + itest.Canary}
+	expect(t, check(t, c, dana, "record.read", "record:"+acctID), integration.CodeCredentialRejected, "")
+	f.errors["UserRecordAccess"] = sfErr{400, "MALFORMED_QUERY"}
+	d := check(t, c, dana, "record.read", "record:"+acctID)
+	expect(t, d, integration.CodeUnsupported, "MALFORMED_QUERY")
+	delete(f.errors, "UserRecordAccess")
+	f.recordAccess[bobID+"|"+acctID] = recordAccessRow{RecordID: acctID, HasReadAccess: true, MaxAccessLevel: itest.Canary}
+	expect(t, check(t, c, bob, "record.read", "record:"+acctID), integration.CodeAllowed, "max access level unknown")
+	f.recordAccess[bobID+"|"+acctID] = recordAccessRow{RecordID: acctID, MaxAccessLevel: "None"}
+	expect(t, check(t, c, bob, "record.read", "record:"+acctID), integration.CodeDenied, "max access level None")
+	// The apiError's own string, which reaches logs, carries no raw code.
+	e := decodeAPIError(&httpx.Response{Status: 400, Body: []byte(`[{"errorCode":"BAD code","message":"m"},{"errorCode":"INVALID_FIELD"},{"errorCode":"x"}]`)})
+	if got := e.Error(); got != "salesforce: HTTP 400 unknown error,INVALID_FIELD" {
+		t.Errorf("apiError: %q", got)
+	}
+}
+
+// Finding: instance_url from the token response is used only when its host
+// is the configured url's or a Salesforce domain.
+func TestInstanceURLUntrustedHost(t *testing.T) {
+	f := newFake(t)
+	f.instanceURL = "https://evil.example.com/inst"
+	deps, logs := itest.Deps(t, f.srv)
+	s := itest.Settings("sf", "salesforce", baseValues(f.srv.URL), map[string]secret.Secret{"credential": keySecret(t)})
+	c, err := Integration{}.New(context.Background(), s, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, check(t, c, dana, "record.read", "record:"+acctID), integration.CodeAllowed, "")
+	for _, call := range f.srv.Calls() {
+		if strings.HasPrefix(call.Path, "/inst/") {
+			t.Errorf("used the untrusted instance_url: %s", call.Path)
+		}
+	}
+	if !strings.Contains(logs.String(), "untrusted host") || !strings.Contains(logs.String(), "evil.example.com") {
+		t.Errorf("no debug log about the ignored instance_url:\n%s", logs.String())
+	}
+	conn := &Connection{url: "https://acme.my.salesforce.com", logger: deps.Logger}
+	for _, cs := range []struct {
+		inst string
+		want string
+	}{
+		{"https://acme.my.salesforce.com", "https://acme.my.salesforce.com"},
+		{"https://ACME.my.salesforce.com/", "https://ACME.my.salesforce.com"},
+		{"https://na139.salesforce.com", "https://na139.salesforce.com"},
+		{"https://acme--dev.sandbox.my.salesforce.com", "https://acme--dev.sandbox.my.salesforce.com"},
+		{"https://acme.lightning.force.com", "https://acme.lightning.force.com"},
+		{"https://acme.my.salesforce.mil", "https://acme.my.salesforce.mil"},
+		{"https://salesforce.com", "https://acme.my.salesforce.com"},
+		{"https://evilsalesforce.com", "https://acme.my.salesforce.com"},
+		{"https://acme.my.salesforce.com.evil.example", "https://acme.my.salesforce.com"},
+		{"https://user@acme.my.salesforce.com", "https://acme.my.salesforce.com"},
+		{"http://acme.my.salesforce.com", "https://acme.my.salesforce.com"},
+		{"https://acme.my.salesforce.com?x=1", "https://acme.my.salesforce.com"},
+		{"", "https://acme.my.salesforce.com"},
+	} {
+		conn.setInstanceURL(cs.inst)
+		if got := conn.apiBase(); got != cs.want {
+			t.Errorf("instance_url %q -> base %q, want %q", cs.inst, got, cs.want)
+		}
+	}
 }
 
 // --- checks -----------------------------------------------------------------
@@ -729,12 +1129,8 @@ func TestRecordCreateHint(t *testing.T) {
 func TestObjectQueryShapeAndUnknowns(t *testing.T) {
 	f, c := setup(t)
 	expect(t, check(t, c, bob, "object.read", "object:Account"), integration.CodeAllowed, "profile Minimum Access")
-	qs := f.queriesFrom("ObjectPermissions")
-	want := "SELECT PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords, Parent.IsOwnedByProfile, Parent.Name FROM ObjectPermissions WHERE SobjectType = 'Account' AND ParentId IN (SELECT PermissionSetId FROM PermissionSetAssignment WHERE AssigneeId = '" + bobID + "')"
-	if len(qs) != 1 || qs[0] != want {
-		t.Errorf("query %q\nwant  %q", qs, want)
-	}
-	// Zero rows: nothing grants the object, a deny.
+	expectQuery(t, f.queriesFrom("ObjectPermissions"), "SELECT PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords, Parent.IsOwnedByProfile, Parent.Name FROM ObjectPermissions WHERE SobjectType = 'Account' AND ParentId IN <assigned>")
+	// Zero rows for an object that exists: nothing grants it, a deny.
 	expect(t, check(t, c, bob, "object.read", "object:Invoice__c"), integration.CodeDenied, "Invoice__c")
 	// The object does not exist: unknown.
 	f.errors["ObjectPermissions"] = sfErr{400, "INVALID_TYPE"}
@@ -747,22 +1143,14 @@ func TestObjectQueryShapeAndUnknowns(t *testing.T) {
 func TestFieldQueryShapeAndUnknowns(t *testing.T) {
 	f, c := setup(t)
 	expect(t, check(t, c, bob, "field.read", "field:Account.Rating"), integration.CodeAllowed, "permission set Readers")
-	qs := f.queriesFrom("FieldPermissions")
-	want := "SELECT PermissionsRead, PermissionsEdit, Parent.IsOwnedByProfile, Parent.Name FROM FieldPermissions WHERE SobjectType = 'Account' AND Field = 'Account.Rating' AND ParentId IN (SELECT PermissionSetId FROM PermissionSetAssignment WHERE AssigneeId = '" + bobID + "')"
-	if len(qs) != 1 || qs[0] != want {
-		t.Errorf("query %q\nwant  %q", qs, want)
-	}
+	expectQuery(t, f.queriesFrom("FieldPermissions"), "SELECT PermissionsRead, PermissionsEdit, Parent.IsOwnedByProfile, Parent.Name FROM FieldPermissions WHERE SobjectType = 'Account' AND Field = 'Account.Rating' AND ParentId IN <assigned>")
 	expect(t, check(t, c, bob, "field.read", "field:Account.Name"), integration.CodeUnsupported, "no FieldPermissions rows")
 }
 
 func TestSystemPermissionDescribe(t *testing.T) {
 	f, c := setup(t)
 	expect(t, check(t, c, dana, "system.permission", "permission:PermissionsViewSetup"), integration.CodeAllowed, "profile Sales")
-	qs := f.queriesFrom("PermissionSet")
-	want := "SELECT Id, Name, IsOwnedByProfile FROM PermissionSet WHERE PermissionsViewSetup = true AND Id IN (SELECT PermissionSetId FROM PermissionSetAssignment WHERE AssigneeId = '" + danaID + "')"
-	if len(qs) != 1 || qs[0] != want {
-		t.Errorf("query %q\nwant  %q", qs, want)
-	}
+	expectQuery(t, f.queriesFrom("PermissionSet"), "SELECT Id, Name, IsOwnedByProfile FROM PermissionSet WHERE PermissionsViewSetup = true AND Id IN <assigned>")
 	expect(t, check(t, c, dana, "system.permission", "permission:PermissionsNotAThing"), integration.CodeInvalidRequest, "PermissionsNotAThing")
 	if len(f.queriesFrom("PermissionSet")) != 1 {
 		t.Error("an unknown permission name reached the query")
@@ -901,6 +1289,9 @@ func TestProbe(t *testing.T) {
 	}
 	if qs := f.queriesFrom("User"); len(qs) != 1 || qs[0] != "SELECT Id, Username, IsActive FROM User WHERE Username = '"+testUsername+"'" {
 		t.Errorf("probe user query %q", qs)
+	}
+	if qs := f.queriesFrom("UserLogin"); len(qs) != 1 || qs[0] != "SELECT IsFrozen FROM UserLogin WHERE UserId = '005000000000000AAA'" {
+		t.Errorf("probe frozen query %q", qs)
 	}
 	f.mu.Lock()
 	f.remaining = 1200
@@ -1162,7 +1553,7 @@ func TestAction_permset_assigned_allow(t *testing.T) {
 	f, c := setup(t)
 	expect(t, check(t, c, dana, "permset.assigned", "permset:Sales_Ops"), integration.CodeAllowed, "Sales_Ops")
 	qs := f.queriesFrom("PermissionSetAssignment")
-	if len(qs) != 1 || qs[0] != "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '"+danaID+"' AND PermissionSet.Name = 'Sales_Ops'" {
+	if len(qs) != 1 || qs[0] != "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '"+danaID+"' AND PermissionSet.Name = 'Sales_Ops' AND PermissionSet.NamespacePrefix = null" {
 		t.Errorf("query %q", qs)
 	}
 }

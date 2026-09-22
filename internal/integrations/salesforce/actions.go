@@ -60,12 +60,21 @@ var actions = func() map[string]action {
 // in a SOQL statement without further escaping: ids and API names are
 // regex-validated, email is validated and escaped by the caller.
 type target struct {
-	recordID string // record:<Id>
-	object   string // object:<ApiName>, field:<Object>.<Field>
-	field    string // field:<Object>.<Field>
-	perm     string // permission:<PermissionsXxx>
-	permSet  string // permset:<ApiName>
-	email    string // user:<email>, raw (not escaped)
+	recordID  string // record:<Id>
+	object    string // object:<ApiName>, field:<Object>.<Field>
+	field     string // field:<Object>.<Field>
+	perm      string // permission:<PermissionsXxx>
+	permSet   string // permset:<Name> or permset:<ns>__<Name>: the Name part
+	permSetNS string // permset:<ns>__<Name>: the namespace prefix, "" for none
+	email     string // user:<email>, raw (not escaped)
+}
+
+// permSetFull renders the permission set as it was asked for.
+func (t target) permSetFull() string {
+	if t.permSetNS != "" {
+		return t.permSetNS + "__" + t.permSet
+	}
+	return t.permSet
 }
 
 // parseTarget validates the resource against what the action needs.
@@ -74,7 +83,7 @@ type target struct {
 //	object:<ApiName>                object.*
 //	field:<Object>.<Field>          field.*
 //	permission:<PermissionsXxx>     system.permission
-//	permset:<ApiName>               permset.assigned
+//	permset:<ApiName>               permset.assigned (also permset:<ns>__<ApiName>)
 //	user:<email>                    user.active
 func parseTarget(a action, res catalog.Resource) (target, error) {
 	var t target
@@ -123,12 +132,25 @@ func parseTarget(a action, res catalog.Resource) (target, error) {
 		t.perm = res.ID
 	case kindPermSet:
 		if res.Type != "permset" {
-			return t, fmt.Errorf("action %s needs a permset:<ApiName> resource, not %s:", a.name, res.Type)
+			return t, fmt.Errorf("action %s needs a permset:<ApiName> or permset:<ns>__<ApiName> resource, not %s:", a.name, res.Type)
 		}
-		if err := validateAPIName(res.ID); err != nil {
+		// A managed package's set is <NamespacePrefix>__<Name>; developer
+		// names themselves never contain two consecutive underscores, so the
+		// first "__" is the separator.
+		name := res.ID
+		if ns, rest, ok := strings.Cut(res.ID, "__"); ok {
+			if err := validateAPIName(ns); err != nil {
+				return t, fmt.Errorf("namespace prefix: %w", err)
+			}
+			if strings.Contains(rest, "__") {
+				return t, fmt.Errorf("permset resource %q must be permset:<ApiName> or permset:<ns>__<ApiName>", res.Raw)
+			}
+			t.permSetNS, name = ns, rest
+		}
+		if err := validateAPIName(name); err != nil {
 			return t, err
 		}
-		t.permSet = res.ID
+		t.permSet = name
 	case kindUser:
 		switch res.Type {
 		case "user":
