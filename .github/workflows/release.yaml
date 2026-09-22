@@ -3,17 +3,44 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, e.g. v0.1.0. Tags the head of main.
+        required: true
 
 permissions:
   contents: write
   packages: write
 
+env:
+  VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+
 jobs:
+  tag:
+    # A manual run creates the tag first. A tag pushed with GITHUB_TOKEN does
+    # not start this workflow again, so each release runs once.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: create tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -eu
+          echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "bad version: $VERSION"; exit 1; }
+          test "$GITHUB_REF" = refs/heads/main || { echo "run this from main"; exit 1; }
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag -a "$VERSION" -m "hallpass $VERSION"
+          git push origin "refs/tags/$VERSION"
+
   binaries:
+    needs: tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: refs/tags/${{ env.VERSION }}
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
@@ -26,9 +53,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   image:
+    needs: tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.VERSION }}
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -41,13 +71,13 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
       - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: VERSION=${{ github.ref_name }}
+          build-args: VERSION=${{ env.VERSION }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
