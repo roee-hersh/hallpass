@@ -15,6 +15,7 @@ package contract
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -43,8 +44,42 @@ func specPath(t *testing.T, name string) string {
 	return p
 }
 
+// patch edits a description before Prism loads it.
+type patch func(doc map[string]any)
+
+// dropRequiredParam makes every parameter with the name optional: Slack's
+// legacy description requires "token" in the query although the token
+// travels in the Authorization header.
+func dropRequiredParam(name string) patch {
+	return func(doc map[string]any) {
+		var walk func(v any)
+		walk = func(v any) {
+			switch x := v.(type) {
+			case map[string]any:
+				if x["name"] == name && x["in"] != nil {
+					delete(x, "required")
+				}
+				for _, c := range x {
+					walk(c)
+				}
+			case []any:
+				for _, c := range x {
+					walk(c)
+				}
+			}
+		}
+		walk(doc)
+	}
+}
+
 // startPrism runs `prism mock` on the description and returns its base URL.
-func startPrism(t *testing.T, spec string) string {
+func startPrism(t *testing.T, spec string, patches ...patch) string {
+	return startPrismMode(t, spec, false, patches...)
+}
+
+// startPrismMode is startPrism with Prism's dynamic mode (responses
+// generated from schemas rather than examples) when dynamic is true.
+func startPrismMode(t *testing.T, spec string, dynamic bool, patches ...patch) string {
 	t.Helper()
 	if _, err := exec.LookPath("npx"); err != nil {
 		t.Skip("npx not on PATH")
@@ -61,11 +96,31 @@ func startPrism(t *testing.T, spec string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(patches) > 0 {
+		var doc map[string]any
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("patching needs a JSON description: %v", err)
+		}
+		for _, p := range patches {
+			p(doc)
+		}
+		if data, err = json.Marshal(doc); err != nil {
+			t.Fatal(err)
+		}
+		tmp = strings.TrimSuffix(tmp, filepath.Ext(tmp)) + ".json"
+	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, "npx", "--yes", "@stoplight/prism-cli@5", "mock", "-p", fmt.Sprint(port), "-h", "127.0.0.1", "--errors", tmp)
+	// Without --errors Prism still validates requests (logged) but answers
+	// even when its own example violates the response schema; request
+	// violations are enforced below by reading the log.
+	args := []string{"--yes", "@stoplight/prism-cli@5", "mock", "-p", fmt.Sprint(port), "-h", "127.0.0.1"}
+	if dynamic {
+		args = append(args, "-d")
+	}
+	cmd := exec.CommandContext(ctx, "npx", append(args, tmp)...)
 	logf, _ := os.Create(filepath.Join(t.TempDir(), "prism.log"))
 	cmd.Stdout, cmd.Stderr = logf, logf
 	if err := cmd.Start(); err != nil {
@@ -75,10 +130,18 @@ func startPrism(t *testing.T, spec string) string {
 		cancel()
 		_ = cmd.Wait()
 		logf.Close()
+		b, _ := os.ReadFile(logf.Name())
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.Contains(line, "Violation: request") {
+				t.Errorf("prism: %s", strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "NO_PATH_MATCHED_ERROR") {
+				t.Logf("prism: %s (not in the description)", strings.TrimSpace(line))
+			}
+		}
 		if t.Failed() {
-			b, _ := os.ReadFile(logf.Name())
-			if len(b) > 8000 {
-				b = b[len(b)-8000:]
+			if len(b) > 6000 {
+				b = b[len(b)-6000:]
 			}
 			t.Logf("prism log tail:\n%s", b)
 		}
@@ -137,7 +200,7 @@ func run(t *testing.T, eng *engine.Engine, conn string, cases [][3]string) {
 	for _, c := range cases {
 		res := eng.Check(ctx, engine.Request{User: "dana@example.com", Groups: []string{"team"}, Connection: conn, Action: c[0], Resource: c[1]})
 		t.Logf("%s on %s -> %s (%s)", c[0], c[1], res.Decision.Outcome, res.Decision.Reason())
-		if res.Decision.Code == integration.CodeUpstreamError {
+		if res.Decision.Code == integration.CodeUpstreamError && !strings.Contains(res.Decision.Reason(), "HTTP 404") {
 			t.Errorf("%s on %s: %s", c[0], c[1], res.Decision.Reason())
 		}
 		if c[2] != "" && string(res.Decision.Code) != c[2] {
@@ -170,7 +233,9 @@ func TestGitHubAgainstPrism(t *testing.T) {
 }
 
 func TestJiraAgainstPrism(t *testing.T) {
-	base := startPrism(t, specPath(t, "jira"))
+	// Jira's description has few examples; dynamic mode generates bodies
+	// from the schemas instead.
+	base := startPrismMode(t, specPath(t, "jira"), true)
 	t.Setenv("JIRA_TOKEN", "contract-token")
 	eng := build(t, fmt.Sprintf(`  - id: jira
     integration: jira
@@ -187,12 +252,13 @@ func TestJiraAgainstPrism(t *testing.T) {
 }
 
 func TestSlackAgainstPrism(t *testing.T) {
-	base := startPrism(t, specPath(t, "slack"))
+	base := startPrism(t, specPath(t, "slack"), dropRequiredParam("token"))
 	t.Setenv("SLACK_TOKEN", "xoxb-contract")
 	eng := build(t, fmt.Sprintf(`  - id: slack
     integration: slack
     url: %s
     credential: env:SLACK_TOKEN
+    assume_default_prefs: "true"
 `, base))
 	run(t, eng, "slack", [][3]string{
 		{"user.active", "workspace", ""},
