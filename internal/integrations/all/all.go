@@ -7,6 +7,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/argocd"
 	"github.com/roee-hersh/hallpass/internal/integrations/confluence"
 	"github.com/roee-hersh/hallpass/internal/integrations/fake"
+	"github.com/roee-hersh/hallpass/internal/integrations/github"
 	"github.com/roee-hersh/hallpass/internal/integrations/gitlab"
 	"github.com/roee-hersh/hallpass/internal/integrations/jira"
 	"github.com/roee-hersh/hallpass/internal/integrations/kubernetes"
@@ -19,6 +20,7 @@ func Registry() *integration.Registry {
 	r.Register(fake.Integration{})
 	r.Register(kubernetes.Integration{})
 	r.Register(argocd.Integration{})
+	r.Register(github.Integration{})
 	r.Register(gitlab.Integration{})
 	r.Register(jira.Integration{})
 	r.Register(confluence.Integration{})

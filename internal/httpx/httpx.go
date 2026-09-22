@@ -504,8 +504,15 @@ func Classify(err error) *integration.Error {
 	return integration.Wrap(integration.CodeUpstreamError, err, "upstream call failed")
 }
 
-// Status returns the HTTP status carried by err, or 0.
+// Status returns the HTTP status carried by err, or 0. An error that has
+// already been classified into an *integration.Error reports 0, so a
+// failure from an earlier stage (a token exchange, a lookup inside Auth) is
+// never mistaken for a status of the call at hand.
 func Status(err error) int {
+	var ie *integration.Error
+	if errors.As(err, &ie) {
+		return 0
+	}
 	var se *StatusError
 	if errors.As(err, &se) {
 		return se.Status
