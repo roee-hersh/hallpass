@@ -24,7 +24,7 @@ Jira issue or scale a deployment, the bot can, even when Dana could not. Copying
 permission model into your own policy engine drifts out of date the day you write it.
 
 hallpass asks the source of truth instead: Kubernetes `SubjectAccessReview`, Jira's permission API,
-GitHub collaborator roles, AWS IAM policy simulation, and so on. One API, eleven systems, no
+GitHub collaborator roles, AWS IAM policy simulation, and so on. One API, twelve systems, no
 synced copy of anyone's permissions.
 
 ```mermaid
@@ -181,6 +181,7 @@ service from starting.
 | slack | ready |
 | aws | ready |
 | googleworkspace | ready |
+| googlecloud | ready |
 | microsoft365 | ready |
 | salesforce | ready (UNVERIFIED, see docs) |
 | fake | for smoke tests |
