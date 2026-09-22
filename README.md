@@ -119,7 +119,7 @@ service from starting.
 | jira (Cloud) | ready |
 | confluence (Cloud) | ready |
 | slack | ready |
-| aws | planned |
+| aws | ready |
 | googleworkspace | planned |
 | microsoft365 | planned |
 | salesforce | planned |
