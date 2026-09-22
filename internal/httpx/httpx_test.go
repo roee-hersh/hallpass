@@ -285,3 +285,65 @@ func TestRedact(t *testing.T) {
 		t.Fatal(PathEscape("a/b c"))
 	}
 }
+
+func TestTransportTimeoutsFollowOption(t *testing.T) {
+	// A long per-connection timeout must not be capped by a fixed header
+	// wait; connect and handshake stay bounded by min(5s, timeout).
+	tr, err := NewTransport(Options{Timeout: 12 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.ResponseHeaderTimeout != 0 && tr.ResponseHeaderTimeout < 12*time.Second {
+		t.Errorf("ResponseHeaderTimeout %v caps a 12s timeout", tr.ResponseHeaderTimeout)
+	}
+	if tr.TLSHandshakeTimeout != 5*time.Second {
+		t.Errorf("TLSHandshakeTimeout %v, want 5s for a 12s timeout", tr.TLSHandshakeTimeout)
+	}
+	tr, err = NewTransport(Options{Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.TLSHandshakeTimeout != 2*time.Second {
+		t.Errorf("TLSHandshakeTimeout %v, want 2s for a 2s timeout", tr.TLSHandshakeTimeout)
+	}
+	tr, err = NewTransport(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.ResponseHeaderTimeout != 0 && tr.ResponseHeaderTimeout < integration.DefaultTimeout {
+		t.Errorf("ResponseHeaderTimeout %v caps the default timeout", tr.ResponseHeaderTimeout)
+	}
+}
+
+func TestSlowHeadersWithinTimeout(t *testing.T) {
+	// The upstream answers after 1.5 s. A connection whose timeout is 3 s
+	// must get the response; one whose timeout is 500 ms must time out.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(1500 * time.Millisecond):
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	pool := srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	for _, tc := range []struct {
+		timeout time.Duration
+		ok      bool
+	}{{3 * time.Second, true}, {500 * time.Millisecond, false}} {
+		hc, err := NewHTTPClient(Options{RootCAs: pool, Timeout: tc.timeout})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &Client{HTTP: hc, Base: srv.URL, Sleep: func(context.Context, time.Duration) error { return nil }}
+		var out struct{ OK bool }
+		_, err = c.GetJSON(context.Background(), "/", nil, &out)
+		if tc.ok && (err != nil || !out.OK) {
+			t.Errorf("timeout %v: %v (ok=%v)", tc.timeout, err, out.OK)
+		}
+		if !tc.ok && Classify(err).Code != integration.CodeUpstreamTimeout {
+			t.Errorf("timeout %v: got %v, want upstream_timeout", tc.timeout, Classify(err))
+		}
+	}
+}

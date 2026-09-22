@@ -132,12 +132,22 @@ func TestSettings(t *testing.T) {
 }
 
 func TestValidateHTTPSURL(t *testing.T) {
-	for _, ok := range []string{"", "https://x", "http://localhost:8080", "http://127.0.0.1:1"} {
+	for _, ok := range []string{
+		"", "https://x", "http://localhost:8080", "http://localhost", "http://127.0.0.1:1",
+		"http://127.0.0.1", "http://127.1.2.3/api", "http://[::1]:9", "http://[::1]",
+	} {
 		if err := ValidateHTTPSURL(ok); err != nil {
 			t.Error(ok, err)
 		}
 	}
-	for _, bad := range []string{"http://example.com", "https://x/?a=b", "https://x/#f", "ftp://x", "https://x y"} {
+	for _, bad := range []string{
+		"http://example.com", "https://x/?a=b", "https://x/#f", "ftp://x", "https://x y",
+		// Loopback lookalikes: the host is not loopback, so a credential would
+		// travel in clear text to wherever DNS points.
+		"http://localhost.example.com", "http://localhostx", "http://localhost.evil:8080",
+		"http://127.0.0.1.evil.com", "http://127.0.0.1x", "http://[::1].evil.com",
+		"http://localhost@evil.com", "http://10.0.0.1", "http://[::2]", "https://u:p@x",
+	} {
 		if err := ValidateHTTPSURL(bad); err == nil {
 			t.Error(bad, "accepted")
 		}

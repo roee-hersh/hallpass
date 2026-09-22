@@ -9,7 +9,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -167,8 +169,11 @@ var CommonFields = map[string]bool{
 	"ca_file": true, "tls_server_name": true, "proxy_url": true, "timeout": true,
 }
 
-// ValidateHTTPSURL accepts https:// URLs (and http://localhost or
-// http://127.0.0.1 for local testing) with no query, fragment or userinfo.
+// ValidateHTTPSURL accepts https:// URLs with no query, fragment or userinfo.
+// Plain http:// is allowed only when the host is exactly "localhost" or a
+// loopback IP address (127.0.0.0/8, ::1), for local testing; a name that
+// merely starts with "localhost" or "127.0.0.1" resolves wherever DNS says
+// and would carry the credential in clear text, so it is rejected.
 func ValidateHTTPSURL(v string) error {
 	if v == "" {
 		return nil
@@ -176,13 +181,31 @@ func ValidateHTTPSURL(v string) error {
 	if strings.ContainsAny(v, " \t\r\n#?") {
 		return fmt.Errorf("url %q must not contain whitespace, '?' or '#'", v)
 	}
-	if strings.HasPrefix(v, "https://") {
-		return nil
+	u, err := url.Parse(v)
+	if err != nil {
+		return fmt.Errorf("url %q: %v", v, err)
 	}
-	if strings.HasPrefix(v, "http://localhost") || strings.HasPrefix(v, "http://127.0.0.1") || strings.HasPrefix(v, "http://[::1]") {
+	if u.User != nil {
+		return fmt.Errorf("url %q must not contain userinfo", v)
+	}
+	switch u.Scheme {
+	case "https":
 		return nil
+	case "http":
+		if isLoopbackHost(u.Hostname()) {
+			return nil
+		}
 	}
 	return fmt.Errorf("url %q must start with https://", v)
+}
+
+// isLoopbackHost reports whether host is "localhost" or a loopback IP.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Settings are the validated config values of one connection.
