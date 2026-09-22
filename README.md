@@ -94,7 +94,8 @@ option to skip TLS verification.
 Top-level keys: `api_key`, `listen` (default `:8080`), `decision_log` (path, `stderr`, `stdout` or
 `none`), `decision_cache_seconds` (default 30, 0 disables), `identity_cache_seconds` (default 900).
 
-`hallpass catalog <integration>` prints the keys and actions of an integration.
+`hallpass catalog <integration>` prints the keys and actions of an integration. `examples/hallpass.yaml`
+carries a commented example for every integration.
 
 ## Commands
 
@@ -153,7 +154,9 @@ parameters, body fields, AWS operation members. The contract tests run the integ
 Prism, which answers from those descriptions with request validation
 (`go test -tags contract ./test/contract/`, needs node). The live test takes a cases file (see
 `examples/live-cases.yaml`) that names a config file and the answers you expect from your own
-systems; run it once after setting up each connection.
+systems; run it once after setting up each connection. Every resource parser has a fuzz target
+(`go test -run '^$' -fuzz=Fuzz ./internal/integrations/<name>/`) that asserts an accepted resource is
+made only of validated pieces before it reaches a URL or query; CI runs them nightly.
 
 ## Design notes
 
