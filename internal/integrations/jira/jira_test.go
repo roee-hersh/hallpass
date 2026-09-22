@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integration/itest"
@@ -238,11 +240,18 @@ func jsonNum(n int64) string { return strconv.FormatInt(n, 10) }
 
 func setup(t *testing.T, mode string, values map[string]string) (*itest.Server, *fakeJira, integration.Connection) {
 	t.Helper()
+	return setupClock(t, mode, values, nil)
+}
+
+// setupClock is setup with an injected clock (nil for the wall clock).
+func setupClock(t *testing.T, mode string, values map[string]string, now func() time.Time) (*itest.Server, *fakeJira, integration.Connection) {
+	t.Helper()
 	srv := itest.NewServer(t)
 	srv.UseSpec(itest.SpecFromEnv(t, "jira"), itest.SpecOptions{StripPrefix: []string{`/ex/jira/[^/]+`}, IgnorePaths: []string{`^/_edge/tenant_info$`, `/oauth/token$`}})
 	f := newFake(t, mode)
 	srv.Handle("", "*", f.handler)
 	deps, logs := itest.Deps(t, srv)
+	deps.Now = now
 	f.logs = logs
 	oldGW, oldTok := Gateway, TokenURL
 	Gateway, TokenURL = srv.URL, srv.URL+"/oauth/token"
@@ -585,6 +594,42 @@ func TestOAuthClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	itest.ExpectCode(t, check(t, c3, dana, "ADMINISTER", "global"), integration.CodeCredentialRejected)
+}
+
+// TestOAuthClientExpiryUsesClock: the token's expiry is computed from the
+// injected clock, so the TokenSource that reads the same clock refreshes
+// 5 minutes before the hour expires_in grants, and not before.
+func TestOAuthClientExpiryUsesClock(t *testing.T) {
+	// A clock years away from wall time: an expiry computed with time.Now()
+	// would already be in the past by this clock and force a fetch per call.
+	var mu sync.Mutex
+	now := time.Date(2031, 3, 1, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		now = now.Add(d)
+	}
+	_, f, c := setupClock(t, ModeOAuthClient, nil, clock)
+	itest.ExpectCode(t, check(t, c, dana, "ADMINISTER", "global"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, dana, "ADMINISTER", "global"), integration.CodeAllowed)
+	if f.tokenCalls != 1 {
+		t.Fatalf("token endpoint called %d times, want 1", f.tokenCalls)
+	}
+	advance(54 * time.Minute) // inside expires_in minus the 5 minute early refresh
+	itest.ExpectCode(t, check(t, c, dana, "ADMINISTER", "global"), integration.CodeAllowed)
+	if f.tokenCalls != 1 {
+		t.Errorf("token endpoint called %d times after 54 min, want 1", f.tokenCalls)
+	}
+	advance(2 * time.Minute) // 56 min: within 5 minutes of expiry
+	itest.ExpectCode(t, check(t, c, dana, "ADMINISTER", "global"), integration.CodeAllowed)
+	if f.tokenCalls != 2 {
+		t.Errorf("token endpoint called %d times after 56 min, want 2", f.tokenCalls)
+	}
 }
 
 func TestIssueAndGlobalChecks(t *testing.T) {

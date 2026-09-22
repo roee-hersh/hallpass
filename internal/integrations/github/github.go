@@ -56,41 +56,16 @@ func (Integration) Fields() []integration.Field {
 		integration.CredentialField(true, "the App's private key, PEM (PKCS#1 or PKCS#8)"),
 		{Name: "identity_mode", Default: modeSAML, Enum: []string{modeSAML, modeTemplate, modeMapFile},
 			Description: "how an email becomes a login: saml (organization SAML identities), template (login_template) or map_file (user_map_file)"},
-		{Name: "login_template", Default: "{local}", Validate: validateTemplate,
+		{Name: "login_template", Default: defaultTemplate, Validate: integration.ValidateTemplate,
 			Description: "template mode: placeholders {email}, {local}, {domain}, e.g. {local}-acme"},
-		{Name: "email_domains", Validate: validateEmailDomains,
+		{Name: "email_domains", Validate: integration.ValidateEmailDomains,
 			Description: "template mode (required): comma-separated email domains the template applies to; other domains are unknown"},
 		{Name: "user_map_file", Description: "map_file mode: path to a file of \"email login\" or \"email=login\" lines, # comments; re-read every 60 s"},
 	}
 }
 
-// emailDomainRe is one entry of email_domains.
-var emailDomainRe = regexp.MustCompile(`^[a-z0-9.-]+$`)
-
-// parseEmailDomains splits the comma-separated email_domains value and
-// validates each entry.
-func parseEmailDomains(v string) ([]string, error) {
-	var out []string
-	for _, d := range strings.Split(v, ",") {
-		d = strings.TrimSpace(d)
-		if d == "" {
-			continue
-		}
-		if !emailDomainRe.MatchString(d) {
-			return nil, fmt.Errorf("%q is not a lowercase domain name", d)
-		}
-		out = append(out, d)
-	}
-	if len(out) == 0 {
-		return nil, errors.New("must list at least one domain")
-	}
-	return out, nil
-}
-
-func validateEmailDomains(v string) error {
-	_, err := parseEmailDomains(v)
-	return err
-}
+// defaultTemplate applies when login_template is unset.
+const defaultTemplate = "{local}"
 
 func validateLogin(v string) error {
 	if !validLogin(v) {
@@ -155,7 +130,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		appID:          s.Get("app_id"),
 		installationID: s.Get("installation_id"),
 		mode:           s.Get("identity_mode"),
-		template:       s.Get("login_template"),
+		template:       integration.Template(s.Get("login_template")),
 		mapFile:        s.Get("user_map_file"),
 		logger:         d.Logger,
 		now:            d.Now,
@@ -170,18 +145,18 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		c.mode = modeSAML
 	}
 	if c.template == "" {
-		c.template = "{local}"
+		c.template = defaultTemplate
 	}
 	switch c.mode {
 	case modeSAML:
 	case modeTemplate:
-		if err := validateTemplate(c.template); err != nil {
+		if _, err := integration.ParseTemplate(string(c.template)); err != nil {
 			return nil, fmt.Errorf("login_template: %w", err)
 		}
 		if s.Get("email_domains") == "" {
 			return nil, errors.New("identity_mode template requires email_domains: the template would otherwise map any domain's local part to a login")
 		}
-		domains, err := parseEmailDomains(s.Get("email_domains"))
+		domains, err := integration.ParseEmailDomains(s.Get("email_domains"))
 		if err != nil {
 			return nil, fmt.Errorf("email_domains: %w", err)
 		}
@@ -219,7 +194,7 @@ type Connection struct {
 	appID          string
 	installationID string
 	mode           string
-	template       string
+	template       integration.Template
 	emailDomains   map[string]bool // template mode: lowercase domains the template applies to
 	mapFile        string
 	graphqlURL     string
@@ -237,7 +212,7 @@ type Connection struct {
 	samlMu      sync.Mutex
 	samlIndex   *samlIndex
 	samlLoaded  time.Time
-	samlLoading chan struct{}
+	samlLoading *samlLoad // the fetch in flight, nil when none
 
 	mapMu      sync.Mutex
 	mapEntries map[string]string

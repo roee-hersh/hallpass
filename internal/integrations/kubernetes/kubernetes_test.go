@@ -181,12 +181,51 @@ func TestTemplateAndPrefix(t *testing.T) {
 		t.Error(id.ID)
 	}
 	for _, bad := range []string{"static", "{user}", "{email"} {
-		if err := validateTemplate(bad); err == nil && bad != "{email" {
+		if err := integration.ValidateTemplate(bad); err == nil {
 			t.Errorf("template %q accepted", bad)
 		}
 	}
-	if err := validateTemplate("{domain}/{local}"); err != nil {
+	if err := integration.ValidateTemplate("{domain}/{local}"); err != nil {
 		t.Error(err)
+	}
+}
+
+// TestTemplateValidationShared: username_template is validated by the shared
+// helper both through the field declaration and in New, and an unset value
+// falls back to {email}.
+func TestTemplateValidationShared(t *testing.T) {
+	var field *integration.Field
+	for i := range (Integration{}).Fields() {
+		if f := (Integration{}).Fields()[i]; f.Name == "username_template" {
+			field = &f
+		}
+	}
+	if field == nil || field.Validate == nil || field.Default != "{email}" {
+		t.Fatalf("username_template field: %+v", field)
+	}
+	for _, bad := range []string{"static", "{user}", "{local}{", "{local}}"} {
+		if err := field.Validate(bad); err == nil {
+			t.Errorf("field accepted %q", bad)
+		}
+	}
+	srv := itest.NewServer(t)
+	deps, _ := itest.Deps(t, srv)
+	build := func(tpl string) (integration.Connection, error) {
+		v := map[string]string{"url": srv.URL}
+		if tpl != "" {
+			v["username_template"] = tpl
+		}
+		return Integration{}.New(context.Background(), itest.Settings("k8s", "kubernetes", v, map[string]secret.Secret{"credential": itest.Literal("sa")}), deps)
+	}
+	if _, err := build("{local}{"); err == nil || !strings.Contains(err.Error(), "username_template") {
+		t.Errorf("New accepted an unclosed placeholder: %v", err)
+	}
+	c, err := build("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := c.ResolveIdentity(context.Background(), dana); id.ID != dana.Email {
+		t.Errorf("default template: %q", id.ID)
 	}
 }
 

@@ -31,7 +31,7 @@ func (Integration) Fields() []integration.Field {
 	return []integration.Field{
 		integration.URLField(true, "API server URL, e.g. https://10.20.0.5:6443"),
 		integration.CredentialField(true, "ServiceAccount token allowed to create subjectaccessreviews"),
-		{Name: "username_template", Default: "{email}", Validate: validateTemplate,
+		{Name: "username_template", Default: defaultTemplate, Validate: integration.ValidateTemplate,
 			Description: "how the API server names users: placeholders {email}, {local}, {domain}, e.g. oidc:{email}"},
 		{Name: "group_prefix", Description: "prefix the API server puts on OIDC groups, e.g. oidc:"},
 		{Name: "add_authenticated_group", Default: "true", Enum: []string{"true", "false"},
@@ -39,35 +39,8 @@ func (Integration) Fields() []integration.Field {
 	}
 }
 
-func validateTemplate(v string) error {
-	if !strings.Contains(v, "{email}") && !strings.Contains(v, "{local}") {
-		return errors.New("must contain {email} or {local}, otherwise every user gets the same username")
-	}
-	for _, ph := range placeholders(v) {
-		switch ph {
-		case "email", "local", "domain":
-		default:
-			return fmt.Errorf("unknown placeholder {%s}; use {email}, {local} or {domain}", ph)
-		}
-	}
-	return nil
-}
-
-func placeholders(tpl string) []string {
-	var out []string
-	for {
-		i := strings.Index(tpl, "{")
-		if i < 0 {
-			return out
-		}
-		j := strings.Index(tpl[i:], "}")
-		if j < 0 {
-			return out
-		}
-		out = append(out, tpl[i+1:i+j])
-		tpl = tpl[i+j+1:]
-	}
-}
+// defaultTemplate applies when username_template is unset.
+const defaultTemplate = "{email}"
 
 // Actions of the kubernetes integration.
 func (Integration) Actions() []catalog.Action {
@@ -110,9 +83,17 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	if cred.IsZero() {
 		return nil, errors.New("credential is required")
 	}
+	tplText := s.Get("username_template")
+	if tplText == "" {
+		tplText = defaultTemplate
+	}
+	tpl, err := integration.ParseTemplate(tplText)
+	if err != nil {
+		return nil, fmt.Errorf("username_template: %w", err)
+	}
 	c := &Connection{
 		settings: s,
-		template: s.Get("username_template"),
+		template: tpl,
 		prefix:   s.Get("group_prefix"),
 		addAuth:  s.Bool("add_authenticated_group", true),
 	}
@@ -129,7 +110,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 type Connection struct {
 	settings *integration.Settings
 	client   *httpx.Client
-	template string
+	template integration.Template
 	prefix   string
 	addAuth  bool
 }
@@ -156,11 +137,7 @@ func (c *Connection) Get(ctx context.Context, path string, out any) error {
 }
 
 // Username applies the template to an email.
-func (c *Connection) Username(email string) string {
-	local, domain, _ := strings.Cut(email, "@")
-	r := strings.NewReplacer("{email}", email, "{local}", local, "{domain}", domain)
-	return r.Replace(c.template)
-}
+func (c *Connection) Username(email string) string { return c.template.Render(email) }
 
 // ResolveIdentity is a string transform; Kubernetes has no user directory.
 func (c *Connection) ResolveIdentity(_ context.Context, u integration.User) (integration.Identity, error) {

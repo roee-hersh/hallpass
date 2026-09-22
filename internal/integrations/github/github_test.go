@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,10 +16,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/authx"
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integration/itest"
 	"github.com/roee-hersh/hallpass/internal/secret"
@@ -764,6 +767,133 @@ func TestIdentitySAMLConflicts(t *testing.T) {
 	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUserAmbiguous)
 }
 
+// TestSAMLMapPanicDoesNotWedge: a panic inside the identity listing becomes
+// an error for the caller and for everyone waiting on the same fetch, the
+// in-flight marker is cleared so the next call fetches again, and nothing
+// unwinds through ResolveIdentity.
+func TestSAMLMapPanicDoesNotWedge(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t, nil)
+	c := e.conn.(*Connection)
+	t.Cleanup(func() { samlFetchHook = nil })
+
+	// The leader panics while waiters are parked on its round.
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	var first atomic.Bool
+	samlFetchHook = func() {
+		// Only the first fetch parks; the buffered send cannot race the
+		// test goroutine's receive.
+		if first.CompareAndSwap(false, true) {
+			started <- struct{}{}
+			<-release
+		}
+		panic("boom " + itest.Canary)
+	}
+	const waiters = 3
+	results := make(chan error, waiters+1)
+	go func() {
+		_, err := c.samlMap(ctx)
+		results <- err
+	}()
+	<-started
+	for i := 0; i < waiters; i++ {
+		go func() {
+			wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			_, err := c.samlMap(wctx)
+			results <- err
+		}()
+	}
+	// Let the waiters park on the round, then let the leader panic.
+	c.samlMu.Lock()
+	inflight := c.samlLoading != nil
+	c.samlMu.Unlock()
+	if !inflight {
+		t.Fatal("the round finished before it was released")
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	for i := 0; i < waiters+1; i++ {
+		select {
+		case err := <-results:
+			d := integration.ToDecision(err)
+			var pe *cache.PanicError
+			if d.Code != integration.CodeUpstreamError || !errors.As(err, &pe) || pe.Value != "boom "+itest.Canary {
+				t.Errorf("caller %d: %v", i, err)
+			}
+			// The decision text is fixed; the panic value stays in the cause.
+			itest.AssertNoCanary(t, d.Text)
+		case <-time.After(10 * time.Second):
+			t.Fatal("a caller is still waiting: the in-flight marker was not released")
+		}
+	}
+	c.samlMu.Lock()
+	wedged := c.samlLoading != nil
+	c.samlMu.Unlock()
+	if wedged {
+		t.Fatal("samlLoading still set after the panic")
+	}
+	if !strings.Contains(e.logs.String(), "panicked") {
+		t.Error("the panic was not logged")
+	}
+	itest.AssertNoCanary(t, e.logs.String())
+
+	// Through ResolveIdentity the panic is an unknown decision, not a crash.
+	_, err := e.conn.ResolveIdentity(ctx, integration.User{Email: "zed@example.com"})
+	itest.ExpectCode(t, integration.ToDecision(err), integration.CodeUpstreamError)
+
+	// Once the fault is gone the next call fetches and succeeds.
+	samlFetchHook = nil
+	id, err := e.conn.ResolveIdentity(ctx, integration.User{Email: "zed@example.com"})
+	if err != nil || id.ID != "zed" {
+		t.Fatalf("after the panic: %+v %v", id, err)
+	}
+}
+
+// TestSAMLMapCancelledLeader: a waiter is not failed by the leader's own
+// context ending; it fetches again with its own.
+func TestSAMLMapCancelledLeader(t *testing.T) {
+	e := setup(t, nil)
+	c := e.conn.(*Connection)
+	t.Cleanup(func() { samlFetchHook = nil })
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	started := make(chan struct{}, 1)
+	var fetches atomic.Int32
+	samlFetchHook = func() {
+		if fetches.Add(1) == 1 {
+			started <- struct{}{}
+			<-leaderCtx.Done()
+		}
+	}
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := c.samlMap(leaderCtx)
+		leaderErr <- err
+	}()
+	<-started
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := c.samlMap(context.Background())
+		waiterDone <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancelLeader()
+	if err := <-leaderErr; err == nil {
+		t.Error("the cancelled leader succeeded")
+	}
+	select {
+	case err := <-waiterDone:
+		if err != nil {
+			t.Errorf("waiter after a cancelled leader: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("waiter hung")
+	}
+	if n := fetches.Load(); n != 2 {
+		t.Errorf("fetches = %d, want 2 (leader, then the waiter on its own)", n)
+	}
+}
+
 // TestIdentitySAMLTruncated: a miss on a partial identity list is unknown,
 // not user_not_found. Both the identity cap and the page cap truncate.
 func TestIdentitySAMLTruncated(t *testing.T) {
@@ -842,6 +972,15 @@ func TestIdentitySAMLFilterMismatch(t *testing.T) {
 	}
 }
 
+// TestEmailDomainsSpacedList: `acme.com, acme.io` (with the space) is one
+// list of two domains, and an upper-case entry matches the lower-case email.
+func TestEmailDomainsSpacedList(t *testing.T) {
+	e := setup(t, map[string]string{"identity_mode": "template", "login_template": "{local}", "email_domains": "acme.com, Example.com"})
+	itest.ExpectCode(t, e.check(t, dana, "repo.read", "repo:acme/api"), integration.CodeAllowed)
+	itest.ExpectCode(t, e.check(t, integration.User{Email: "dana@acme.com"}, "repo.read", "repo:acme/api"), integration.CodeAllowed)
+	itest.ExpectCode(t, e.check(t, integration.User{Email: "dana@acme.io"}, "repo.read", "repo:acme/api"), integration.CodeUnsupported)
+}
+
 // TestTemplateEmailDomains: the template applies only to listed domains,
 // so root@attacker.example never becomes the login "root".
 func TestTemplateEmailDomains(t *testing.T) {
@@ -870,16 +1009,18 @@ func TestTemplateEmailDomains(t *testing.T) {
 	if err := build(nil); err == nil || !strings.Contains(err.Error(), "email_domains") {
 		t.Errorf("template without email_domains: %v", err)
 	}
-	for _, bad := range []string{"Example.com", "a b.com", ",", "exa_mple.com"} {
+	for _, bad := range []string{"a b.com", ",", "exa_mple.com", "acme.com,", "acme.com, ,acme.io"} {
 		if err := build(map[string]string{"email_domains": bad}); err == nil {
 			t.Errorf("email_domains %q accepted", bad)
 		}
-		if err := validateEmailDomains(bad); err == nil {
-			t.Errorf("validateEmailDomains(%q) accepted", bad)
+		if err := integration.ValidateEmailDomains(bad); err == nil {
+			t.Errorf("ValidateEmailDomains(%q) accepted", bad)
 		}
 	}
-	if err := build(map[string]string{"email_domains": "acme.com,acme.io"}); err != nil {
-		t.Error(err)
+	for _, good := range []string{"acme.com,acme.io", "acme.com, acme.io", "Example.com"} {
+		if err := build(map[string]string{"email_domains": good}); err != nil {
+			t.Errorf("email_domains %q: %v", good, err)
+		}
 	}
 	// Other modes do not need it.
 	if err := build(map[string]string{"identity_mode": "saml"}); err != nil {
@@ -1000,13 +1141,13 @@ func TestFields(t *testing.T) {
 	if err := validateInstallationID("x1"); err == nil {
 		t.Error("non-numeric installation id accepted")
 	}
-	if err := validateTemplate("static"); err == nil {
+	if err := integration.ValidateTemplate("static"); err == nil {
 		t.Error("template without placeholder accepted")
 	}
-	if err := validateTemplate("{user}"); err == nil {
+	if err := integration.ValidateTemplate("{user}"); err == nil {
 		t.Error("unknown placeholder accepted")
 	}
-	if applyTemplate("{local}-{domain}", "dana@example.com") != "dana-example.com" {
+	if integration.Template("{local}-{domain}").Render("dana@example.com") != "dana-example.com" {
 		t.Error("template")
 	}
 	srv := itest.NewServer(t)

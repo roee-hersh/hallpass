@@ -76,6 +76,7 @@ type Site struct {
 	plain    *httpx.Client // unauthenticated: tenant_info and the token endpoint
 	gateway  string
 	tokenURL string
+	now      func() time.Time
 
 	mu      sync.Mutex
 	cloudID string
@@ -102,6 +103,10 @@ func NewSite(s *integration.Settings, d integration.Deps, product string) (*Site
 		Product:  product,
 		gateway:  strings.TrimRight(Gateway, "/"),
 		tokenURL: TokenURL,
+		now:      d.Now,
+	}
+	if site.now == nil {
+		site.now = time.Now
 	}
 	site.plain = &httpx.Client{HTTP: hc, Logger: d.Logger}
 	secretString := func(context.Context) (string, error) { return cred.GetString() }
@@ -120,7 +125,7 @@ func NewSite(s *integration.Settings, d integration.Deps, product string) (*Site
 		if clientID == "" {
 			return nil, errors.New("client_id is required for auth_mode oauth_client")
 		}
-		ts := &authx.TokenSource{Fetch: site.fetchToken(clientID, cred), Now: d.Now}
+		ts := &authx.TokenSource{Fetch: site.fetchToken(clientID, cred), Now: site.now}
 		auth = httpx.BearerAuth(func(ctx context.Context) (string, error) {
 			t, err := ts.Get(ctx)
 			if err != nil {
@@ -136,7 +141,9 @@ func NewSite(s *integration.Settings, d integration.Deps, product string) (*Site
 }
 
 // fetchToken is the OAuth 2.0 client credentials grant as Atlassian's token
-// endpoint takes it: a JSON body with an audience.
+// endpoint takes it: a JSON body with an audience. The response is the
+// standard one, decoded by authx.FetchToken; a failure is an
+// *authx.TokenError whose message never carries error_description.
 func (s *Site) fetchToken(clientID string, cred secret.Secret) func(context.Context) (authx.Token, error) {
 	return func(ctx context.Context) (authx.Token, error) {
 		sec, err := cred.GetString()
@@ -152,40 +159,8 @@ func (s *Site) fetchToken(clientID string, cred secret.Secret) func(context.Cont
 			"client_secret": sec,
 			"audience":      "api.atlassian.com",
 		}
-		idem := false
-		resp, err := s.plain.Do(ctx, &httpx.Request{Method: http.MethodPost, Path: s.tokenURL, JSON: body, Idempotent: &idem, Accept4xx: true})
-		if err != nil {
-			return authx.Token{}, err
-		}
-		var tr struct {
-			AccessToken string          `json:"access_token"`
-			ExpiresIn   json.RawMessage `json:"expires_in"`
-			Error       string          `json:"error"`
-		}
-		if len(resp.Body) > 0 {
-			_ = json.Unmarshal(resp.Body, &tr)
-		}
-		if resp.Status >= 400 || tr.Error != "" {
-			return authx.Token{}, &authx.TokenError{Status: resp.Status, Code: tr.Error}
-		}
-		if tr.AccessToken == "" {
-			return authx.Token{}, errors.New("token endpoint returned no access_token")
-		}
-		t := authx.Token{Value: tr.AccessToken}
-		if secs := expiresIn(tr.ExpiresIn); secs > 0 {
-			t.Expiry = time.Now().Add(time.Duration(secs) * time.Second)
-		}
-		return t, nil
+		return authx.FetchToken(ctx, s.plain, authx.TokenRequest{URL: s.tokenURL, JSON: body, Now: s.now})
 	}
-}
-
-func expiresIn(raw json.RawMessage) int64 {
-	str := strings.Trim(strings.TrimSpace(string(raw)), `"`)
-	n, err := strconv.ParseInt(str, 10, 64)
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
 }
 
 var cloudIDRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
