@@ -79,6 +79,12 @@ func ParseResource(raw string) (Resource, error) {
 			if !typeRe.MatchString(k) || len(vs) != 1 {
 				return r, fmt.Errorf("resource query key %q must be a single lowercase key", k)
 			}
+			// Percent-decoding can produce bytes the raw check never saw.
+			for _, c := range vs[0] {
+				if c < 0x20 || c == 0x7f {
+					return r, fmt.Errorf("resource query value for %q contains a control character", k)
+				}
+			}
 		}
 		r.Query = q
 	}
