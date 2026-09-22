@@ -358,6 +358,7 @@ func mustPKCS8(t *testing.T, k *rsa.PrivateKey) []byte {
 func setup(t *testing.T, values map[string]string) (*itest.Server, *fakeGoogle, integration.Connection) {
 	t.Helper()
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "google-directory"), itest.SpecFromEnv(t, "google-drive"), itest.SpecFromEnv(t, "google-calendar"), itest.SpecFromEnv(t, "google-gmail")), itest.SpecOptions{IgnorePaths: []string{`^/token$`, `/computeMetadata/`, `:signJwt$`}})
 	f := newFake(t)
 	srv.Handle("POST", "/token", f.token(srv))
 	srv.Handle("", "/admin/*", f.api)
@@ -478,6 +479,7 @@ func TestInvalidGrant(t *testing.T) {
 func setupWith(t *testing.T, f *fakeGoogle, values map[string]string) integration.Connection {
 	t.Helper()
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "google-directory"), itest.SpecFromEnv(t, "google-drive"), itest.SpecFromEnv(t, "google-calendar"), itest.SpecFromEnv(t, "google-gmail")), itest.SpecOptions{IgnorePaths: []string{`^/token$`, `/computeMetadata/`, `:signJwt$`}})
 	srv.Handle("POST", "/token", f.token(srv))
 	srv.Handle("", "/admin/*", f.api)
 	srv.Handle("", "/drive/*", f.api)
@@ -515,6 +517,7 @@ func TestKeyless(t *testing.T) {
 
 func TestBadKey(t *testing.T) {
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "google-directory"), itest.SpecFromEnv(t, "google-drive"), itest.SpecFromEnv(t, "google-calendar"), itest.SpecFromEnv(t, "google-gmail")), itest.SpecOptions{IgnorePaths: []string{`^/token$`, `/computeMetadata/`, `:signJwt$`}})
 	deps, _ := itest.Deps(t, srv)
 	for _, cred := range []string{"not json", `{"client_email":"x@y.z"}`, `{"client_email":"x@y.z","private_key":"nope"}`} {
 		s := itest.Settings("gws", "googleworkspace", map[string]string{"admin_email": adminEmail, "token_url": srv.URL + "/token", "api_url": srv.URL},
@@ -531,6 +534,7 @@ func TestBadKey(t *testing.T) {
 
 func TestNewValidation(t *testing.T) {
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "google-directory"), itest.SpecFromEnv(t, "google-drive"), itest.SpecFromEnv(t, "google-calendar"), itest.SpecFromEnv(t, "google-gmail")), itest.SpecOptions{IgnorePaths: []string{`^/token$`, `/computeMetadata/`, `:signJwt$`}})
 	deps, _ := itest.Deps(t, srv)
 	cred := map[string]secret.Secret{"credential": itest.Literal("{}")}
 	bad := []struct {

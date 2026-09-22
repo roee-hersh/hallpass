@@ -350,6 +350,7 @@ func link(scope string) permOpt {
 func setup(t *testing.T, values map[string]string) (*itest.Server, *fakeGraph, integration.Connection) {
 	t.Helper()
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "msgraph"), itest.SpecOptions{StripPrefix: []string{`/v1\.0`}, IgnorePaths: []string{`/oauth2/v2\.0/token$`}})
 	f := newFake(t)
 	srv.Handle("POST", "/"+tenantID+"/oauth2/v2.0/token", f.token)
 	srv.Handle("", "/v1.0/*", f.graph)
@@ -407,6 +408,7 @@ func TestClientSecretTokenAndCaching(t *testing.T) {
 
 func TestWrongSecretIsCredentialRejected(t *testing.T) {
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "msgraph"), itest.SpecOptions{StripPrefix: []string{`/v1\.0`}, IgnorePaths: []string{`/oauth2/v2\.0/token$`}})
 	f := newFake(t)
 	srv.Handle("POST", "/"+tenantID+"/oauth2/v2.0/token", f.token)
 	srv.Handle("", "/v1.0/*", f.graph)
@@ -469,6 +471,7 @@ func testCert(t *testing.T) (key *rsa.PrivateKey, keyPEM, certFile string, cert 
 func TestCertificateAssertion(t *testing.T) {
 	key, keyPEM, certFile, cert := testCert(t)
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "msgraph"), itest.SpecOptions{StripPrefix: []string{`/v1\.0`}, IgnorePaths: []string{`/oauth2/v2\.0/token$`}})
 	f := newFake(t)
 	tokenURL := srv.URL + "/" + tenantID + "/oauth2/v2.0/token"
 	var assertions int
@@ -534,6 +537,7 @@ func TestCertificateAssertion(t *testing.T) {
 
 func TestNewValidation(t *testing.T) {
 	srv := itest.NewServer(t)
+	srv.UseSpec(itest.SpecFromEnv(t, "msgraph"), itest.SpecOptions{StripPrefix: []string{`/v1\.0`}, IgnorePaths: []string{`/oauth2/v2\.0/token$`}})
 	deps, _ := itest.Deps(t, srv)
 	cases := []map[string]string{
 		{"client_id": clientID},
