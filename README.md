@@ -114,7 +114,7 @@ service from starting.
 |---|---|
 | kubernetes | ready |
 | argocd | ready |
-| gitlab | planned |
+| gitlab | ready |
 | github | planned |
 | jira (Cloud) | planned |
 | confluence (Cloud) | planned |
