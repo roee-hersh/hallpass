@@ -27,12 +27,11 @@ type AWSError struct {
 	RetryAfterSeconds int
 }
 
+// Error names the status and code only. The upstream Message is kept in the
+// field but never rendered: for SignatureDoesNotMatch it can carry the
+// canonical request, and error strings end up in logs and decision texts.
 func (e *AWSError) Error() string {
-	s := fmt.Sprintf("aws: HTTP %d %s", e.Status, e.Code)
-	if e.Message != "" {
-		s += ": " + truncate(e.Message, 200)
-	}
-	return s
+	return fmt.Sprintf("aws: HTTP %d %s", e.Status, e.Code)
 }
 
 // Throttled reports whether the error is a rate limit.

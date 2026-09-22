@@ -400,6 +400,11 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		}
 		principals, missing = nat.Principals, nat.Missing
 		if c.mode == "identity_center" && len(nat.PermissionSets) == 0 {
+			// No assignment is an implicit deny: IAM was never asked, so
+			// implicit_deny_as decides whether that is deny or unknown.
+			if c.implicitDenyAs == "unknown" {
+				return integration.Unsupported("%s has no permission set assigned in account %s", r.Identity.Display, c.accountID), nil
+			}
 			return integration.Denied("%s has no permission set assigned in account %s", r.Identity.Display, c.accountID), nil
 		}
 	}
@@ -424,13 +429,16 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 			}
 			return integration.Decision{}, classify(err, "SimulatePrincipalPolicy")
 		}
-		if res.decision == "allowed" {
+		// An "allowed" that IAM evaluated with condition keys missing is not
+		// trustworthy: a Deny statement conditioned on such a key was skipped.
+		// Only an allow with no missing context settles the check.
+		if res.decision == "allowed" && len(res.missing) == 0 {
 			return integration.Allowed("%s allows %s", p, what), nil
 		}
 		results = append(results, res)
 	}
 
-	// Nothing allowed. Missing context first: the answer depends on it.
+	// Nothing allowed outright. Missing context first: the answer depends on it.
 	var keys []string
 	seen := map[string]bool{}
 	for _, res := range results {
@@ -582,11 +590,13 @@ func (c *Connection) simulate(ctx context.Context, p principal, action, resource
 		if r.Boundary.Allowed != nil && !*r.Boundary.Allowed {
 			out.boundaryDenied = true
 		}
-		// Prefer the per-resource verdict for the requested resource.
+		// Merge the per-resource verdict for the requested resource with
+		// the action-level one: allowed only when both agree, otherwise the
+		// more restrictive decision wins.
 		for _, rr := range r.Resources {
 			if rr.Name == resource || (resource == "*" && len(r.Resources) == 1) {
 				if rr.Decision != "" {
-					out.decision = rr.Decision
+					out.decision = moreRestrictive(out.decision, rr.Decision)
 				}
 				out.missing = append(out.missing, rr.Missing...)
 			}
@@ -601,6 +611,30 @@ func (c *Connection) simulate(ctx context.Context, p principal, action, resource
 		return out, integration.Errorf(integration.CodeUpstreamError, "SimulatePrincipalPolicy returned an unknown decision")
 	}
 	return out, nil
+}
+
+// decisionRank orders IAM decisions from least to most restrictive. An
+// unknown string ranks above every known one so it is never masked.
+func decisionRank(d string) int {
+	switch d {
+	case "allowed":
+		return 0
+	case "implicitDeny":
+		return 1
+	case "explicitDeny":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// moreRestrictive returns whichever of a and b denies harder:
+// explicitDeny > implicitDeny > allowed.
+func moreRestrictive(a, b string) string {
+	if decisionRank(b) > decisionRank(a) {
+		return b
+	}
+	return a
 }
 
 // Probe verifies the assumed role, lists the account's Identity Center roles

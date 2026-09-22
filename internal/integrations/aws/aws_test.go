@@ -65,6 +65,7 @@ type fakeAWS struct {
 	userNames      map[string]string    // userName -> email
 	groups         map[string][]string  // user id -> group ids
 	assignments    map[string][]string  // principal id -> permission set ARNs
+	rowAccount     map[string]string    // permission set ARN -> AccountId to emit instead of acct
 	permissionSets map[string]string    // ARN -> name
 	roles          []fakeRole
 	rolesPerPage   int
@@ -501,7 +502,11 @@ func (f *fakeAWS) serveJSON(w http.ResponseWriter, target, service string, in ma
 		items, next := page(f.assignments[id], str(in, "NextToken"))
 		out := map[string]any{"AccountAssignments": []map[string]string{}}
 		for _, ps := range items {
-			out["AccountAssignments"] = append(out["AccountAssignments"].([]map[string]string), map[string]string{"AccountId": acct, "PermissionSetArn": ps, "PrincipalId": id, "PrincipalType": typ})
+			rowAcct := acct
+			if a, ok := f.rowAccount[ps]; ok {
+				rowAcct = a
+			}
+			out["AccountAssignments"] = append(out["AccountAssignments"].([]map[string]string), map[string]string{"AccountId": rowAcct, "PermissionSetArn": ps, "PrincipalId": id, "PrincipalType": typ})
 		}
 		if next != "" {
 			out["NextToken"] = next
@@ -860,9 +865,34 @@ func TestSimulateDecisions(t *testing.T) {
 	itest.ExpectCode(t, check(t, u, dana, "ec2.terminate", "all"), integration.CodeDenied)
 	itest.ExpectCode(t, check(t, u, dana, "s3.read", bucketKey), integration.CodeAllowed)
 
-	// Resource-specific result wins over EvalDecision.
+	// The resource-specific result and EvalDecision must agree on allowed;
+	// otherwise the more restrictive of the two wins.
 	e.f.mu.Lock()
-	e.f.evalDecision = "implicitDeny"
+	e.f.evalDecision = "implicitDeny" // resource says allowed
+	e.f.mu.Unlock()
+	d = check(t, e, dana, "s3.read", bucketKey)
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if strings.Contains(d.Text, "explicitly") {
+		t.Error(d.Text)
+	}
+	e.f.mu.Lock()
+	e.f.evalDecision = "explicitDeny" // resource says allowed
+	e.f.mu.Unlock()
+	d = check(t, e, dana, "s3.read", bucketKey)
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "explicitly deny") {
+		t.Error(d.Text)
+	}
+	e.f.mu.Lock()
+	e.f.evalDecision = "allowed" // resource says explicitDeny
+	e.f.mu.Unlock()
+	d = check(t, e, dana, "ec2.terminate", "all")
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "explicitly deny") {
+		t.Error(d.Text)
+	}
+	e.f.mu.Lock()
+	e.f.evalDecision = "allowed" // resource says allowed: both agree
 	e.f.mu.Unlock()
 	itest.ExpectCode(t, check(t, e, dana, "s3.read", bucketKey), integration.CodeAllowed)
 	// Without resource-specific results EvalDecision is used.
@@ -1192,6 +1222,116 @@ func TestProbe(t *testing.T) {
 	if err != nil || len(r.Warnings) != 1 {
 		t.Errorf("%+v %v", r, err)
 	}
+}
+
+func TestMoreRestrictive(t *testing.T) {
+	for _, tc := range []struct{ a, b, want string }{
+		{"allowed", "allowed", "allowed"},
+		{"allowed", "implicitDeny", "implicitDeny"},
+		{"implicitDeny", "allowed", "implicitDeny"},
+		{"allowed", "explicitDeny", "explicitDeny"},
+		{"explicitDeny", "allowed", "explicitDeny"},
+		{"implicitDeny", "explicitDeny", "explicitDeny"},
+		{"explicitDeny", "implicitDeny", "explicitDeny"},
+		{"allowed", "bogus", "bogus"},
+	} {
+		if got := moreRestrictive(tc.a, tc.b); got != tc.want {
+			t.Errorf("moreRestrictive(%s, %s) = %s, want %s", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// An "allowed" evaluated with condition keys missing is not an allow: IAM
+// skipped every statement conditioned on those keys, including denies.
+func TestAllowedWithMissingContextIsUnknown(t *testing.T) {
+	e := setup(t, nil, secret.Secret{})
+	itest.ExpectCode(t, check(t, e, dana, "s3.read", bucketKey), integration.CodeAllowed)
+	e.f.mu.Lock()
+	e.f.missing = []string{"aws:MultiFactorAuthPresent"}
+	e.f.mu.Unlock()
+	// Resource-specific result carries the missing keys.
+	d := check(t, e, dana, "s3.read", bucketKey)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "aws:MultiFactorAuthPresent") || !strings.Contains(d.Text, "context_entries") {
+		t.Error(d.Text)
+	}
+	// Action-level result carries them.
+	e.f.mu.Lock()
+	e.f.evalOnly = true
+	e.f.mu.Unlock()
+	d = check(t, e, dana, "s3.read", bucketKey)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "aws:MultiFactorAuthPresent") {
+		t.Error(d.Text)
+	}
+	// Every principal is still simulated: an allow without missing keys on
+	// a later principal settles the check.
+	e.srv.Reset()
+	e.f.mu.Lock()
+	e.f.evalOnly, e.f.missing = false, nil
+	e.f.mu.Unlock()
+	itest.ExpectCode(t, check(t, e, dana, "s3.write", bucketKey), integration.CodeAllowed)
+	n := 0
+	for _, c := range e.srv.Calls() {
+		if strings.Contains(string(c.Body), "Action=SimulatePrincipalPolicy") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("SimulatePrincipalPolicy calls = %d, want 2", n)
+	}
+	// Once the keys are supplied the allow stands (the fake reports no
+	// missing keys then).
+	itest.ExpectCode(t, check(t, e, dana, "s3.read", bucketKey), integration.CodeAllowed)
+}
+
+// A user with no permission set in the account is an implicit deny, so
+// implicit_deny_as decides between deny and unknown.
+func TestNoPermissionSetHonoursImplicitDenyAs(t *testing.T) {
+	e := setup(t, nil, secret.Secret{})
+	d := check(t, e, bob, "s3.read", bucketKey)
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "no permission set assigned in account "+acct) {
+		t.Error(d.Text)
+	}
+	u := setup(t, map[string]string{"implicit_deny_as": "unknown"}, secret.Secret{})
+	d = check(t, u, bob, "s3.read", bucketKey)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "no permission set assigned in account "+acct) {
+		t.Error(d.Text)
+	}
+}
+
+// An assignment row counts only when its AccountId is exactly this
+// account: rows for another account or with no AccountId are skipped.
+func TestAssignmentRowsRequireExactAccount(t *testing.T) {
+	for _, rowAcct := range []string{"", "210987654321"} {
+		e := setup(t, nil, secret.Secret{})
+		e.f.mu.Lock()
+		e.f.assignments["u-bob"] = []string{psRO}
+		e.f.rowAccount = map[string]string{psRO: rowAcct}
+		e.f.mu.Unlock()
+		id, err := e.conn.ResolveIdentity(context.Background(), bob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nat := id.Native.(*native)
+		if len(nat.PermissionSets) != 0 || len(nat.Principals) != 0 {
+			t.Errorf("AccountId %q: permission sets %v principals %+v, want none", rowAcct, nat.PermissionSets, nat.Principals)
+		}
+		d := check(t, e, bob, "s3.read", bucketKey)
+		itest.ExpectCode(t, d, integration.CodeDenied)
+		if !strings.Contains(d.Text, "no permission set assigned") {
+			t.Error(d.Text)
+		}
+	}
+	// The exact account still counts.
+	e := setup(t, nil, secret.Secret{})
+	e.f.mu.Lock()
+	e.f.assignments["u-bob"] = []string{psRO}
+	e.f.rowAccount = map[string]string{psRO: acct}
+	e.f.mu.Unlock()
+	itest.ExpectCode(t, check(t, e, bob, "s3.read", bucketKey), integration.CodeAllowed)
 }
 
 func TestSimulateXMLDecoding(t *testing.T) {

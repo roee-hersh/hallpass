@@ -97,7 +97,10 @@ func (p ContainerProvider) Configured() bool {
 func (p ContainerProvider) Credentials(ctx context.Context) (AWSCredentials, error) {
 	var endpoint string
 	if rel := p.Env.Getenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"); rel != "" {
-		endpoint = "http://169.254.170.2" + rel
+		var err error
+		if endpoint, err = containerRelativeEndpoint(rel); err != nil {
+			return AWSCredentials{}, err
+		}
 	} else if full := p.Env.Getenv("AWS_CONTAINER_CREDENTIALS_FULL_URI"); full != "" {
 		if err := validateContainerURI(full); err != nil {
 			return AWSCredentials{}, err
@@ -125,6 +128,31 @@ func (p ContainerProvider) Credentials(ctx context.Context) (AWSCredentials, err
 		return AWSCredentials{}, fmt.Errorf("container credentials: %w", err)
 	}
 	return doc.toCreds()
+}
+
+// containerHost is the only host a relative container credential URI may
+// resolve to.
+const containerHost = "169.254.170.2"
+
+// containerRelativeEndpoint builds the ECS credential URL from
+// AWS_CONTAINER_CREDENTIALS_RELATIVE_URI. The value must be an absolute path
+// so that it cannot smuggle userinfo, a host or a port ("@evil.example/"
+// would otherwise turn the fixed host into userinfo); a scheme-relative
+// "//host/..." is refused too. The result is parsed back and its host
+// checked.
+func containerRelativeEndpoint(rel string) (string, error) {
+	if !strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "//") {
+		return "", errors.New(`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI must be an absolute path starting with a single "/"`)
+	}
+	endpoint := "http://" + containerHost + rel
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: %w", err)
+	}
+	if u.Scheme != "http" || u.Host != containerHost || u.User != nil {
+		return "", fmt.Errorf("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI resolves to host %q, not %s", u.Host, containerHost)
+	}
+	return endpoint, nil
 }
 
 func validateContainerURI(full string) error {

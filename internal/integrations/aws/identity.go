@@ -247,8 +247,10 @@ func (c *Connection) listAssignments(ctx context.Context, principalID, principal
 			return nil, classify(err, "ListAccountAssignmentsForPrincipal")
 		}
 		for _, a := range out.AccountAssignments {
-			// The filter should already restrict to the account; check anyway.
-			if a.PermissionSetArn != "" && (a.AccountID == "" || a.AccountID == c.accountID) {
+			// The filter should already restrict to the account; check
+			// anyway. A row must name this account exactly: rows for other
+			// accounts or with no AccountId are not assignments here.
+			if a.PermissionSetArn != "" && a.AccountID == c.accountID {
 				arns = append(arns, a.PermissionSetArn)
 			}
 		}

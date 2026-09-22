@@ -3,6 +3,7 @@ package authx
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -56,6 +57,18 @@ func TestErrorDecoding(t *testing.T) {
 	e = DecodeJSONError(400, http.Header{}, []byte(`{"__type":"AccessDeniedException","Message":"nope"}`))
 	if e.Code != "AccessDeniedException" || !e.AccessDenied() || e.Message != "nope" {
 		t.Errorf("%+v", e)
+	}
+	// The upstream message stays in the field but never in the error
+	// string: SignatureDoesNotMatch messages can carry the canonical request.
+	e = DecodeXMLError(403, []byte(`<ErrorResponse><Error><Code>SignatureDoesNotMatch</Code><Message>The request signature we calculated does not match. Canonical request: `+itest.Canary+`</Message></Error></ErrorResponse>`))
+	if e.Message == "" || !strings.Contains(e.Message, itest.Canary) {
+		t.Errorf("message field dropped: %+v", e)
+	}
+	if got := e.Error(); got != "aws: HTTP 403 SignatureDoesNotMatch" || strings.Contains(got, itest.Canary) {
+		t.Errorf("Error() = %q", got)
+	}
+	if got := ClassifyAWSError(e).Error(); strings.Contains(got, itest.Canary) {
+		t.Errorf("classified error leaks the message: %q", got)
 	}
 	if c := ClassifyAWSError(&AWSError{Status: 400, Code: "Throttling"}); c.Code != integration.CodeUpstreamRateLimit {
 		t.Error(c)
@@ -274,6 +287,45 @@ func TestCredentialChain(t *testing.T) {
 		t.Error("incomplete json accepted")
 	}
 }
+
+func TestContainerRelativeURI(t *testing.T) {
+	for _, bad := range []string{"@evil.example/", "evil.example/creds", "v2/credentials/abc", ":8080/creds", "//evil.example/creds", "\\evil.example/creds"} {
+		ep, err := containerRelativeEndpoint(bad)
+		if err == nil {
+			t.Errorf("%q accepted as %q", bad, ep)
+		}
+	}
+	for _, ok := range []string{"/v2/credentials/abc", "/v2/credentials/abc?x=1", "/"} {
+		ep, err := containerRelativeEndpoint(ok)
+		if err != nil || ep != "http://169.254.170.2"+ok {
+			t.Errorf("%q -> %q, %v", ok, ep, err)
+		}
+	}
+	// Through the provider: no request leaves for a bad value.
+	var calls atomic.Int32
+	hc, _ := httpx.NewHTTPClient(httpx.Options{})
+	plain := &httpx.Client{HTTP: hc}
+	plain.HTTP.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("must not be called")
+	})
+	env := Env{Getenv: func(k string) string {
+		if k == "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" {
+			return "@evil.example/"
+		}
+		return ""
+	}}
+	if _, err := (ContainerProvider{HTTP: plain, Env: env}).Credentials(context.Background()); err == nil || !strings.Contains(err.Error(), "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") {
+		t.Errorf("relative uri with userinfo accepted: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Error("request sent for a rejected relative uri")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestCachedProviderRefresh(t *testing.T) {
 	now := time.Unix(1_000_000, 0)

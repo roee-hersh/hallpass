@@ -127,7 +127,7 @@ by hallpass alone.
 | `sso_instance_arn` | `identity_center`: `arn:aws:sso:::instance/ssoins-...` |
 | `role_map_file` | `static_map`: the map file, see below |
 | `context_entries` | condition keys for the simulation: `key=type:value;key=type:value`; types `string`, `stringList` (comma-separated values), `numeric`, `boolean`, `ip`, `binary`, `date` |
-| `implicit_deny_as` | what "no statement matched" answers: `deny` (default) or `unknown` |
+| `implicit_deny_as` | what "no statement matched" (and, for `identity_center`, "no permission set assigned") answers: `deny` (default) or `unknown` |
 | `session_name` | `RoleSessionName`, default `hallpass` |
 
 Endpoints: STS `https://sts.<region>.amazonaws.com`, IAM `https://iam.amazonaws.com` (signed for
@@ -144,11 +144,13 @@ AWSIdentityStore.<Op>`), SSO Admin `https://sso.<identity_center_region>.amazona
 | `static_map` | `role_map_file`, matched case-insensitively against the email and the request's groups | every mapped role ARN, union |
 | `iam_user` | `iam:GetUser` with the email's local part, then the full email | the IAM user |
 
-`identity_center`: a user with no permission set assigned in the account is denied ("no permission set
-assigned in account ..."). A permission set whose role is not in the account (not yet provisioned, or
-recreated with a new suffix) answers `resource_not_visible` unless another permission set allows. The
-email -> roles mapping and the role list are cached for 10 minutes; a `NoSuchEntity` from the simulation
-drops both.
+`identity_center`: a user with no permission set assigned in the account has nothing to simulate; that
+is an implicit deny, so it answers deny ("no permission set assigned in account ...") or, with
+`implicit_deny_as: unknown`, unknown. Only assignment rows whose `AccountId` is exactly `account_id`
+count; rows for other accounts or without one are skipped. A permission set whose role is not in the
+account (not yet provisioned, or recreated with a new suffix) answers `resource_not_visible` unless
+another permission set allows. The email -> roles mapping and the role list are cached for 10 minutes; a
+`NoSuchEntity` from the simulation drops both.
 
 `static_map` file format, one mapping per line, `#` comments, whitespace separated:
 
@@ -192,12 +194,16 @@ One check costs one `SimulatePrincipalPolicy` per candidate principal until one 
 
 ## Decisions
 
-Per principal, the `ResourceSpecificResults` entry for the requested ARN is used; `EvalDecision` when there
-is none. Across principals:
+Per principal, the action-level `EvalDecision` and the `ResourceSpecificResults` entry for the requested
+ARN are merged: `allowed` only when both say so, otherwise the more restrictive wins (`explicitDeny` >
+`implicitDeny` > `allowed`). An `allowed` whose result lists `MissingContextValues` is not an allow: IAM
+skipped every statement conditioned on those keys, Deny statements included. Across principals:
 
 | IAM says | hallpass answers |
 |---|---|
-| any principal `allowed` | allow, naming the permission set / role / user |
+| any principal `allowed` with no `MissingContextValues` | allow, naming the permission set / role / user |
+| a principal `allowed` but with `MissingContextValues`, and no principal allowed outright | unknown (`unsupported`), naming the keys; set `context_entries` |
+| action-level and resource-level decisions disagree | the more restrictive one, then as below |
 | every principal `explicitDeny` | deny ("explicitly deny"; "denied by SCP" when `AllowedByOrganizations` is false, "blocked by the permissions boundary" when `AllowedByPermissionsBoundary` is false) |
 | some `implicitDeny`, none allowed, `implicit_deny_as: deny` | deny |
 | some `implicitDeny`, none allowed, `implicit_deny_as: unknown` | unknown (`unsupported`) |
@@ -206,7 +212,8 @@ is none. Across principals:
 | `PolicyEvaluation` error | unknown (`unsupported`) |
 | `NoSuchEntity` for the principal | unknown (`resource_not_visible`): the role vanished, caches refresh |
 | Identity Center user with `UserStatus` `DISABLED` | deny |
-| no permission set assigned in the account | deny |
+| no permission set assigned in the account, `implicit_deny_as: deny` | deny |
+| no permission set assigned in the account, `implicit_deny_as: unknown` | unknown (`unsupported`) |
 | no Identity Center user / IAM user / map entry for the email | `user_not_found` |
 | `Throttling`, `ThrottlingException`, 429 | unknown (`upstream_rate_limited`) |
 | `AccessDenied`, `InvalidClientTokenId`, `ExpiredToken`, 401/403 | unknown (`credential_rejected`): a role trust or one of the policies above is missing |
