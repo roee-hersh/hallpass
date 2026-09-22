@@ -1,5 +1,11 @@
 # hallpass
 
+[![ci](https://github.com/roee-hersh/hallpass/actions/workflows/ci.yaml/badge.svg)](https://github.com/roee-hersh/hallpass/actions/workflows/ci.yaml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/roee-hersh/hallpass)](https://goreportcard.com/report/github.com/roee-hersh/hallpass)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
+**Permission checks for AI agents and bots, answered live by the system they act in.**
+
 hallpass is a small self-hosted service that answers one question:
 
 > May user X do action Y on resource Z in system C?
@@ -8,6 +14,29 @@ Other apps and AI agents act in third-party systems (Jira, GitHub, Kubernetes, .
 bot credentials, which can usually do more than the person who asked. Before acting, the app asks
 hallpass. hallpass asks the third-party system live, with its own read-only credential, and answers
 `allow`, `deny` or `unknown`. It only checks. It never performs the action.
+
+## Why
+
+An AI agent or chat bot usually holds one powerful service account. When Dana asks it to delete a
+Jira issue or scale a deployment, the bot can, even when Dana could not. Copying every system's
+permission model into your own policy engine drifts out of date the day you write it.
+
+hallpass asks the source of truth instead: Kubernetes `SubjectAccessReview`, Jira's permission API,
+GitHub collaborator roles, AWS IAM policy simulation, and so on. One API, eleven systems, no
+synced copy of anyone's permissions.
+
+- **Read-only.** It only checks and never performs the action.
+- **Fails closed.** Anything it cannot evaluate is `unknown`, not `allow`.
+- **Single static binary.** One YAML file and one dependency (`yaml.v3`). No database.
+
+## Install
+
+Download a binary from [Releases](https://github.com/roee-hersh/hallpass/releases), or:
+
+```sh
+go install github.com/roee-hersh/hallpass/cmd/hallpass@latest
+docker pull ghcr.io/roee-hersh/hallpass:latest
+```
 
 ## Try it
 
@@ -175,3 +204,9 @@ made only of validated pieces before it reaches a URL or query; CI runs them nig
 ## License
 
 Apache-2.0.
+
+## Contributing
+
+Issues and pull requests are welcome, especially new integrations. See
+[CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately as described in
+[SECURITY.md](SECURITY.md).
