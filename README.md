@@ -116,9 +116,9 @@ service from starting.
 | argocd | ready |
 | gitlab | ready |
 | github | planned |
-| jira (Cloud) | planned |
-| confluence (Cloud) | planned |
-| slack | planned |
+| jira (Cloud) | ready |
+| confluence (Cloud) | ready |
+| slack | ready |
 | aws | planned |
 | googleworkspace | planned |
 | microsoft365 | planned |
