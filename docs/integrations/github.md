@@ -52,7 +52,7 @@ installation token it buys lasts one hour and is cached and refreshed five minut
 | `credential` | the App private key PEM (PKCS#1 or PKCS#8), `env:` or `file:` |
 | `identity_mode` | `saml`: look the email up in the organization's SAML external identities. `template`: render `login_template` and verify the login exists. `map_file`: look the email up in `user_map_file` |
 | `login_template` | placeholders `{email}`, `{local}`, `{domain}`; must contain `{email}` or `{local}` |
-| `email_domains` | template mode, required: comma-separated domains the template applies to (each lowercase `[a-z0-9.-]`). An email from any other domain is unknown (`unsupported`), so `root@attacker.example` never renders to the login `root` |
+| `email_domains` | template mode, required: comma-separated domains the template applies to (`acme.com, acme.io`; entries are trimmed and lowercased, each must be a DNS name). An email from any other domain is unknown (`unsupported`), so `root@attacker.example` never renders to the login `root` |
 | `user_map_file` | lines of `email login` or `email=login`, `#` comments; must exist at startup; re-read at most every 60 s (a broken rewrite keeps the previous map) |
 
 ### Identity

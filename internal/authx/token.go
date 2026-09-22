@@ -3,8 +3,11 @@ package authx
 import (
 	"context"
 	"errors"
+	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/roee-hersh/hallpass/internal/cache"
 )
 
 // Token is a bearer token with its expiry.
@@ -28,11 +31,26 @@ type TokenSource struct {
 	mu      sync.Mutex
 	tok     Token
 	exp     time.Time
-	inflght chan struct{}
-	err     error
+	inflght *fetchCall
 }
 
+// fetchCall is one shared Fetch; done closes once tok and err are set.
+type fetchCall struct {
+	done chan struct{}
+	tok  Token
+	err  error
+}
+
+// defaultFetchTimeout bounds a Fetch whose caller's context has no deadline.
+const defaultFetchTimeout = 30 * time.Second
+
 // Get returns a valid token, fetching one if needed.
+//
+// The shared Fetch runs in its own goroutine on a context detached from the
+// first caller's cancellation (cache.Detach): otherwise that caller going
+// away would abort the fetch and hand every waiter a context.Canceled that
+// is not theirs. Each caller stops waiting when its own ctx is done. A
+// panic in Fetch becomes a *cache.PanicError for everyone waiting on it.
 func (s *TokenSource) Get(ctx context.Context) (string, error) {
 	if s.Fetch == nil {
 		return "", errors.New("token source has no fetch function")
@@ -44,40 +62,49 @@ func (s *TokenSource) Get(ctx context.Context) (string, error) {
 		s.mu.Unlock()
 		return v, nil
 	}
-	if s.inflght != nil {
-		ch := s.inflght
-		s.mu.Unlock()
-		select {
-		case <-ch:
-		case <-ctx.Done():
-			return "", ctx.Err()
+	fc := s.inflght
+	if fc == nil {
+		fc = &fetchCall{done: make(chan struct{})}
+		s.inflght = fc
+		fctx, cancel := cache.Detach(ctx, defaultFetchTimeout)
+		go func() {
+			defer cancel()
+			s.fetch(fc, fctx, now)
+		}()
+	}
+	s.mu.Unlock()
+	select {
+	case <-fc.done:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	if fc.err != nil {
+		return "", fc.err
+	}
+	return fc.tok.Value, nil
+}
+
+// fetch runs one Fetch for fc, then always clears the inflight call and
+// closes fc.done, whether Fetch returned, panicked or called runtime.Goexit.
+func (s *TokenSource) fetch(fc *fetchCall, ctx context.Context, now time.Time) {
+	returned := false
+	defer func() {
+		if r := recover(); r != nil {
+			fc.tok, fc.err = Token{}, &cache.PanicError{Value: r, Stack: debug.Stack()}
+		} else if !returned {
+			fc.tok, fc.err = Token{}, errors.New("token fetch exited without returning")
 		}
 		s.mu.Lock()
-		v, err := s.tok.Value, s.err
-		s.mu.Unlock()
-		if err != nil {
-			return "", err
+		s.inflght = nil
+		if fc.err == nil {
+			s.tok = fc.tok
+			s.exp = s.expiryOf(fc.tok, now)
 		}
-		return v, nil
-	}
-	ch := make(chan struct{})
-	s.inflght = ch
-	s.mu.Unlock()
-
-	tok, err := s.Fetch(ctx)
-	s.mu.Lock()
-	s.inflght = nil
-	s.err = err
-	if err == nil {
-		s.tok = tok
-		s.exp = s.expiryOf(tok, now)
-	}
-	s.mu.Unlock()
-	close(ch)
-	if err != nil {
-		return "", err
-	}
-	return tok.Value, nil
+		s.mu.Unlock()
+		close(fc.done)
+	}()
+	fc.tok, fc.err = s.Fetch(ctx)
+	returned = true
 }
 
 // Invalidate drops the cached token so the next Get fetches again. Call it

@@ -280,8 +280,6 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	default:
 		return nil, fmt.Errorf("identity_mode %q is not one of identity_center, static_map, iam_user", c.mode)
 	}
-	c.identities = cache.New[string, integration.Identity](0)
-	c.identities.SetClock(now)
 	c.roles = cache.New[string, []ssoRole](1)
 	c.roles.SetClock(now)
 	c.psNames = cache.New[string, string](0)
@@ -314,9 +312,10 @@ type Connection struct {
 	ssoInstanceARN  string
 	roleMap         *roleMap
 
-	identities *cache.TTL[string, integration.Identity]
-	roles      *cache.TTL[string, []ssoRole]
-	psNames    *cache.TTL[string, string]
+	// The engine caches resolved identities (identity_cache_seconds); the
+	// connection only caches what identities are built from.
+	roles   *cache.TTL[string, []ssoRole]
+	psNames *cache.TTL[string, string]
 }
 
 // baseProvider yields the credential the connection starts from: either
@@ -420,9 +419,12 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		res, err := c.simulate(ctx, p, action, resource)
 		if err != nil {
 			if awsCode(err) == "NoSuchEntity" {
-				c.identities.Delete(strings.ToLower(r.User.Email))
+				// The role list is refreshed on the next resolve, but the
+				// engine keeps the resolved identity (and so this principal)
+				// until identity_cache_seconds expires; there is no way to
+				// evict it from here.
 				c.roles.Delete("sso")
-				return integration.UnknownDecision(integration.CodeResourceNotVisible, "%s (%s) no longer exists; the role vanished and the cache will refresh", p, p.ARN), nil
+				return integration.UnknownDecision(integration.CodeResourceNotVisible, "%s (%s) no longer exists; the role vanished and the identity is re-resolved after identity_cache_seconds expires", p, p.ARN), nil
 			}
 			if awsCode(err) == "PolicyEvaluation" {
 				return integration.Unsupported("IAM could not evaluate the policies of %s", p), nil

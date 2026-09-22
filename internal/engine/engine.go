@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -296,8 +296,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 		return Result{Decision: integration.UnknownDecision(integration.CodeUnknownAction, "integration %s has no action %q", c.settings.Integration, req.Action), Status: http.StatusBadRequest}
 	}
 
-	groups := append([]string(nil), req.Groups...)
-	sort.Strings(groups)
+	groups := normalizeGroups(req.Groups)
 	user := integration.User{Email: req.User, Groups: groups}
 	decKey := strings.Join([]string{req.Connection, req.User, groupsKey(groups), req.Action, req.Resource}, "\x00")
 	if e.decTTL > 0 {
@@ -334,22 +333,38 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	return Result{Decision: d, Status: http.StatusOK}
 }
 
-// groupsKey encodes a sorted group list for a cache key. Groups are joined
-// with \x01 and the surrounding fields with \x00; validation rejects both
-// bytes everywhere, so two different lists never share a key (a bare comma
-// would let ["a","b,c"] and ["a,b","c"] collide).
+// groupsKey encodes a normalized group list for a cache key. Groups are
+// joined with \x01 and the surrounding fields with \x00; validation rejects
+// both bytes everywhere, so two different lists never share a key (a bare
+// comma would let ["a","b,c"] and ["a,b","c"] collide).
 func groupsKey(groups []string) string {
 	return strings.Join(groups, "\x01")
 }
 
+// normalizeGroups returns the caller's groups sorted and deduplicated, so
+// that two requests naming the same set of groups look the same to the
+// integration and to both caches.
+func normalizeGroups(gs []string) []string {
+	out := slices.Clone(gs)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// identityKey keys the identity cache. Integrations such as kubernetes and
+// argocd embed the request's groups in the Identity, so the same email with
+// different groups is a different identity: the key is the connection, the
+// email and the normalized groups. The separator cannot appear in any part
+// (validateGroups rejects control characters, ValidateUser rejects them in
+// the email).
+func identityKey(connID string, u integration.User) string {
+	parts := make([]string, 0, 2+len(u.Groups))
+	parts = append(parts, connID, strings.ToLower(u.Email))
+	parts = append(parts, u.Groups...)
+	return strings.Join(parts, "\x00")
+}
+
 func (e *Engine) identity(ctx context.Context, c *conn, u integration.User) (integration.Identity, error) {
-	// The identity is a function of the email and of the caller's groups:
-	// integrations without a user directory (kubernetes, argocd) copy the
-	// request's groups into the identity, so an entry cached by email alone
-	// would answer later requests for the same user with another request's
-	// groups. Directory-backed integrations ignore the groups; keying on
-	// them only costs a lookup per distinct group set.
-	key := c.settings.ID + "\x00" + strings.ToLower(u.Email) + "\x00" + groupsKey(u.Groups)
+	key := identityKey(c.settings.ID, u)
 	fill := func(ctx context.Context) (idEntry, time.Duration, error) {
 		id, err := c.c.ResolveIdentity(ctx, u)
 		if err == nil {

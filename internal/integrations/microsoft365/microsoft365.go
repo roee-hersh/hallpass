@@ -390,15 +390,21 @@ func (c *Connection) findUsers(ctx context.Context, filter string, header http.H
 	return users, nil
 }
 
+// identityOf builds the identity. account_enabled is "true", "false" or,
+// when Graph did not report accountEnabled at all, "unknown": a missing
+// value is never taken as enabled.
 func identityOf(u graphUser) integration.Identity {
-	enabled := u.AccountEnabled == nil || *u.AccountEnabled
+	enabled := "unknown"
+	if u.AccountEnabled != nil {
+		enabled = fmt.Sprint(*u.AccountEnabled)
+	}
 	id := integration.Identity{
 		ID:      u.ID,
 		Display: u.UserPrincipalName,
 		Attrs: map[string]string{
 			"upn":             u.UserPrincipalName,
 			"mail":            u.Mail,
-			"account_enabled": fmt.Sprint(enabled),
+			"account_enabled": enabled,
 			"user_type":       u.UserType,
 			"guest":           fmt.Sprint(strings.EqualFold(u.UserType, "Guest")),
 		},
@@ -425,8 +431,12 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	if r.Identity.Attr("guest") == "true" {
 		who += " (guest account)"
 	}
-	if r.Identity.Attr("account_enabled") == "false" {
+	switch r.Identity.Attr("account_enabled") {
+	case "true":
+	case "false":
 		return integration.Denied("%s: account disabled", who), nil
+	default:
+		return integration.Unsupported("%s: Graph did not report whether the account is enabled", who), nil
 	}
 	switch r.ActionName {
 	case "user.active":
@@ -449,7 +459,9 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 			return integration.Unsupported("mailbox %s is not %s's own; Send As, Send on Behalf and Full Access have no Graph API", t.id, who), nil
 		}
 		if r.Identity.Attr("mail") == "" {
-			return integration.Denied("%s has no mailbox (mail is empty)", who), nil
+			// An empty mail attribute does not prove there is no mailbox
+			// (unlicensed users, on-premises mailboxes, sync lag).
+			return integration.Unsupported("%s has no mail attribute in Entra; whether a mailbox exists is unknown", who), nil
 		}
 		return integration.Allowed("%s may send from their own mailbox", who), nil
 	case "mail.send_as", "mail.send_on_behalf", "mailbox.full_access":
@@ -500,7 +512,28 @@ func (c *Connection) checkMemberGroups(ctx context.Context, userID string, group
 
 func boolPtr(b bool) *bool { return &b }
 
+// groupVisibility reads the group's visibility. A 404 is
+// resource_not_visible: checkMemberGroups alone cannot tell a group the
+// user is not in from a group that does not exist.
+func (c *Connection) groupVisibility(ctx context.Context, groupID string) (string, error) {
+	var g struct {
+		ID         string `json:"id"`
+		Visibility string `json:"visibility"`
+	}
+	// UNVERIFIED: GroupMember.Read.All is documented as sufficient for
+	// GET /groups/{id}; visibility is null for security groups and
+	// HiddenMembership only for Microsoft 365 groups created that way.
+	if err := c.getJSON(ctx, "/v1.0/groups/"+httpx.PathEscape(groupID)+"?$select=id,visibility", nil, &g, resourceNotVisible("group "+groupID)); err != nil {
+		return "", err
+	}
+	return g.Visibility, nil
+}
+
 func (c *Connection) checkGroup(ctx context.Context, id integration.Identity, who, groupID string) (integration.Decision, error) {
+	visibility, err := c.groupVisibility(ctx, groupID)
+	if err != nil {
+		return integration.Decision{}, err
+	}
 	matched, err := c.checkMemberGroups(ctx, id.ID, []string{groupID})
 	if err != nil {
 		return integration.Decision{}, err
@@ -508,7 +541,13 @@ func (c *Connection) checkGroup(ctx context.Context, id integration.Identity, wh
 	if matched[strings.ToLower(groupID)] {
 		return integration.Allowed("%s is a transitive member of group %s", who, groupID), nil
 	}
-	return integration.Denied("%s is not a member of group %s (hidden-membership groups are omitted without Member.Read.Hidden)", who, groupID), nil
+	if strings.EqualFold(visibility, "HiddenMembership") {
+		// UNVERIFIED: without Member.Read.Hidden, checkMemberGroups omits
+		// hidden-membership groups rather than failing, so a miss proves
+		// nothing.
+		return integration.Unsupported("group %s has hidden membership; checkMemberGroups omits it without Member.Read.Hidden, so %s's membership is unknown", groupID, who), nil
+	}
+	return integration.Denied("%s is not a member of group %s", who, groupID), nil
 }
 
 func (c *Connection) checkRole(ctx context.Context, id integration.Identity, who, templateID string) (integration.Decision, error) {
@@ -536,11 +575,15 @@ func (c *Connection) checkRole(ctx context.Context, id integration.Identity, who
 
 // conversationMember is a Teams membership record.
 type conversationMember struct {
-	Roles []string `json:"roles"`
+	UserID string   `json:"userId"`
+	Roles  []string `json:"roles"`
 }
 
 // membership fetches the caller's membership records under a members
-// collection. The filter is the documented userId filter.
+// collection. The filter is the documented userId filter, but the result
+// is never trusted: only records whose userId is the caller's are kept, so
+// an ignored or unsupported filter cannot turn the whole roster into a
+// membership.
 func (c *Connection) membership(ctx context.Context, collection, userID string, notFound func() error) ([]conversationMember, error) {
 	filter := "(microsoft.graph.aadUserConversationMember/userId eq " + odataString(userID) + ")"
 	raw, err := c.list(ctx, collection+"?$filter="+queryEscape(filter), nil, notFound)
@@ -552,6 +595,9 @@ func (c *Connection) membership(ctx context.Context, collection, userID string, 
 		var m conversationMember
 		if err := json.Unmarshal(r, &m); err != nil {
 			return nil, integration.Wrap(integration.CodeUpstreamError, err, "Graph returned an unreadable member")
+		}
+		if !strings.EqualFold(m.UserID, userID) {
+			continue
 		}
 		out = append(out, m)
 	}
@@ -604,8 +650,7 @@ func (c *Connection) checkChannel(ctx context.Context, action string, id integra
 	var err error
 	kind := strings.ToLower(ch.MembershipType)
 	switch kind {
-	case "", "standard":
-		kind = "standard"
+	case "standard":
 		ms, err = c.membership(ctx, "/v1.0/teams/"+httpx.PathEscape(t.id)+"/members", id.ID, resourceNotVisible("team "+t.id))
 	case "private":
 		ms, err = c.membership(ctx, base+"/members", id.ID, notFound)
@@ -613,6 +658,10 @@ func (c *Connection) checkChannel(ctx context.Context, action string, id integra
 		// UNVERIFIED: /allMembers lists direct and team-shared members of a
 		// shared channel; the userId filter is assumed to apply there too.
 		ms, err = c.membership(ctx, base+"/allMembers", id.ID, notFound)
+	case "":
+		// A missing membershipType is not assumed to be standard: the team
+		// roster would be the wrong answer for a private or shared channel.
+		return integration.Unsupported("channel %s reports no membership type; hallpass cannot tell which roster applies", t.channel), nil
 	default:
 		return integration.Unsupported("channel %s has membership type %q, which hallpass does not model", t.channel, ch.MembershipType), nil
 	}
@@ -674,9 +723,11 @@ const (
 )
 
 // level collapses Graph roles to read/write/owner. SharePoint custom
-// permission levels appear as other strings and count as nothing.
-func level(roles []string) int {
-	best := levelNone
+// permission levels appear as other strings ("sp.full control",
+// "sp.views"); they add nothing to the level but are reported as unknown,
+// since they may grant more than the recognised roles say.
+func level(roles []string) (best int, unknown bool) {
+	best = levelNone
 	for _, r := range roles {
 		l := levelNone
 		switch strings.ToLower(r) {
@@ -686,12 +737,14 @@ func level(roles []string) int {
 			l = levelWrite
 		case "read":
 			l = levelRead
+		default:
+			unknown = true
 		}
 		if l > best {
 			best = l
 		}
 	}
-	return best
+	return best, unknown
 }
 
 func needed(action string) int {
@@ -730,12 +783,20 @@ func (c *Connection) checkFile(ctx context.Context, action string, id integratio
 		perms = append(perms, p)
 	}
 	need := needed(action)
+	guest := id.Attr("guest") == "true"
 	direct := levelNone
 	orgLink := levelNone
 	groupLevels := map[string]int{}
-	siteGroup, anonymous := false, false
+	// groupUnknown marks groups whose grant carries an unrecognised role.
+	groupUnknown := map[string]bool{}
+	// unknownRole is set when a grant that reaches the caller (directly, via
+	// a group they are in, or via a usable organization link) carries a
+	// role hallpass does not model; the answer is then unknown, not deny.
+	unknownRole := false
+	unknownScope := ""
+	siteGroup, anonymous, guestOrgLink := false, false, false
 	for _, p := range perms {
-		l := level(p.Roles)
+		l, unk := level(p.Roles)
 		sets := append([]identitySet(nil), p.GrantedToIdentitiesV2...)
 		if p.GrantedToV2 != nil {
 			sets = append(sets, *p.GrantedToV2)
@@ -744,9 +805,11 @@ func (c *Connection) checkFile(ctx context.Context, action string, id integratio
 			switch {
 			case s.User != nil && strings.EqualFold(s.User.ID, id.ID):
 				direct = max(direct, l)
+				unknownRole = unknownRole || unk
 			case s.Group != nil && guidRe.MatchString(s.Group.ID):
 				g := strings.ToLower(s.Group.ID)
 				groupLevels[g] = max(groupLevels[g], l)
+				groupUnknown[g] = groupUnknown[g] || unk
 			case s.SiteGroup != nil:
 				siteGroup = true
 			case s.SiteUser != nil && s.User == nil:
@@ -758,9 +821,22 @@ func (c *Connection) checkFile(ctx context.Context, action string, id integratio
 		if p.Link != nil {
 			switch strings.ToLower(p.Link.Scope) {
 			case "organization":
+				if guest {
+					// UNVERIFIED: "people in your organization" links cannot be
+					// redeemed by guest (B2B) accounts, as Microsoft's sharing
+					// documentation states; the link is not credited to a guest.
+					guestOrgLink = true
+					continue
+				}
 				orgLink = max(orgLink, l)
+				unknownRole = unknownRole || unk
 			case "anonymous":
 				anonymous = true
+			case "users":
+				// The people the link was sent to are listed in
+				// grantedToIdentitiesV2 and handled above.
+			default:
+				unknownScope = p.Link.Scope
 			}
 		}
 	}
@@ -773,12 +849,12 @@ func (c *Connection) checkFile(ctx context.Context, action string, id integratio
 	var drive struct {
 		Owner *identitySet `json:"owner"`
 	}
-	if err := c.getJSON(ctx, "/v1.0/drives/"+httpx.PathEscape(t.id)+"?$select=owner", nil, &drive, nil); err != nil {
-		var ie *integration.Error
-		if !errors.As(err, &ie) || ie.Code != integration.CodeResourceNotVisible {
-			if httpx.Status(err) != 404 {
-				return integration.Decision{}, err
-			}
+	if err := c.getJSON(ctx, "/v1.0/drives/"+httpx.PathEscape(t.id)+"?$select=owner", nil, &drive, func() error { return errDriveNotFound }); err != nil {
+		// The item's permissions were readable, so a 404 on the drive
+		// itself only means the owner rule cannot apply; the group and link
+		// rules still can.
+		if !errors.Is(err, errDriveNotFound) {
+			return integration.Decision{}, err
 		}
 	} else if drive.Owner != nil && drive.Owner.User != nil && strings.EqualFold(drive.Owner.User.ID, id.ID) {
 		return integration.Allowed("%s may %s %s: owner of the drive", who, v, what), nil
@@ -795,6 +871,7 @@ func (c *Connection) checkFile(ctx context.Context, action string, id integratio
 		viaGroup := levelNone
 		for g := range matched {
 			viaGroup = max(viaGroup, groupLevels[g])
+			unknownRole = unknownRole || groupUnknown[g]
 		}
 		if viaGroup >= need {
 			return integration.Allowed("%s may %s %s: granted to a group they belong to", who, v, what), nil
@@ -805,6 +882,12 @@ func (c *Connection) checkFile(ctx context.Context, action string, id integratio
 		return integration.Allowed("%s may %s %s via an organization-wide sharing link", who, v, what), nil
 	}
 	direct = max(direct, orgLink)
+	if unknownRole {
+		return integration.Unsupported("%s is granted a role on %s that hallpass does not model (a custom SharePoint permission level); their access is unknown", who, what), nil
+	}
+	if unknownScope != "" {
+		return integration.Unsupported("%s has a sharing link with scope %q, which hallpass does not model; %s's access is unknown", what, unknownScope, who), nil
+	}
 	if action == "file.share" && direct >= levelRead {
 		return integration.Unsupported("%s has %s access to %s but is not an owner; sharing rights depend on site settings", who, levelName(direct), what), nil
 	}
@@ -817,8 +900,14 @@ func (c *Connection) checkFile(ctx context.Context, action string, id integratio
 	if direct >= levelRead {
 		return integration.Denied("%s has %s access to %s, which does not include %s", who, levelName(direct), what, v), nil
 	}
+	if guestOrgLink {
+		return integration.Denied("no permission on %s is granted to %s or a group they belong to; its organization-wide sharing link is not usable by guest accounts", what, who), nil
+	}
 	return integration.Denied("no permission on %s is granted to %s or a group they belong to", what, who), nil
 }
+
+// errDriveNotFound marks a 404 on the drive-owner lookup, which is ignored.
+var errDriveNotFound = errors.New("drive not found")
 
 func levelName(l int) string {
 	switch l {

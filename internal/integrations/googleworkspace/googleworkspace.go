@@ -417,16 +417,49 @@ func (c *Connection) call(ctx context.Context, sub, scope string, req *httpx.Req
 	return resp, err
 }
 
-// classify maps an API error to an integration error.
+// rateLimitReasons are the 403 reasons that mean "slow down".
+var rateLimitReasons = map[string]bool{
+	"rateLimitExceeded": true, "userRateLimitExceeded": true, "quotaExceeded": true,
+	"dailyLimitExceeded": true, "sharingRateLimitExceeded": true,
+}
+
+// userLevelReasons are the 403 reasons that are about the impersonated
+// user or the resource (a Drive or Workspace policy, a file's sharing
+// settings), not about hallpass's credential. They are not a deny: Google
+// blocked the metadata call, it did not evaluate the action asked about.
+var userLevelReasons = map[string]bool{
+	"insufficientFilePermissions": true, "domainPolicy": true, "appNotAuthorizedToFile": true,
+	"cannotDownloadAbusiveFile": true, "fileOwnerNotMemberOfSharedDrive": true,
+	"fileOwnerNotMemberOfTeamDrive": true, "sharedDriveMembershipRequired": true,
+	"teamDriveMembershipRequired": true, "cannotModifyInheritedTeamDrivePermission": true,
+	"failedPrecondition": true, "storageQuotaExceeded": true,
+}
+
+// credentialReasons are the 403 reasons that mean hallpass's own setup is
+// wrong: the scope is not delegated, the API is not enabled in the
+// project, or the admin role lacks the privilege.
+var credentialReasons = map[string]bool{
+	"insufficientPermissions": true, "accessNotConfigured": true, "forbidden": true,
+}
+
+// classify maps an API error to an integration error. A 403 is split by
+// errors[].reason: rate limits, user-level refusals (unsupported) and
+// everything else, which is taken to be hallpass's credential or scope
+// (credential_rejected), including a 403 without a reason.
 func classify(err error) *integration.Error {
 	if httpx.Status(err) == 403 {
-		switch reason(err) {
-		case "rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "dailyLimitExceeded":
+		r := reason(err)
+		switch {
+		case rateLimitReasons[r]:
 			return integration.Wrap(integration.CodeUpstreamRateLimit, err, "rate limited by Google")
-		case "forbidden", "insufficientPermissions", "accessNotConfigured":
-			return integration.Wrap(integration.CodeCredentialRejected, err, "Google refused the call: the scope is not delegated, the API is not enabled, or the admin role lacks the privilege (%s)", reason(err))
+		case userLevelReasons[r]:
+			return integration.Wrap(integration.CodeUnsupported, err, "Google refused the call for this user (%s): a Drive or Workspace policy blocks it, so hallpass cannot evaluate the action", r)
+		case credentialReasons[r]:
+			return integration.Wrap(integration.CodeCredentialRejected, err, "Google refused the call: the scope is not delegated, the API is not enabled, or the admin role lacks the privilege (%s)", r)
+		case r == "":
+			return integration.Wrap(integration.CodeCredentialRejected, err, "Google refused the call (HTTP 403)")
 		}
-		return integration.Wrap(integration.CodeCredentialRejected, err, "Google refused the call (HTTP 403)")
+		return integration.Wrap(integration.CodeCredentialRejected, err, "Google refused the call (HTTP 403, %s)", r)
 	}
 	return httpx.Classify(err)
 }
@@ -450,11 +483,22 @@ func (c *Connection) getJSON(ctx context.Context, sub, scope, path string, q url
 type directoryUser struct {
 	ID           string `json:"id"`
 	PrimaryEmail string `json:"primaryEmail"`
-	Suspended    bool   `json:"suspended"`
-	Archived     bool   `json:"archived"`
-	Name         struct {
+	// Suspended and Archived are pointers so an absent field is not
+	// mistaken for an active account.
+	Suspended *bool `json:"suspended"`
+	Archived  *bool `json:"archived"`
+	Name      struct {
 		FullName string `json:"fullName"`
 	} `json:"name"`
+}
+
+// boolAttr renders an optional boolean as an identity attribute: "true",
+// "false" or "unknown" when the Directory did not send the field.
+func boolAttr(b *bool) string {
+	if b == nil {
+		return "unknown"
+	}
+	return fmt.Sprint(*b)
 }
 
 // ResolveIdentity looks the email up in the Directory as the admin. The
@@ -481,9 +525,12 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 		ID:      primary,
 		Display: primary,
 		Attrs: map[string]string{
-			"id":        du.ID,
-			"suspended": fmt.Sprint(du.Suspended),
-			"archived":  fmt.Sprint(du.Archived),
+			"id": du.ID,
+			// UNVERIFIED: the Directory is assumed to send suspended and
+			// archived explicitly (false included) in the basic projection;
+			// if it omitted a false value every check would be unsupported.
+			"suspended": boolAttr(du.Suspended),
+			"archived":  boolAttr(du.Archived),
 		},
 		Native: du,
 	}, nil
@@ -501,11 +548,14 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	if !emailRe.MatchString(user) {
 		return integration.Decision{}, integration.Errorf(integration.CodeInvalidRequest, "identity is not a Workspace primary email")
 	}
-	if r.Identity.Attr("suspended") == "true" {
-		return integration.Denied("%s is suspended", user), nil
-	}
-	if r.Identity.Attr("archived") == "true" {
-		return integration.Denied("%s is archived", user), nil
+	for _, state := range []string{"suspended", "archived"} {
+		switch r.Identity.Attr(state) {
+		case "true":
+			return integration.Denied("%s is %s", user, state), nil
+		case "false":
+		default:
+			return integration.Unsupported("the Directory did not report whether %s is %s", user, state), nil
+		}
 	}
 	switch {
 	case r.ActionName == "user.active":
@@ -541,7 +591,10 @@ func (c *Connection) checkDrive(ctx context.Context, action, user, fileID string
 	err := c.getJSON(ctx, user, scopeDrive, "/drive/v3/files/"+httpx.PathEscape(fileID), q, &f)
 	if err != nil {
 		if httpx.Status(err) == 404 {
-			return integration.Denied("%s has no access to file %s, or the file does not exist: Drive does not distinguish", user, fileID), nil
+			if reason(err) == "notFound" {
+				return integration.Denied("%s has no access to file %s, or the file does not exist: Drive does not distinguish", user, fileID), nil
+			}
+			return integration.UnknownDecision(integration.CodeResourceNotVisible, "Drive answered 404 for file %s without reason notFound, so it is not visible as %s for a reason hallpass does not model", fileID, user), nil
 		}
 		return integration.Decision{}, classify(err)
 	}
@@ -608,39 +661,95 @@ func (c *Connection) checkCalendar(ctx context.Context, action, user, calID stri
 	return integration.Denied("%s has role %s on calendar %s, which does not allow %s", user, role, calID, strings.TrimPrefix(action, "calendar.")), nil
 }
 
-func (c *Connection) checkSendAs(ctx context.Context, user, mailbox string) (integration.Decision, error) {
-	if mailbox == user {
-		// UNVERIFIED: isMailboxSetup is not consulted; an active account
-		// without a Gmail licence would be a false allow.
-		return integration.Allowed("%s may send from their own mailbox", user), nil
+// gmailRefused maps a failed Gmail settings call made as sub. Gmail is
+// asked as the account itself, so a refusal is about that account (no
+// Gmail licence, mailbox not set up, a Workspace policy) unless the reason
+// names hallpass's credential; none of it is a deny of the action.
+func gmailRefused(err error, sub string) (integration.Decision, error) {
+	var ie *integration.Error
+	if errors.As(err, &ie) && ie.Code == integration.CodeUnsupported {
+		return integration.Unsupported("could not act as %s to read its Gmail settings: not a Workspace account, suspended, or the scope is missing", sub), nil
 	}
+	r := reason(err)
+	switch httpx.Status(err) {
+	case 404:
+		return integration.Unsupported("Gmail answered 404 for %s: the account may have no Gmail mailbox", sub), nil
+	case 400:
+		// UNVERIFIED: an account without a Gmail licence is assumed to
+		// answer 400 failedPrecondition ("Mail service not enabled").
+		if r == "failedPrecondition" {
+			return integration.Unsupported("Gmail is not enabled for %s", sub), nil
+		}
+	case 403:
+		// UNVERIFIED: a Gmail 403 forbidden or without a reason as the
+		// user ("Delegation denied for <user>") is assumed to be about
+		// that account, not hallpass's credential; only
+		// insufficientPermissions and accessNotConfigured are.
+		if !rateLimitReasons[r] && r != "insufficientPermissions" && r != "accessNotConfigured" {
+			return integration.Unsupported("Gmail refused the call as %s (%s): the account may have no Gmail licence or a policy blocks it", sub, reasonOr(r, "no reason")), nil
+		}
+	}
+	return integration.Decision{}, classify(err)
+}
+
+func reasonOr(r, fallback string) string {
+	if r == "" {
+		return fallback
+	}
+	return r
+}
+
+// sendAsEntry is the subset of a Gmail SendAs resource hallpass reads.
+type sendAsEntry struct {
+	SendAsEmail        string `json:"sendAsEmail"`
+	VerificationStatus string `json:"verificationStatus"`
+	IsPrimary          bool   `json:"isPrimary"`
+}
+
+func (c *Connection) checkSendAs(ctx context.Context, user, mailbox string) (integration.Decision, error) {
 	if !c.gmail {
 		return integration.Unsupported("send-as addresses are read with the gmail.settings.basic scope; set enable_gmail_settings to evaluate mail.send_as for %s", mailbox), nil
 	}
 	var out struct {
-		SendAs []struct {
-			SendAsEmail        string `json:"sendAsEmail"`
-			VerificationStatus string `json:"verificationStatus"`
-		} `json:"sendAs"`
+		SendAs []sendAsEntry `json:"sendAs"`
 	}
+	// Read as the user: the list "includes the primary send-as address
+	// associated with the account", so the own mailbox is answered by the
+	// same call and an account without Gmail is not a false allow.
 	if err := c.getJSON(ctx, user, scopeGmailSettings, "/gmail/v1/users/me/settings/sendAs", nil, &out); err != nil {
-		return integration.Decision{}, classify(err)
+		return gmailRefused(err, user)
 	}
 	for _, s := range out.SendAs {
-		if strings.EqualFold(s.SendAsEmail, mailbox) {
-			if s.VerificationStatus == "accepted" || s.VerificationStatus == "" {
-				return integration.Allowed("%s has %s as a verified send-as address", user, mailbox), nil
-			}
-			return integration.Denied("%s has %s as a send-as address but it is not verified (%s)", user, mailbox, s.VerificationStatus), nil
+		if !strings.EqualFold(s.SendAsEmail, mailbox) {
+			continue
 		}
+		switch s.VerificationStatus {
+		case "accepted":
+			return integration.Allowed("%s has %s as a verified send-as address", user, mailbox), nil
+		case "pending":
+			return integration.Denied("%s has %s as a send-as address but it is awaiting verification by the owner", user, mailbox), nil
+		}
+		if s.IsPrimary {
+			// The API defines isPrimary as "the primary address used to
+			// login to the account", which every Gmail account has and
+			// cannot delete, and verificationStatus "only applies to
+			// custom from aliases".
+			// UNVERIFIED: the primary entry is assumed to come without a
+			// verificationStatus, which is why isPrimary is consulted.
+			return integration.Allowed("%s is the primary address of %s's own mailbox", mailbox, user), nil
+		}
+		// "" and verificationStatusUnspecified: Gmail did not say whether
+		// the alias is usable. treatAsAlias and a shared domain are not
+		// taken as verification; the API description does not say so.
+		return integration.Unsupported("Gmail lists %s as a send-as address of %s without a verification status", mailbox, user), nil
+	}
+	if mailbox == user {
+		return integration.Unsupported("Gmail did not list %s's own primary address among the send-as addresses", user), nil
 	}
 	return integration.Denied("%s has no send-as address %s", user, mailbox), nil
 }
 
 func (c *Connection) checkDelegate(ctx context.Context, user, mailbox string) (integration.Decision, error) {
-	if mailbox == user {
-		return integration.Allowed("%s owns mailbox %s", user, mailbox), nil
-	}
 	if !c.gmail {
 		return integration.Unsupported("delegates are read with the gmail.settings.basic scope; set enable_gmail_settings to evaluate mail.delegate_access for %s", mailbox), nil
 	}
@@ -651,23 +760,23 @@ func (c *Connection) checkDelegate(ctx context.Context, user, mailbox string) (i
 		} `json:"delegates"`
 	}
 	// The list is read as the mailbox owner, so the mailbox must be a
-	// Workspace account hallpass may impersonate.
+	// Workspace account hallpass may impersonate. For the own mailbox the
+	// owner is the user: a 200 proves the mailbox is set up and reachable.
 	if err := c.getJSON(ctx, mailbox, scopeGmailSettings, "/gmail/v1/users/me/settings/delegates", nil, &out); err != nil {
-		var ie *integration.Error
-		if errors.As(err, &ie) && ie.Code == integration.CodeUnsupported {
-			return integration.Unsupported("could not act as mailbox %s to read its delegates: not a Workspace account, suspended, or the scope is missing", mailbox), nil
-		}
-		if httpx.Status(err) == 404 {
-			return integration.Unsupported("mailbox %s has no Gmail settings; it may not be a Gmail mailbox", mailbox), nil
-		}
-		return integration.Decision{}, classify(err)
+		return gmailRefused(err, mailbox)
+	}
+	if mailbox == user {
+		return integration.Allowed("%s owns mailbox %s and its Gmail settings are readable", user, mailbox), nil
 	}
 	for _, d := range out.Delegates {
 		if strings.EqualFold(d.DelegateEmail, user) {
-			if d.VerificationStatus == "accepted" {
+			switch d.VerificationStatus {
+			case "accepted":
 				return integration.Allowed("%s is an accepted delegate of mailbox %s", user, mailbox), nil
+			case "pending", "rejected", "expired":
+				return integration.Denied("%s is a delegate of mailbox %s but the delegation is %s", user, mailbox, d.VerificationStatus), nil
 			}
-			return integration.Denied("%s is a delegate of mailbox %s but the delegation is %s", user, mailbox, d.VerificationStatus), nil
+			return integration.Unsupported("Gmail lists %s as a delegate of mailbox %s without a verification status", user, mailbox), nil
 		}
 	}
 	return integration.Denied("%s is not a delegate of mailbox %s", user, mailbox), nil

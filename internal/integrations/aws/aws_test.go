@@ -624,12 +624,15 @@ func TestStaticCredentialAndAssumeRoleCaching(t *testing.T) {
 	if form.Get("RoleSessionName") != "hallpass" {
 		t.Errorf("session name %q", form.Get("RoleSessionName"))
 	}
-	// The identity resolved once; later checks reuse it.
+	// The connection keeps no identity cache of its own: the engine's
+	// identity cache (identity_cache_seconds) is the only one, so every
+	// ResolveIdentity call reaches Identity Store. Eleven checks, two of them
+	// for bob with one GetUserId each, and dana's ten with one each.
 	e.f.mu.Lock()
 	n := e.f.getUserIDCalls
 	e.f.mu.Unlock()
-	if n != 2 {
-		t.Errorf("GetUserId called %d times for two users, want 2", n)
+	if n != 11 {
+		t.Errorf("GetUserId called %d times for eleven checks, want 11 (identity cached in the connection)", n)
 	}
 	// A credential that is neither JSON nor ambient: the error never carries it.
 	bad := setup(t, nil, secret.Literal(itest.Canary+"raw-key"))
@@ -794,6 +797,10 @@ func TestStaticMap(t *testing.T) {
 		t.Error(d.Text)
 	}
 	itest.ExpectCode(t, check(t, e, bob, "s3.read", "all"), integration.CodeUserNotFound)
+	// A miss for one set of groups says nothing about another: the same
+	// email arriving with a mapped group resolves (the engine keys its
+	// negative identity cache by groups for this reason).
+	itest.ExpectCode(t, check(t, e, integration.User{Email: "bob@example.com", Groups: []string{"platform-team"}}, "s3.read", "all"), integration.CodeAllowed)
 	itest.ExpectCode(t, check(t, e, integration.User{Email: "dana@example.com"}, "ec2.stop", "all"), integration.CodeDenied)
 	e.f.mu.Lock()
 	sts := e.f.stsCalls
@@ -965,22 +972,59 @@ func TestSimulateDecisions(t *testing.T) {
 	itest.ExpectCode(t, check(t, e, dana, "s3.read", bucketKey), integration.CodeUnsupported)
 	e.f.mu.Lock()
 	e.f.simErr = "NoSuchEntity"
-	before := e.f.getUserIDCalls
+	before := e.f.listRolesCalls
 	e.f.mu.Unlock()
 	d = check(t, e, dana, "s3.read", bucketKey)
 	itest.ExpectCode(t, d, integration.CodeResourceNotVisible)
-	if !strings.Contains(d.Text, "vanished") {
+	// The text is honest about what refreshes: the engine holds the identity
+	// (and so the vanished principal) until identity_cache_seconds expires.
+	if !strings.Contains(d.Text, "vanished") || !strings.Contains(d.Text, "identity_cache_seconds") || strings.Contains(d.Text, "cache will refresh") {
 		t.Error(d.Text)
 	}
 	e.f.mu.Lock()
 	e.f.simErr = ""
 	e.f.mu.Unlock()
+	// The role list was dropped: the next resolve lists roles again.
 	itest.ExpectCode(t, check(t, e, dana, "s3.read", bucketKey), integration.CodeAllowed)
 	e.f.mu.Lock()
-	after := e.f.getUserIDCalls
+	after := e.f.listRolesCalls
 	e.f.mu.Unlock()
-	if after != before+1 {
-		t.Error("identity cache not dropped after NoSuchEntity")
+	if after != before+2 {
+		t.Errorf("ListRoles requests after NoSuchEntity = %d, want %d (role list not dropped)", after, before+2)
+	}
+}
+
+// The connection has no identity cache: the engine's identity_cache_seconds
+// cache is the only one, keyed by email and groups, so nothing here can hold
+// a stale identity beyond it.
+func TestNoConnectionIdentityCache(t *testing.T) {
+	e := setup(t, nil, secret.Secret{})
+	for i := 0; i < 3; i++ {
+		if _, err := e.conn.ResolveIdentity(context.Background(), dana); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.f.mu.Lock()
+	n := e.f.getUserIDCalls
+	e.f.mu.Unlock()
+	if n != 3 {
+		t.Errorf("GetUserId called %d times for three resolves, want 3", n)
+	}
+	iam := setup(t, map[string]string{"identity_mode": "iam_user"}, secret.Secret{})
+	iam.srv.Reset()
+	for i := 0; i < 2; i++ {
+		if _, err := iam.conn.ResolveIdentity(context.Background(), dana); err != nil {
+			t.Fatal(err)
+		}
+	}
+	getUser := 0
+	for _, c := range iam.srv.Calls() {
+		if strings.Contains(string(c.Body), "Action=GetUser") {
+			getUser++
+		}
+	}
+	if getUser != 2 {
+		t.Errorf("GetUser called %d times for two resolves, want 2", getUser)
 	}
 }
 

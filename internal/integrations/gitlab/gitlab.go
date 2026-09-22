@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -69,34 +68,11 @@ func (Integration) Fields() []integration.Field {
 			Description: "how the email is mapped to an account: admin_search (GET /users?search, needs an administrator's token), enterprise_users (GitLab.com enterprise users of the group), saml (the group's SAML identities, NameID must be the email), template (username derived with username_template)"},
 		{Name: "group", Validate: validateGroup,
 			Description: "top-level group path; required for identity_mode enterprise_users and saml"},
-		{Name: "username_template", Default: defaultTemplate, Validate: validateTemplate,
+		{Name: "username_template", Default: defaultTemplate, Validate: integration.ValidateTemplate,
 			Description: "username derivation for identity_mode template: placeholders {email}, {local}, {domain}, default {local}"},
-		{Name: "email_domains", Validate: validateEmailDomains,
+		{Name: "email_domains", Validate: integration.ValidateEmailDomains,
 			Description: "comma-separated email domains (acme.com,acme.io) whose users may be mapped by identity_mode template; required in that mode, any other domain answers unknown"},
 	}
-}
-
-// emailDomainRe is one lowercase DNS-style domain of the email_domains list.
-var emailDomainRe = regexp.MustCompile(`^[a-z0-9.-]+$`)
-
-// parseEmailDomains splits and validates the email_domains value.
-func parseEmailDomains(v string) ([]string, error) {
-	if v == "" {
-		return nil, nil
-	}
-	var out []string
-	for _, d := range strings.Split(v, ",") {
-		if !emailDomainRe.MatchString(d) {
-			return nil, fmt.Errorf("domain %q must match %s (lowercase, no spaces)", d, emailDomainRe)
-		}
-		out = append(out, d)
-	}
-	return out, nil
-}
-
-func validateEmailDomains(v string) error {
-	_, err := parseEmailDomains(v)
-	return err
 }
 
 func validateGroup(v string) error {
@@ -104,36 +80,6 @@ func validateGroup(v string) error {
 		return nil
 	}
 	return validatePath(v)
-}
-
-func validateTemplate(v string) error {
-	if !strings.Contains(v, "{email}") && !strings.Contains(v, "{local}") {
-		return errors.New("must contain {email} or {local}, otherwise every user gets the same username")
-	}
-	for _, ph := range placeholders(v) {
-		switch ph {
-		case "email", "local", "domain":
-		default:
-			return fmt.Errorf("unknown placeholder {%s}; use {email}, {local} or {domain}", ph)
-		}
-	}
-	return nil
-}
-
-func placeholders(tpl string) []string {
-	var out []string
-	for {
-		i := strings.Index(tpl, "{")
-		if i < 0 {
-			return out
-		}
-		j := strings.Index(tpl[i:], "}")
-		if j < 0 {
-			return out
-		}
-		out = append(out, tpl[i+1:i+j])
-		tpl = tpl[i+j+1:]
-	}
 }
 
 // New builds a connection. It does not touch the network.
@@ -162,16 +108,24 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	if err := validateGroup(group); err != nil {
 		return nil, fmt.Errorf("group: %w", err)
 	}
-	tpl := s.Get("username_template")
-	if tpl == "" {
-		tpl = defaultTemplate
+	tplText := s.Get("username_template")
+	if tplText == "" {
+		tplText = defaultTemplate
 	}
-	if err := validateTemplate(tpl); err != nil {
+	tpl, err := integration.ParseTemplate(tplText)
+	if err != nil {
 		return nil, fmt.Errorf("username_template: %w", err)
 	}
-	domains, err := parseEmailDomains(s.Get("email_domains"))
-	if err != nil {
-		return nil, fmt.Errorf("email_domains: %w", err)
+	var domains map[string]bool
+	if raw := s.Get("email_domains"); raw != "" {
+		list, err := integration.ParseEmailDomains(raw)
+		if err != nil {
+			return nil, fmt.Errorf("email_domains: %w", err)
+		}
+		domains = make(map[string]bool, len(list))
+		for _, d := range list {
+			domains[d] = true
+		}
 	}
 	if mode == modeTemplate && len(domains) == 0 {
 		return nil, errors.New("email_domains is required when identity_mode is template: the template maps any email's local part to an account, so the domains that may be mapped must be listed")
@@ -204,9 +158,9 @@ type Connection struct {
 	client   *httpx.Client
 	mode     string
 	group    string
-	template string
-	// domains is the email_domains allow-list (template mode).
-	domains []string
+	template integration.Template
+	// domains is the email_domains allow-list (template mode), lowercase.
+	domains map[string]bool
 	now     func() time.Time
 }
 
@@ -276,25 +230,12 @@ func (u user) identity() integration.Identity {
 
 // domainAllowed reports whether the email's domain is in email_domains.
 func (c *Connection) domainAllowed(email string) bool {
-	_, domain, ok := strings.Cut(email, "@")
-	if !ok || domain == "" {
-		return false
-	}
-	domain = strings.ToLower(domain)
-	for _, d := range c.domains {
-		if d == domain {
-			return true
-		}
-	}
-	return false
+	d := integration.EmailDomain(email)
+	return d != "" && c.domains[d]
 }
 
 // Username applies the template to an email (identity_mode template).
-func (c *Connection) Username(email string) string {
-	local, domain, _ := strings.Cut(email, "@")
-	r := strings.NewReplacer("{email}", email, "{local}", local, "{domain}", domain)
-	return r.Replace(c.template)
-}
+func (c *Connection) Username(email string) string { return c.template.Render(email) }
 
 // ResolveIdentity maps the email to a GitLab account by the configured mode.
 func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (integration.Identity, error) {

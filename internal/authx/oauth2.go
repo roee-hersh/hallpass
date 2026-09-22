@@ -60,11 +60,37 @@ func truncate(s string, n int) string {
 	return s
 }
 
-// PostToken posts form parameters to a token endpoint and decodes the
-// response. A failure is a *TokenError (4xx) or a transport error.
-func PostToken(ctx context.Context, c *httpx.Client, tokenURL string, form url.Values, header http.Header) (Token, error) {
+// TokenRequest is one call to a token endpoint.
+type TokenRequest struct {
+	// URL is the token endpoint, absolute or relative to the client's Base.
+	URL string
+	// Form is the URL-encoded body OAuth 2.0 specifies. JSON is a JSON body
+	// for endpoints that take one instead (Atlassian). Exactly one is set.
+	Form url.Values
+	JSON any
+	// Header holds extra request headers, such as a client Authorization.
+	Header http.Header
+	// Now is the clock the token's expiry is computed from (default
+	// time.Now). A connection passes its injected clock so the expiry and
+	// the TokenSource that checks it agree.
+	Now func() time.Time
+}
+
+// FetchToken posts a token request and decodes the OAuth 2.0 token
+// response, whichever body encoding the endpoint takes. A failure is a
+// *TokenError (an error code or a 4xx status) or a transport error. The
+// expiry is req.Now plus expires_in; a response without expires_in leaves
+// it zero so the TokenSource's default TTL applies.
+func FetchToken(ctx context.Context, c *httpx.Client, req TokenRequest) (Token, error) {
+	if (req.Form == nil) == (req.JSON == nil) {
+		return Token{}, errors.New("token request must carry exactly one of a form or a JSON body")
+	}
+	now := req.Now
+	if now == nil {
+		now = time.Now
+	}
 	idem := false
-	resp, err := c.Do(ctx, &httpx.Request{Method: http.MethodPost, Path: tokenURL, Form: form, Header: header, Idempotent: &idem, Accept4xx: true})
+	resp, err := c.Do(ctx, &httpx.Request{Method: http.MethodPost, Path: req.URL, Form: req.Form, JSON: req.JSON, Header: req.Header, Idempotent: &idem, Accept4xx: true})
 	if err != nil {
 		return Token{}, err
 	}
@@ -80,9 +106,15 @@ func PostToken(ctx context.Context, c *httpx.Client, tokenURL string, form url.V
 	}
 	t := Token{Value: tr.AccessToken}
 	if secs := parseExpiresIn(tr.ExpiresIn); secs > 0 {
-		t.Expiry = time.Now().Add(time.Duration(secs) * time.Second)
+		t.Expiry = now().Add(time.Duration(secs) * time.Second)
 	}
 	return t, nil
+}
+
+// PostToken posts form parameters to a token endpoint and decodes the
+// response with FetchToken, using the wall clock for the expiry.
+func PostToken(ctx context.Context, c *httpx.Client, tokenURL string, form url.Values, header http.Header) (Token, error) {
+	return FetchToken(ctx, c, TokenRequest{URL: tokenURL, Form: form, Header: header})
 }
 
 // parseExpiresIn accepts a number or a numeric string (Salesforce and some

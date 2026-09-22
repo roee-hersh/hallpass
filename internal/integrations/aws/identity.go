@@ -38,7 +38,7 @@ type native struct {
 
 const (
 	ssoPathPrefix = "/aws-reserved/sso.amazonaws.com/"
-	identityTTL   = 10 * time.Minute
+	roleListTTL   = 10 * time.Minute
 	roleMapReread = 60 * time.Second
 	maxPages      = 50
 )
@@ -46,6 +46,8 @@ const (
 var iamUserNameRe = regexp.MustCompile(`^[\w+=,.@-]{1,64}$`)
 
 // ResolveIdentity maps the email to IAM principals by the configured mode.
+// The result is cached by the engine (identity_cache_seconds, keyed by
+// email and groups), not here.
 func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (integration.Identity, error) {
 	email := strings.TrimSpace(u.Email)
 	if email == "" || !strings.Contains(email, "@") {
@@ -53,8 +55,8 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	}
 	switch c.mode {
 	case "static_map":
-		// The group matches are recomputed in Check from the request's
-		// groups, so the cached identity carries no role list.
+		// The map is re-read every 60 s, so the roles are looked up again in
+		// Check from the request's groups rather than carried in the identity.
 		arns, err := c.roleMap.lookup(email, u.Groups)
 		if err != nil {
 			return integration.Identity{}, err
@@ -64,15 +66,9 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 		}
 		return integration.Identity{ID: strings.ToLower(email), Display: email}, nil
 	case "iam_user":
-		return c.identities.Do(ctx, strings.ToLower(email), func(ctx context.Context) (integration.Identity, time.Duration, error) {
-			id, err := c.resolveIAMUser(ctx, email)
-			return id, identityTTL, err
-		})
+		return c.resolveIAMUser(ctx, email)
 	default:
-		return c.identities.Do(ctx, strings.ToLower(email), func(ctx context.Context) (integration.Identity, time.Duration, error) {
-			id, err := c.resolveIdentityCenter(ctx, email)
-			return id, identityTTL, err
-		})
+		return c.resolveIdentityCenter(ctx, email)
 	}
 }
 
@@ -276,7 +272,7 @@ func (c *Connection) permissionSetName(ctx context.Context, arn string) (string,
 		if out.PermissionSet.Name == "" {
 			return "", 0, integration.Errorf(integration.CodeUpstreamError, "DescribePermissionSet returned no name")
 		}
-		return out.PermissionSet.Name, identityTTL, nil
+		return out.PermissionSet.Name, roleListTTL, nil
 	})
 }
 
@@ -291,7 +287,7 @@ type ssoRole struct {
 func (c *Connection) ssoRoles(ctx context.Context) ([]ssoRole, error) {
 	return c.roles.Do(ctx, "sso", func(ctx context.Context) ([]ssoRole, time.Duration, error) {
 		roles, err := c.listSSORoles(ctx)
-		return roles, identityTTL, err
+		return roles, roleListTTL, err
 	})
 }
 

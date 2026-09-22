@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -31,6 +33,10 @@ const (
 // samlMaxIdentities caps the map built by the paginated fallback. A variable
 // so tests can exercise the truncated path.
 var samlMaxIdentities = 5000
+
+// samlFetchHook runs at the start of every identity listing. Tests set it
+// to inject failures such as a panic; it is nil in production.
+var samlFetchHook func()
 
 // validEmail is a shape check only. The email goes into a GraphQL variable
 // (JSON, so no injection) or a file lookup; this keeps garbage out of both.
@@ -211,8 +217,18 @@ type samlIndex struct {
 	total     int
 }
 
+// samlLoad is one in-flight listing shared by every caller that arrives
+// while it runs. done is closed once idx and err are set.
+type samlLoad struct {
+	done chan struct{}
+	idx  *samlIndex
+	err  error
+}
+
 // samlMap returns the index of every external identity, loading it at most
-// every samlCacheTTL. Concurrent loaders share one fetch.
+// every samlCacheTTL. Concurrent callers share one fetch and its outcome;
+// only when that fetch ended because the loader's own context ended do the
+// waiters fetch again with theirs.
 func (c *Connection) samlMap(ctx context.Context) (*samlIndex, error) {
 	c.samlMu.Lock()
 	if c.samlIndex != nil && c.now().Sub(c.samlLoaded) < samlCacheTTL {
@@ -220,35 +236,63 @@ func (c *Connection) samlMap(ctx context.Context) (*samlIndex, error) {
 		c.samlMu.Unlock()
 		return idx, nil
 	}
-	if c.samlLoading != nil {
-		ch := c.samlLoading
+	if ld := c.samlLoading; ld != nil {
 		c.samlMu.Unlock()
 		select {
-		case <-ch:
-			return c.samlMap(ctx)
+		case <-ld.done:
+			if ld.err != nil && (errors.Is(ld.err, context.Canceled) || errors.Is(ld.err, context.DeadlineExceeded)) {
+				return c.samlMap(ctx)
+			}
+			return ld.idx, ld.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
-	ch := make(chan struct{})
-	c.samlLoading = ch
+	ld := &samlLoad{done: make(chan struct{})}
+	c.samlLoading = ld
 	c.samlMu.Unlock()
+	c.runSAMLLoad(ctx, ld)
+	return ld.idx, ld.err
+}
 
-	idx, err := c.fetchSAMLMap(ctx)
-	c.samlMu.Lock()
-	c.samlLoading = nil
-	if err == nil {
-		c.samlIndex, c.samlLoaded = idx, c.now()
-	}
-	c.samlMu.Unlock()
-	close(ch)
-	return idx, err
+// runSAMLLoad performs the fetch for ld and publishes its outcome. The
+// deferred block runs whether the fetch returned, panicked or called
+// runtime.Goexit: it records the result, clears the in-flight marker and
+// closes done, so a panic can never leave later callers waiting on a load
+// that will not finish. The panic becomes a *cache.PanicError (wrapped as
+// an unknown decision) for this caller and the waiters rather than
+// unwinding through the engine. The log line names the panic's type, not
+// its value, which may quote upstream data.
+func (c *Connection) runSAMLLoad(ctx context.Context, ld *samlLoad) {
+	returned := false
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.Error("github: SAML identity listing panicked", "organization", c.org, "type", fmt.Sprintf("%T", r), "stack", string(debug.Stack()))
+			ld.idx, ld.err = nil, integration.Wrap(integration.CodeUpstreamError, &cache.PanicError{Value: r, Stack: debug.Stack()}, "the SAML identity listing failed unexpectedly")
+		} else if !returned {
+			ld.idx, ld.err = nil, integration.Errorf(integration.CodeUpstreamError, "the SAML identity listing exited without returning")
+		}
+		c.samlMu.Lock()
+		if c.samlLoading == ld {
+			c.samlLoading = nil
+		}
+		if ld.err == nil && ld.idx != nil {
+			c.samlIndex, c.samlLoaded = ld.idx, c.now()
+		}
+		c.samlMu.Unlock()
+		close(ld.done)
+	}()
+	ld.idx, ld.err = c.fetchSAMLMap(ctx)
+	returned = true
 }
 
 // fetchSAMLMap lists every external identity. Two linked identities that
 // carry the same address for different logins mark the address as
 // conflicting, so a lookup is ambiguous rather than whichever came last.
 func (c *Connection) fetchSAMLMap(ctx context.Context) (*samlIndex, error) {
+	if samlFetchHook != nil {
+		samlFetchHook()
+	}
 	idx := &samlIndex{entries: map[string]samlEntry{}}
 	m := idx.entries
 	var cursor *string
@@ -328,53 +372,17 @@ func identityEmails(n externalIdentity) []string {
 
 // --- template ---------------------------------------------------------------
 
-func validateTemplate(v string) error {
-	if !strings.Contains(v, "{email}") && !strings.Contains(v, "{local}") {
-		return errors.New("must contain {email} or {local}, otherwise every user gets the same login")
-	}
-	for _, ph := range placeholders(v) {
-		switch ph {
-		case "email", "local", "domain":
-		default:
-			return fmt.Errorf("unknown placeholder {%s}; use {email}, {local} or {domain}", ph)
-		}
-	}
-	return nil
-}
-
-func placeholders(tpl string) []string {
-	var out []string
-	for {
-		i := strings.Index(tpl, "{")
-		if i < 0 {
-			return out
-		}
-		j := strings.Index(tpl[i:], "}")
-		if j < 0 {
-			return out
-		}
-		out = append(out, tpl[i+1:i+j])
-		tpl = tpl[i+j+1:]
-	}
-}
-
-// applyTemplate renders the login template for an email.
-func applyTemplate(tpl, email string) string {
-	local, domain, _ := strings.Cut(email, "@")
-	return strings.NewReplacer("{email}", email, "{local}", local, "{domain}", domain).Replace(tpl)
-}
-
 type userRecord struct {
 	Login string `json:"login"`
 	Type  string `json:"type"`
 }
 
 func (c *Connection) resolveTemplate(ctx context.Context, email string) (string, error) {
-	_, domain, _ := strings.Cut(email, "@")
-	if !c.emailDomains[strings.ToLower(domain)] {
-		return "", integration.Errorf(integration.CodeUnsupported, "email domain %s is not in email_domains; login_template is not applied to it", strings.ToLower(domain))
+	domain := integration.EmailDomain(email)
+	if domain == "" || !c.emailDomains[domain] {
+		return "", integration.Errorf(integration.CodeUnsupported, "email domain %s is not in email_domains; login_template is not applied to it", domain)
 	}
-	login := applyTemplate(c.template, email)
+	login := c.template.Render(email)
 	if !validLogin(login) {
 		return "", integration.UserNotFound("login_template renders %s to %q, which is not a GitHub login", email, login)
 	}

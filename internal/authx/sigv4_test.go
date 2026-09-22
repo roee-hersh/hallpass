@@ -66,7 +66,9 @@ func checkCase(t *testing.T, root, name string, signer SigV4Signer, req *http.Re
 		if err != nil {
 			return "", false
 		}
-		return string(b), true
+		// The vectors carry no carriage returns; a checkout with CRLF
+		// conversion must not change what they mean.
+		return strings.ReplaceAll(string(b), "\r", ""), true
 	}
 	creq, _ := signer.CanonicalRequest(req, body)
 	if w, ok := want("creq"); ok && creq != w {

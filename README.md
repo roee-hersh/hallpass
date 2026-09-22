@@ -85,16 +85,21 @@ connections:
 ```
 
 Secrets are never written into the file. Every credential is `env:NAME` or `file:/path`; files are
-re-read on every use so rotating tokens keep working. Unknown keys, inline secrets and dangling
-references are rejected with file and line.
+re-read on every use so rotating tokens keep working. Unknown keys, repeated keys, inline secrets
+and dangling references are rejected with file and line.
 
 Every connection also accepts `ca_file`, `tls_server_name`, `proxy_url` and `timeout`. There is no
-option to skip TLS verification.
+option to skip TLS verification. `timeout` (default `8s`, up to `5m`) is the budget for one upstream
+call, including the wait for its response headers; connecting and the TLS handshake are each capped
+at the smaller of 5 s and the timeout. URLs must be `https://`; plain `http://` is accepted only for
+`localhost` or a loopback IP address.
 
 Top-level keys: `api_key`, `listen` (default `:8080`), `decision_log` (path, `stderr`, `stdout` or
-`none`), `decision_cache_seconds` (default 30, 0 disables), `identity_cache_seconds` (default 900).
+`none`), `decision_cache_seconds` (default 30, 0 disables), `identity_cache_seconds` (default 900; a
+resolved identity is reused per connection, user and set of groups).
 
-`hallpass catalog <integration>` prints the keys and actions of an integration.
+`hallpass catalog <integration>` prints the keys and actions of an integration. `examples/hallpass.yaml`
+carries a commented example for every integration.
 
 ## Commands
 
@@ -153,7 +158,9 @@ parameters, body fields, AWS operation members. The contract tests run the integ
 Prism, which answers from those descriptions with request validation
 (`go test -tags contract ./test/contract/`, needs node). The live test takes a cases file (see
 `examples/live-cases.yaml`) that names a config file and the answers you expect from your own
-systems; run it once after setting up each connection.
+systems; run it once after setting up each connection. Every resource parser has a fuzz target
+(`go test -run '^$' -fuzz=Fuzz ./internal/integrations/<name>/`) that asserts an accepted resource is
+made only of validated pieces before it reaches a URL or query; CI runs them nightly.
 
 ## Design notes
 

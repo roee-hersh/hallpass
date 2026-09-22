@@ -98,6 +98,11 @@ func load(path string, stderr *os.File) (*config.Config, *integration.Registry, 
 	return cfg, reg, true
 }
 
+// serveParent is the context serve runs under; a signal or its
+// cancellation stops the server. Tests cancel it, since sending the test
+// process a signal is not portable.
+var serveParent = context.Background()
+
 func serve(args []string, stderr *os.File) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -126,7 +131,7 @@ func serve(args []string, stderr *os.File) int {
 	}
 	defer dl.Close()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(serveParent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	eng, err := engine.Build(ctx, cfg, engine.Options{

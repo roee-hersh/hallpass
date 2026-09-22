@@ -48,13 +48,30 @@ type Options struct {
 	// environment proxy settings.
 	ProxyURL string
 	// Timeout bounds one whole request including retries. Zero means 8 s.
+	// It is also how long the transport waits for response headers, so a
+	// long timeout lets a slow upstream answer; connecting and the TLS
+	// handshake are each capped at the smaller of 5 s and Timeout.
 	Timeout time.Duration
 	// RootCAs lets tests inject a pool directly.
 	RootCAs *x509.CertPool
 }
 
+// connectTimeoutCap bounds dialing and the TLS handshake regardless of how
+// long a connection's timeout is: an unreachable host should fail fast.
+const connectTimeoutCap = 5 * time.Second
+
+// effectiveTimeout returns o.Timeout or the default.
+func (o Options) effectiveTimeout() time.Duration {
+	if o.Timeout <= 0 {
+		return integration.DefaultTimeout
+	}
+	return o.Timeout
+}
+
 // NewTransport builds an *http.Transport from Options.
 func NewTransport(o Options) (*http.Transport, error) {
+	timeout := o.effectiveTimeout()
+	connect := min(connectTimeoutCap, timeout)
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if o.RootCAs != nil {
 		tlsCfg.RootCAs = o.RootCAs
@@ -74,10 +91,10 @@ func NewTransport(o Options) (*http.Transport, error) {
 	}
 	t := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           (&net.Dialer{Timeout: connect, KeepAlive: 30 * time.Second}).DialContext,
 		TLSClientConfig:       tlsCfg,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
+		TLSHandshakeTimeout:   connect,
+		ResponseHeaderTimeout: timeout,
 		ExpectContinueTimeout: time.Second,
 		MaxIdleConns:          20,
 		MaxIdleConnsPerHost:   10,
@@ -100,13 +117,9 @@ func NewHTTPClient(o Options) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	timeout := o.Timeout
-	if timeout <= 0 {
-		timeout = integration.DefaultTimeout
-	}
 	return &http.Client{
 		Transport: t,
-		Timeout:   timeout,
+		Timeout:   o.effectiveTimeout(),
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

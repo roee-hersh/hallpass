@@ -149,8 +149,10 @@ is an implicit deny, so it answers deny ("no permission set assigned in account 
 `implicit_deny_as: unknown`, unknown. Only assignment rows whose `AccountId` is exactly `account_id`
 count; rows for other accounts or without one are skipped. A permission set whose role is not in the
 account (not yet provisioned, or recreated with a new suffix) answers `resource_not_visible` unless
-another permission set allows. The email -> roles mapping and the role list are cached for 10 minutes; a
-`NoSuchEntity` from the simulation drops both.
+another permission set allows. The role list and the permission set names are cached in the connection
+for 10 minutes; a `NoSuchEntity` from the simulation drops the role list. The email -> principals mapping
+itself is the identity, which the engine caches for `identity_cache_seconds` (per connection, email and
+groups); the connection keeps no copy, so a vanished role is simulated again until that entry expires.
 
 `static_map` file format, one mapping per line, `#` comments, whitespace separated:
 
@@ -210,7 +212,7 @@ skipped every statement conditioned on those keys, Deny statements included. Acr
 | `MissingContextValues` non-empty and nothing allowed | unknown (`unsupported`), naming the keys; set `context_entries` |
 | resource ARN in another account | unknown (`unsupported`) |
 | `PolicyEvaluation` error | unknown (`unsupported`) |
-| `NoSuchEntity` for the principal | unknown (`resource_not_visible`): the role vanished, caches refresh |
+| `NoSuchEntity` for the principal | unknown (`resource_not_visible`): the role vanished; the role list is dropped now, the identity is re-resolved after `identity_cache_seconds` expires |
 | Identity Center user with `UserStatus` `DISABLED` | deny |
 | no permission set assigned in the account, `implicit_deny_as: deny` | deny |
 | no permission set assigned in the account, `implicit_deny_as: unknown` | unknown (`unsupported`) |

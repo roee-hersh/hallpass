@@ -119,6 +119,9 @@ func TestErrors(t *testing.T) {
 		{"bad timeout", "api_key: env:K\nconnections:\n  - id: a\n    integration: kubernetes\n    url: https://x\n    credential: env:T\n    timeout: fast\n", "timeout must be a duration"},
 		{"missing ca", "api_key: env:K\nconnections:\n  - id: a\n    integration: kubernetes\n    url: https://x\n    credential: env:T\n    ca_file: /nope/ca.pem\n", "ca_file"},
 		{"bad cache", "api_key: env:K\ndecision_cache_seconds: -1\nconnections: []\n", "whole number of seconds"},
+		{"dup connections", "api_key: env:K\nconnections:\n  - id: a\n    integration: kubernetes\n    url: https://x\n    credential: env:T\nconnections:\n  - id: b\n    integration: kubernetes\n    url: https://x\n    credential: env:T\n", `test.yaml:7: key "connections" repeated (first set at line 2)`},
+		{"dup api_key", "api_key: env:K\napi_key: env:K2\nconnections: []\n", `test.yaml:2: key "api_key" repeated (first set at line 1)`},
+		{"dup listen", "api_key: env:K\nlisten: \":1\"\nconnections: []\nlisten: \":2\"\n", `test.yaml:4: key "listen" repeated`},
 		{"not yaml", "api_key: [\n", "test.yaml"},
 	}
 	for _, c := range cases {

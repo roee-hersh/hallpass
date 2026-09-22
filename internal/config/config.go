@@ -127,8 +127,14 @@ func (l *loader) top(n *yaml.Node) {
 		return
 	}
 	seenConnections := false
+	seen := map[string]*yaml.Node{}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		k, v := n.Content[i], n.Content[i+1]
+		if prev, dup := seen[k.Value]; dup {
+			l.errf(k, "key %q repeated (first set at line %d)", k.Value, prev.Line)
+			continue
+		}
+		seen[k.Value] = k
 		switch k.Value {
 		case "api_key":
 			if s, ok := l.scalar(v, "api_key"); ok {

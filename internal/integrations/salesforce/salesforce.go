@@ -55,7 +55,8 @@ const (
 	// jwtLifetime is the assertion's validity. UNVERIFIED: Salesforce is
 	// reported to reject assertions whose exp is more than 3 minutes ahead.
 	jwtLifetime = 3 * time.Minute
-	// describeTTL is how long the PermissionSet describe is cached.
+	// describeTTL is how long the PermissionSet describe and each sObject
+	// existence check are cached.
 	describeTTL = time.Hour
 	// maxQueryPages bounds nextRecordsUrl following.
 	maxQueryPages = 5
@@ -232,6 +233,15 @@ type Connection struct {
 	descMu     sync.Mutex
 	descFields map[string]bool
 	descAt     time.Time
+
+	objMu   sync.Mutex
+	objects map[string]objectState // sObject describe results, by API name
+}
+
+// objectState is one cached answer of the sObject describe.
+type objectState struct {
+	exists bool
+	at     time.Time
 }
 
 // --- authentication ---------------------------------------------------------
@@ -319,21 +329,49 @@ func (c *Connection) fetchToken(ctx context.Context) (authx.Token, error) {
 	}
 	// UNVERIFIED: the token response's instance_url is the host that serves
 	// the org's REST API and may differ from the My Domain URL. It is used
-	// as the API base when it is an https URL without query or userinfo;
+	// as the API base when it is an https URL without query or userinfo
+	// whose host is the configured url's host or a Salesforce-owned domain;
 	// otherwise url is used.
 	c.setInstanceURL(tr.InstanceURL)
 	return authx.Token{Value: tr.AccessToken}, nil
 }
 
+// instanceDomains are the domain suffixes an instance_url host may carry
+// besides the configured url's own host. UNVERIFIED: every org's REST host
+// is under one of these; a host elsewhere is treated as untrusted.
+var instanceDomains = []string{".salesforce.com", ".force.com", ".salesforce.mil"}
+
+// setInstanceURL records the token response's instance_url as the API base
+// when it is trustworthy: https, no userinfo, query or fragment, and a host
+// that either equals the configured url's host or is under a Salesforce
+// domain. Anything else is ignored, so a token endpoint (or a proxy in front
+// of it) cannot redirect the bearer token to a host of its choosing.
 func (c *Connection) setInstanceURL(s string) {
 	s = strings.TrimRight(strings.TrimSpace(s), "/")
 	inst := ""
 	if u, err := url.Parse(s); err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" {
-		inst = s
+		if c.trustedInstanceHost(u) {
+			inst = s
+		} else {
+			c.logger.Debug("salesforce: ignoring token response instance_url with an untrusted host; using url", "host", u.Host)
+		}
 	}
 	c.instMu.Lock()
 	c.instanceURL = inst
 	c.instMu.Unlock()
+}
+
+func (c *Connection) trustedInstanceHost(u *url.URL) bool {
+	if cfg, err := url.Parse(c.url); err == nil && cfg.Host != "" && strings.EqualFold(cfg.Host, u.Host) {
+		return true
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, d := range instanceDomains {
+		if strings.HasSuffix(host, d) && len(host) > len(d) {
+			return true
+		}
+	}
+	return false
 }
 
 // apiBase is the instance URL learned from the token response, or url.
@@ -378,6 +416,13 @@ func (e *apiError) has(code string) bool {
 	return false
 }
 
+// errorCodeRe is the shape of a Salesforce errorCode (INVALID_FIELD,
+// REQUEST_LIMIT_EXCEEDED). Anything else in that slot is not trusted into a
+// decision text or a log line and is rendered as unknownErrorCode.
+var errorCodeRe = regexp.MustCompile(`^[A-Z_]{1,64}$`)
+
+const unknownErrorCode = "unknown error"
+
 func decodeAPIError(resp *httpx.Response) *apiError {
 	e := &apiError{status: resp.Status}
 	var body []struct {
@@ -385,8 +430,12 @@ func decodeAPIError(resp *httpx.Response) *apiError {
 	}
 	if json.Unmarshal(resp.Body, &body) == nil {
 		for _, b := range body {
-			if b.ErrorCode != "" {
+			switch {
+			case b.ErrorCode == "":
+			case errorCodeRe.MatchString(b.ErrorCode):
 				e.codes = append(e.codes, b.ErrorCode)
+			case !e.has(unknownErrorCode):
+				e.codes = append(e.codes, unknownErrorCode)
 			}
 		}
 	}
@@ -459,6 +508,15 @@ func classify(err error, subject string) error {
 		return integration.Wrap(integration.CodeUpstreamError, err, "Salesforce returned HTTP %d for %s", ae.status, subject)
 	}
 	return httpx.Classify(err)
+}
+
+// apiStatus is the HTTP status of an apiError, or 0 for any other error.
+func apiStatus(err error) int {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		return ae.status
+	}
+	return 0
 }
 
 // isQueryShapeError reports a 400 that means the object or field does not
@@ -580,21 +638,14 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	} else if err := validateEmail(u.Email); err != nil {
 		return integration.Identity{}, integration.Errorf(integration.CodeInvalidRequest, "user: %v", err)
 	}
-	// c.matchField is one of three constants; the literal is escaped.
-	soql := "SELECT Id, IsActive, Username, Email, FederationIdentifier, UserType, Name FROM User WHERE " +
-		c.matchField + " = '" + soqlString(u.Email) + "' LIMIT 3"
-	rows, err := queryInto[userRow](ctx, c, soql)
-	if err != nil {
-		return integration.Identity{}, classify(err, "User")
-	}
-	row, err := pickUser(rows, u.Email, c.matchField)
+	row, err := c.lookupUser(ctx, u.Email)
 	if err != nil {
 		return integration.Identity{}, err
 	}
 	if err := validateID(row.ID); err != nil {
 		return integration.Identity{}, integration.Errorf(integration.CodeUpstreamError, "the User row carries no valid Id")
 	}
-	frozen, err := c.isFrozen(ctx, row.ID)
+	frozen, err := c.frozenState(ctx, row.ID)
 	if err != nil {
 		return integration.Identity{}, err
 	}
@@ -603,7 +654,7 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 		Display: row.Username,
 		Attrs: map[string]string{
 			attrActive:   fmt.Sprint(row.IsActive),
-			attrFrozen:   fmt.Sprint(frozen),
+			attrFrozen:   frozen,
 			attrUsername: row.Username,
 			attrUserType: row.UserType,
 		},
@@ -611,23 +662,72 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	return id, nil
 }
 
-// pickUser chooses one row. Email is not unique in Salesforce: several
-// users (a person plus their community or sandbox-cloned accounts) can share
-// one address, so a row whose Username equals the email wins, then a single
-// active Standard user, otherwise the mapping is ambiguous.
-func pickUser(rows []userRow, email, matchField string) (userRow, error) {
+const (
+	// exactUserLimit bounds a lookup by Username. UNVERIFIED: Salesforce
+	// keeps Username unique per org, so a second row means the org is not
+	// what hallpass assumes and the lookup is ambiguous.
+	exactUserLimit = 2
+	// matchUserLimit bounds the match_field lookup. Reaching it means the
+	// rows are a subset of the matches, so no rule may pick from them.
+	matchUserLimit = 4
+)
+
+// queryUsers runs one User lookup by field, which is one of the match_field
+// constants; the literal is escaped.
+func (c *Connection) queryUsers(ctx context.Context, field, value string, limit int) ([]userRow, error) {
+	soql := "SELECT Id, IsActive, Username, Email, FederationIdentifier, UserType, Name FROM User WHERE " +
+		field + " = '" + soqlString(value) + "' LIMIT " + fmt.Sprint(limit)
+	rows, err := queryInto[userRow](ctx, c, soql)
+	if err != nil {
+		return nil, classify(err, "User")
+	}
+	return rows, nil
+}
+
+// lookupUser finds the one User row for the value. Under match_field Email
+// an exact Username lookup runs first (Username is unique, and a person's
+// primary account usually carries the address as its Username); only when
+// that finds nothing is the Email match tried. Username is matched exactly;
+// FederationIdentifier is matched with the same bound and must be unique.
+func (c *Connection) lookupUser(ctx context.Context, value string) (userRow, error) {
+	if c.matchField == matchEmail || c.matchField == matchUsername {
+		rows, err := c.queryUsers(ctx, matchUsername, value, exactUserLimit)
+		if err != nil {
+			return userRow{}, err
+		}
+		switch {
+		case len(rows) == 1:
+			return rows[0], nil
+		case len(rows) > 1:
+			return userRow{}, integration.UserAmbiguous("%d Salesforce users have Username %q", len(rows), value)
+		case c.matchField == matchUsername:
+			return userRow{}, integration.UserNotFound("no Salesforce user has Username %q", value)
+		}
+	}
+	rows, err := c.queryUsers(ctx, c.matchField, value, matchUserLimit)
+	if err != nil {
+		return userRow{}, err
+	}
+	return pickUser(rows, value, c.matchField, matchUserLimit)
+}
+
+// pickUser chooses one row of a match_field lookup. Email is not unique in
+// Salesforce: several users (a person plus their community or sandbox-cloned
+// accounts) can share one address, so a single active Standard user wins
+// among two or three rows; when the rows hit the query limit they are only a
+// subset of the matches and nothing may be picked from them. Any other
+// multiplicity is ambiguous.
+func pickUser(rows []userRow, value, matchField string, limit int) (userRow, error) {
 	switch len(rows) {
 	case 0:
-		return userRow{}, integration.UserNotFound("no Salesforce user has %s %q", matchField, email)
+		return userRow{}, integration.UserNotFound("no Salesforce user has %s %q", matchField, value)
 	case 1:
 		return rows[0], nil
 	}
+	if len(rows) >= limit {
+		return userRow{}, integration.UserAmbiguous("at least %d Salesforce users have %s %q; set match_field: FederationIdentifier (or Username) to disambiguate", len(rows), matchField, value)
+	}
 	if matchField == matchEmail {
-		for _, r := range rows {
-			if strings.EqualFold(r.Username, email) {
-				return r, nil
-			}
-		}
 		var std []userRow
 		for _, r := range rows {
 			// UNVERIFIED: UserType "Standard" is the value for full licence
@@ -640,12 +740,25 @@ func pickUser(rows []userRow, email, matchField string) (userRow, error) {
 			return std[0], nil
 		}
 	}
-	return userRow{}, integration.UserAmbiguous("%d Salesforce users have %s %q; set match_field: FederationIdentifier (or Username) to disambiguate", len(rows), matchField, email)
+	return userRow{}, integration.UserAmbiguous("%d Salesforce users have %s %q; set match_field: FederationIdentifier (or Username) to disambiguate", len(rows), matchField, value)
 }
 
-// isFrozen reads UserLogin.IsFrozen. Orgs or users without access to
-// UserLogin skip the check.
-func (c *Connection) isFrozen(ctx context.Context, userID string) (bool, error) {
+// Values of the frozen identity attribute.
+const (
+	frozenTrue    = "true"
+	frozenFalse   = "false"
+	frozenUnknown = "unknown" // UserLogin is not queryable in this org
+)
+
+// frozenNotDetected is the probe warning and the reason recorded when
+// UserLogin cannot be queried.
+const frozenNotDetected = "frozen users are not detected: UserLogin not queryable"
+
+// frozenState reads UserLogin.IsFrozen and returns frozenTrue, frozenFalse
+// or, where the org or the integration user cannot query UserLogin,
+// frozenUnknown. A user whose frozen state is unknown is still allowed; the
+// probe reports the gap.
+func (c *Connection) frozenState(ctx context.Context, userID string) (string, error) {
 	// UNVERIFIED: UserLogin exposes IsFrozen per user and is queryable by
 	// the integration user; where the object or field is missing the query
 	// fails with INVALID_TYPE or INVALID_FIELD and freezing is not modelled.
@@ -654,17 +767,17 @@ func (c *Connection) isFrozen(ctx context.Context, userID string) (bool, error) 
 	}](ctx, c, "SELECT IsFrozen FROM UserLogin WHERE UserId = '"+userID+"'")
 	if err != nil {
 		if isQueryShapeError(err) {
-			c.logger.Debug("salesforce: UserLogin not queryable; frozen users are not detected")
-			return false, nil
+			c.logger.Debug("salesforce: " + frozenNotDetected)
+			return frozenUnknown, nil
 		}
-		return false, classify(err, "UserLogin")
+		return "", classify(err, "UserLogin")
 	}
 	for _, r := range rows {
 		if r.IsFrozen {
-			return true, nil
+			return frozenTrue, nil
 		}
 	}
-	return false, nil
+	return frozenFalse, nil
 }
 
 // --- checks -----------------------------------------------------------------
@@ -693,7 +806,7 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	if r.Identity.Attr(attrActive) != "true" {
 		return integration.Denied("user %s is inactive", who), nil
 	}
-	if r.Identity.Attr(attrFrozen) == "true" {
+	if r.Identity.Attr(attrFrozen) == frozenTrue {
 		return integration.Denied("user %s is frozen", who), nil
 	}
 	switch act.kind {
@@ -738,6 +851,19 @@ func (r recordAccessRow) column(name string) bool {
 	return false
 }
 
+// accessLevels are the values UserRecordAccess.MaxAccessLevel can take.
+// UNVERIFIED: the picklist is None, Read, Edit, Delete, Transfer, All.
+var accessLevels = map[string]bool{"None": true, "Read": true, "Edit": true, "Delete": true, "Transfer": true, "All": true}
+
+// accessLevel renders MaxAccessLevel for a decision text: only a known
+// picklist value is copied; anything else (an upstream surprise) is "unknown".
+func accessLevel(v string) string {
+	if accessLevels[v] {
+		return v
+	}
+	return "unknown"
+}
+
 // checkRecord asks UserRecordAccess, which must be filtered by exactly one
 // UserId and one RecordId.
 func (c *Connection) checkRecord(ctx context.Context, act action, uid, who string, t target) (integration.Decision, error) {
@@ -755,10 +881,7 @@ func (c *Connection) checkRecord(ctx context.Context, act action, uid, who strin
 			"record %s is not visible to the integration user, or its object has no sharing settings", t.recordID), nil
 	}
 	row := rows[0]
-	level := row.MaxAccessLevel
-	if level == "" {
-		level = "unknown"
-	}
+	level := accessLevel(row.MaxAccessLevel)
 	if row.column(act.column) {
 		return integration.Allowed("%s has %s on record %s (max access level %s)", who, act.column, t.recordID, level), nil
 	}
@@ -810,15 +933,96 @@ func (r objectPermRow) column(name string) bool {
 	return false
 }
 
-// assignedSets is the sub-select of every permission set assigned to the
-// user. Profiles appear as permission sets with IsOwnedByProfile = true and
-// permission set groups as their aggregate set. uid is regex-validated.
-func assignedSets(uid string) string {
+// soqlDateTime renders t as a SOQL datetime literal (unquoted,
+// YYYY-MM-DDThh:mm:ssZ).
+func soqlDateTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+// assignedSets is the sub-select of every permission set in force for the
+// user right now. Profiles appear as permission sets with IsOwnedByProfile
+// = true and permission set groups as their aggregate set. Session-based
+// permission sets (HasActivationRequired) only apply during an activated
+// session and time-bound assignments end at ExpirationDate, so both are
+// excluded. uid is regex-validated; now is rendered by hallpass.
+//
+// UNVERIFIED: PermissionSet.HasActivationRequired and
+// PermissionSetAssignment.ExpirationDate are filterable through the
+// assignment sub-select; orgs on API versions before ExpirationDate existed
+// answer INVALID_FIELD, which assignedSetsLoose handles.
+func assignedSets(uid string, now time.Time) string {
+	return "(SELECT PermissionSetId FROM PermissionSetAssignment WHERE AssigneeId = '" + uid + "'" +
+		" AND PermissionSet.HasActivationRequired = false" +
+		" AND (ExpirationDate = null OR ExpirationDate > " + soqlDateTime(now) + "))"
+}
+
+// assignedSetsLoose is assignedSets without the activation and expiry
+// filter: every assignment, including ones not in force. An allow derived
+// from it is not trustworthy.
+func assignedSetsLoose(uid string) string {
 	return "(SELECT PermissionSetId FROM PermissionSetAssignment WHERE AssigneeId = '" + uid + "')"
 }
 
+// looseText is the unknown answer for an allow that only the unfiltered
+// sub-select produced.
+const looseText = "could not exclude session-based or expired assignments"
+
+// queryAssigned runs build(sub) with the filtered assignment sub-select. When
+// the org rejects the filter fields (INVALID_FIELD), it runs once more with
+// the loose sub-select and reports loose = true, in which case the caller
+// may still deny (the loose set is a superset) but must not allow.
+func queryAssigned[T any](ctx context.Context, c *Connection, uid string, build func(sub string) string) (rows []T, loose bool, err error) {
+	rows, err = queryInto[T](ctx, c, build(assignedSets(uid, c.now())))
+	if err == nil {
+		return rows, false, nil
+	}
+	var ae *apiError
+	if apiStatus(err) != http.StatusBadRequest || !errors.As(err, &ae) || !ae.has("INVALID_FIELD") {
+		return nil, false, err
+	}
+	c.logger.Debug("salesforce: the assignment filter was rejected (INVALID_FIELD); retrying without it, allows become unknown")
+	rows, err = queryInto[T](ctx, c, build(assignedSetsLoose(uid)))
+	if err != nil {
+		return nil, false, err
+	}
+	return rows, true, nil
+}
+
+// objectExists confirms the sObject through its describe, cached for an
+// hour. A 404 is reported as an unknown decision; any other failure is an
+// error.
+func (c *Connection) objectExists(ctx context.Context, name string) (integration.Decision, bool, error) {
+	c.objMu.Lock()
+	if c.objects == nil {
+		c.objects = map[string]objectState{}
+	}
+	st, ok := c.objects[name]
+	c.objMu.Unlock()
+	if !ok || !c.now().Before(st.at.Add(describeTTL)) {
+		// UNVERIFIED: the describe of an object that does not exist, or that
+		// the integration user cannot see at all, is a 404 NOT_FOUND.
+		err := c.get(ctx, "/services/data/"+c.version+"/sobjects/"+httpx.PathEscape(name)+"/describe", nil, nil)
+		switch {
+		case err == nil:
+			st = objectState{exists: true, at: c.now()}
+		case apiStatus(err) == http.StatusNotFound:
+			st = objectState{exists: false, at: c.now()}
+		default:
+			return integration.Decision{}, false, classify(err, "the describe of "+name)
+		}
+		c.objMu.Lock()
+		c.objects[name] = st
+		c.objMu.Unlock()
+	}
+	if !st.exists {
+		return integration.UnknownDecision(integration.CodeResourceNotVisible, "object %s does not exist or is not visible to the integration user", name), false, nil
+	}
+	return integration.Decision{}, true, nil
+}
+
 // checkObject ORs ObjectPermissions across the user's profile and
-// permission sets. Zero rows is a deny: nothing grants the object.
+// permission sets. Zero rows is a deny once the object is known to exist:
+// nothing grants it.
 func (c *Connection) checkObject(ctx context.Context, act action, uid, who string, t target) (integration.Decision, error) {
 	if d, stale, err := c.groupsRecalculated(ctx, uid); err != nil {
 		return integration.Decision{}, err
@@ -828,18 +1032,27 @@ func (c *Connection) checkObject(ctx context.Context, act action, uid, who strin
 	// UNVERIFIED: profile object permissions are rows whose Parent is the
 	// profile's owned permission set, and a permission set group's rows
 	// reflect its muting sets through the aggregate permission set.
-	soql := "SELECT PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords, Parent.IsOwnedByProfile, Parent.Name " +
-		"FROM ObjectPermissions WHERE SobjectType = '" + t.object + "' AND ParentId IN " + assignedSets(uid)
-	rows, err := queryInto[objectPermRow](ctx, c, soql)
+	rows, loose, err := queryAssigned[objectPermRow](ctx, c, uid, func(sub string) string {
+		return "SELECT PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords, Parent.IsOwnedByProfile, Parent.Name " +
+			"FROM ObjectPermissions WHERE SobjectType = '" + t.object + "' AND ParentId IN " + sub
+	})
 	if err != nil {
 		return integration.Decision{}, classify(err, "ObjectPermissions for "+t.object)
 	}
 	for _, r := range rows {
 		if r.column(act.column) {
+			if loose {
+				return integration.Unsupported("%s may have %s on %s through %s, but hallpass %s", who, act.column, t.object, r.Parent.label(), looseText), nil
+			}
 			return integration.Allowed("%s has %s on %s through %s", who, act.column, t.object, r.Parent.label()), nil
 		}
 	}
 	if len(rows) == 0 {
+		if d, ok, err := c.objectExists(ctx, t.object); err != nil {
+			return integration.Decision{}, err
+		} else if !ok {
+			return d, nil
+		}
 		return integration.Denied("no profile or permission set assigned to %s grants any access to %s", who, t.object), nil
 	}
 	return integration.Denied("%s lacks %s on %s across %d assigned profile and permission sets", who, act.column, t.object, len(rows)), nil
@@ -860,9 +1073,10 @@ func (c *Connection) checkField(ctx context.Context, act action, uid, who string
 		return d, nil
 	}
 	full := t.object + "." + t.field
-	soql := "SELECT PermissionsRead, PermissionsEdit, Parent.IsOwnedByProfile, Parent.Name FROM FieldPermissions " +
-		"WHERE SobjectType = '" + t.object + "' AND Field = '" + full + "' AND ParentId IN " + assignedSets(uid)
-	rows, err := queryInto[fieldPermRow](ctx, c, soql)
+	rows, loose, err := queryAssigned[fieldPermRow](ctx, c, uid, func(sub string) string {
+		return "SELECT PermissionsRead, PermissionsEdit, Parent.IsOwnedByProfile, Parent.Name FROM FieldPermissions " +
+			"WHERE SobjectType = '" + t.object + "' AND Field = '" + full + "' AND ParentId IN " + sub
+	})
 	if err != nil {
 		return integration.Decision{}, classify(err, "FieldPermissions for "+full)
 	}
@@ -872,6 +1086,9 @@ func (c *Connection) checkField(ctx context.Context, act action, uid, who string
 			granted = r.PermissionsEdit
 		}
 		if granted {
+			if loose {
+				return integration.Unsupported("%s may have %s on %s through %s, but hallpass %s", who, act.column, full, r.Parent.label(), looseText), nil
+			}
 			return integration.Allowed("%s has %s on %s through %s", who, act.column, full, r.Parent.label()), nil
 		}
 	}
@@ -899,32 +1116,45 @@ func (c *Connection) checkSystem(ctx context.Context, uid, who string, t target)
 	} else if stale {
 		return d, nil
 	}
-	soql := "SELECT Id, Name, IsOwnedByProfile FROM PermissionSet WHERE " + t.perm + " = true AND Id IN " + assignedSets(uid)
-	rows, err := queryInto[struct {
+	type permSetRow struct {
 		Name             string `json:"Name"`
 		IsOwnedByProfile bool   `json:"IsOwnedByProfile"`
-	}](ctx, c, soql)
+	}
+	rows, loose, err := queryAssigned[permSetRow](ctx, c, uid, func(sub string) string {
+		return "SELECT Id, Name, IsOwnedByProfile FROM PermissionSet WHERE " + t.perm + " = true AND Id IN " + sub
+	})
 	if err != nil {
 		return integration.Decision{}, classify(err, "PermissionSet."+t.perm)
 	}
 	if len(rows) > 0 {
 		p := parentRef{IsOwnedByProfile: rows[0].IsOwnedByProfile, Name: rows[0].Name}
+		if loose {
+			return integration.Unsupported("%s may hold %s through %s, but hallpass %s", who, t.perm, p.label(), looseText), nil
+		}
 		return integration.Allowed("%s holds %s through %s", who, t.perm, p.label()), nil
 	}
 	return integration.Denied("no profile or permission set assigned to %s has %s", who, t.perm), nil
 }
 
-// checkPermSet asks whether the user is assigned the permission set by name.
+// checkPermSet asks whether the user is assigned the permission set by API
+// name. A managed package's set is permset:<ns>__<Name> and is matched on
+// NamespacePrefix too; an unprefixed name matches only sets without one.
 func (c *Connection) checkPermSet(ctx context.Context, uid, who string, t target) (integration.Decision, error) {
-	soql := "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '" + uid + "' AND PermissionSet.Name = '" + t.permSet + "'"
+	// UNVERIFIED: PermissionSet.NamespacePrefix is null for local sets and
+	// filterable through the PermissionSet relationship of the assignment.
+	ns := "PermissionSet.NamespacePrefix = null"
+	if t.permSetNS != "" {
+		ns = "PermissionSet.NamespacePrefix = '" + t.permSetNS + "'"
+	}
+	soql := "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '" + uid + "' AND PermissionSet.Name = '" + t.permSet + "' AND " + ns
 	rows, err := c.query(ctx, soql)
 	if err != nil {
-		return integration.Decision{}, classify(err, "PermissionSetAssignment for "+t.permSet)
+		return integration.Decision{}, classify(err, "PermissionSetAssignment for "+t.permSetFull())
 	}
 	if len(rows) > 0 {
-		return integration.Allowed("%s is assigned permission set %s", who, t.permSet), nil
+		return integration.Allowed("%s is assigned permission set %s", who, t.permSetFull()), nil
 	}
-	return integration.Denied("%s is not assigned permission set %s", who, t.permSet), nil
+	return integration.Denied("%s is not assigned permission set %s", who, t.permSetFull()), nil
 }
 
 // checkUser answers user.active from the resolved identity; an inactive or
@@ -935,6 +1165,9 @@ func (c *Connection) checkUser(r integration.CheckRequest, uid, who string, t ta
 		return integration.Decision{}, integration.Errorf(integration.CodeInvalidRequest, "record:%s is not the user's own Id %s; user.active answers about the requesting user", t.recordID, uid)
 	case t.email != "" && !strings.EqualFold(t.email, r.User.Email):
 		return integration.Decision{}, integration.Errorf(integration.CodeInvalidRequest, "user:%s is not the requesting user; user.active answers about the requesting user", t.email)
+	}
+	if r.Identity.Attr(attrFrozen) == frozenUnknown {
+		return integration.Allowed("user %s is active (%s)", who, frozenNotDetected), nil
 	}
 	return integration.Allowed("user %s is active and not frozen", who), nil
 }
@@ -1021,6 +1254,7 @@ func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error)
 			res.Warnings = append(res.Warnings, fmt.Sprintf("under %d%% of the daily API request allocation remains (%d of %d); every check costs one to three requests", lowLimitPercent, rem, max))
 		}
 	}
+	selfID := ""
 	if c.username != "" {
 		rows, err := queryInto[userRow](ctx, c, "SELECT Id, Username, IsActive FROM User WHERE Username = '"+soqlString(c.username)+"'")
 		if err != nil {
@@ -1033,6 +1267,28 @@ func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error)
 			res.Warnings = append(res.Warnings, "the integration user "+c.username+" is inactive")
 		default:
 			summary += " as " + rows[0].Username
+		}
+		if len(rows) > 0 && validateID(rows[0].ID) == nil {
+			selfID = rows[0].ID
+		}
+	}
+	// The frozen check is tried on the integration user itself, so an org
+	// where UserLogin is not queryable is reported here rather than silently
+	// answering allow for frozen users.
+	if selfID != "" {
+		if state, err := c.frozenState(ctx, selfID); err != nil {
+			return integration.ProbeResult{}, err
+		} else if state == frozenUnknown {
+			res.Warnings = append(res.Warnings, frozenNotDetected)
+		}
+	} else {
+		// UNVERIFIED: without a known user Id (client_credentials, or the
+		// integration user not found) UserLogin is probed unfiltered.
+		if _, err := c.query(ctx, "SELECT IsFrozen FROM UserLogin LIMIT 1"); err != nil {
+			if !isQueryShapeError(err) {
+				return integration.ProbeResult{}, classify(err, "UserLogin")
+			}
+			res.Warnings = append(res.Warnings, frozenNotDetected)
 		}
 	}
 	fields, err := c.permissionFields(ctx)

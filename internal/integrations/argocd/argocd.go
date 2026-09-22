@@ -11,10 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/catalog"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
@@ -82,7 +84,7 @@ type Connection struct {
 	mu      sync.Mutex
 	bundle  *bundle
 	loaded  time.Time
-	loading chan struct{}
+	loading *loadCall
 }
 
 // bundle is everything read from the cluster, parsed once.
@@ -121,6 +123,25 @@ type projectList struct {
 	} `json:"items"`
 }
 
+// loadCall is one shared fetch; done closes once b and err are set.
+type loadCall struct {
+	done chan struct{}
+	b    *bundle
+	err  error
+}
+
+// defaultLoadTimeout bounds a policy fetch whose caller's context has no
+// deadline.
+const defaultLoadTimeout = 30 * time.Second
+
+// load returns the cached policy bundle or fetches it once, sharing the
+// result with concurrent callers.
+//
+// The shared fetch runs in its own goroutine on a context detached from the
+// first caller's cancellation (cache.Detach): otherwise that caller going
+// away would abort the fetch and hand every waiter a context.Canceled that
+// is not theirs. Each caller stops waiting when its own ctx is done. A
+// panic in fetch becomes a *cache.PanicError for everyone waiting on it.
 func (c *Connection) load(ctx context.Context) (*bundle, error) {
 	c.mu.Lock()
 	if c.bundle != nil && c.now().Sub(c.loaded) < policyCacheTTL {
@@ -128,29 +149,45 @@ func (c *Connection) load(ctx context.Context) (*bundle, error) {
 		c.mu.Unlock()
 		return b, nil
 	}
-	if c.loading != nil {
-		ch := c.loading
-		c.mu.Unlock()
-		select {
-		case <-ch:
-			return c.load(ctx)
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	lc := c.loading
+	if lc == nil {
+		lc = &loadCall{done: make(chan struct{})}
+		c.loading = lc
+		fctx, cancel := cache.Detach(ctx, defaultLoadTimeout)
+		go func() {
+			defer cancel()
+			c.runLoad(lc, fctx)
+		}()
 	}
-	ch := make(chan struct{})
-	c.loading = ch
 	c.mu.Unlock()
+	select {
+	case <-lc.done:
+		return lc.b, lc.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
 
-	b, err := c.fetch(ctx)
-	c.mu.Lock()
-	c.loading = nil
-	if err == nil {
-		c.bundle, c.loaded = b, c.now()
-	}
-	c.mu.Unlock()
-	close(ch)
-	return b, err
+// runLoad runs one fetch for lc, then always clears the inflight call and
+// closes lc.done, whether fetch returned, panicked or called runtime.Goexit.
+func (c *Connection) runLoad(lc *loadCall, ctx context.Context) {
+	returned := false
+	defer func() {
+		if r := recover(); r != nil {
+			lc.b, lc.err = nil, &cache.PanicError{Value: r, Stack: debug.Stack()}
+		} else if !returned {
+			lc.b, lc.err = nil, errors.New("policy fetch exited without returning")
+		}
+		c.mu.Lock()
+		c.loading = nil
+		if lc.err == nil {
+			c.bundle, c.loaded = lc.b, c.now()
+		}
+		c.mu.Unlock()
+		close(lc.done)
+	}()
+	lc.b, lc.err = c.fetch(ctx)
+	returned = true
 }
 
 func (c *Connection) fetch(ctx context.Context) (*bundle, error) {

@@ -48,7 +48,7 @@ non-member or a branch check, one or two more.
 | `identity_mode` | how the email becomes an account, see below |
 | `group` | top-level group path for the group-scoped identity modes |
 | `username_template` | for `template` mode: placeholders `{email}`, `{local}`, `{domain}`; must contain `{email}` or `{local}` |
-| `email_domains` | for `template` mode, required there: comma-separated domains (`acme.com,acme.io`, each `[a-z0-9.-]+`, exact match, no subdomain wildcard) whose emails may be mapped through the template. Without it `root@attacker.example` would map to `root`. An email with any other domain answers unknown (`unsupported`, "domain not allowed for template identities") |
+| `email_domains` | for `template` mode, required there: comma-separated domains (`acme.com, acme.io`; entries are trimmed and lowercased, each must be a DNS name, exact match, no subdomain wildcard) whose emails may be mapped through the template. Without it `root@attacker.example` would map to `root`. An email with any other domain answers unknown (`unsupported`, "domain not allowed for template identities") |
 
 ### Identity modes
 

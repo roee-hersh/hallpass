@@ -553,13 +553,16 @@ func TestNewValidation(t *testing.T) {
 	if err := build(map[string]string{"identity_mode": "template"}, itest.Literal(token)); err == nil || !strings.Contains(err.Error(), "email_domains") {
 		t.Errorf("template without email_domains: %v", err)
 	}
-	for _, bad := range []string{"Acme.com", "acme.com,", "acme.com, acme.io", "acme.com;acme.io", "a/b", ","} {
+	for _, bad := range []string{"acme.com,", ",acme.com", "acme.com, ,acme.io", "acme.com;acme.io", "a/b", ",", "a b.com", "exa_mple.com"} {
 		if err := build(map[string]string{"identity_mode": "template", "email_domains": bad}, itest.Literal(token)); err == nil {
 			t.Errorf("email_domains %q accepted", bad)
 		}
 	}
-	if err := build(map[string]string{"identity_mode": "template", "email_domains": "acme.com,acme.io"}, itest.Literal(token)); err != nil {
-		t.Error(err)
+	// Spaces around the commas and upper case are normalised, as in github.
+	for _, good := range []string{"acme.com,acme.io", "acme.com, acme.io", "Acme.com"} {
+		if err := build(map[string]string{"identity_mode": "template", "email_domains": good}, itest.Literal(token)); err != nil {
+			t.Errorf("email_domains %q: %v", good, err)
+		}
 	}
 	if err := build(nil, secret.Secret{}); err == nil {
 		t.Error("missing credential accepted")
@@ -1378,6 +1381,18 @@ func TestAccountStateHandling(t *testing.T) {
 		d := check(t, c, fmt.Sprintf("u%d@example.com", id), "project.read", "project:acme/webapp")
 		itest.ExpectCode(t, d, integration.CodeUnsupported)
 	}
+}
+
+// TestEmailDomainsSpacedList: `acme.com, acme.io` (with the space) is one
+// list of two domains, and an upper-case entry matches the lower-case email.
+func TestEmailDomainsSpacedList(t *testing.T) {
+	f := newFake()
+	f.admin = false
+	f.member("acme/webapp", bob, levelDeveloper)
+	_, c := setup(t, f, map[string]string{"identity_mode": "template", "username_template": "{local}", "email_domains": "Acme.com, acme.io"})
+	itest.ExpectCode(t, check(t, c, "bob@acme.io", "mr.create", "project:acme/webapp"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, "bob@acme.com", "mr.create", "project:acme/webapp"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, "bob@acme.org", "mr.create", "project:acme/webapp"), integration.CodeUnsupported)
 }
 
 func TestTemplateDomainAllowlist(t *testing.T) {

@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 )
 
@@ -119,13 +121,24 @@ type CachedProvider struct {
 	Now   func() time.Time
 	Early time.Duration
 
-	mu    sync.Mutex
+	mu       sync.Mutex
+	creds    AWSCredentials
+	inflight *credsCall
+}
+
+// credsCall is one shared Fetch; done closes once creds and err are set.
+type credsCall struct {
+	done  chan struct{}
 	creds AWSCredentials
-	wait  chan struct{}
 	err   error
 }
 
 // Credentials implements CredentialProvider.
+//
+// Like TokenSource.Get, the shared Fetch runs in its own goroutine on a
+// context detached from the first caller's cancellation; each caller stops
+// waiting on its own ctx, and a panic in Fetch becomes a *cache.PanicError
+// for everyone waiting on it.
 func (p *CachedProvider) Credentials(ctx context.Context) (AWSCredentials, error) {
 	now := time.Now()
 	if p.Now != nil {
@@ -141,33 +154,45 @@ func (p *CachedProvider) Credentials(ctx context.Context) (AWSCredentials, error
 		p.mu.Unlock()
 		return c, nil
 	}
-	if p.wait != nil {
-		ch := p.wait
-		p.mu.Unlock()
-		select {
-		case <-ch:
-		case <-ctx.Done():
-			return AWSCredentials{}, ctx.Err()
+	cc := p.inflight
+	if cc == nil {
+		cc = &credsCall{done: make(chan struct{})}
+		p.inflight = cc
+		fctx, cancel := cache.Detach(ctx, defaultFetchTimeout)
+		go func() {
+			defer cancel()
+			p.fetch(cc, fctx)
+		}()
+	}
+	p.mu.Unlock()
+	select {
+	case <-cc.done:
+	case <-ctx.Done():
+		return AWSCredentials{}, ctx.Err()
+	}
+	return cc.creds, cc.err
+}
+
+// fetch runs one Fetch for cc, then always clears the inflight call and
+// closes cc.done, whether Fetch returned, panicked or called runtime.Goexit.
+func (p *CachedProvider) fetch(cc *credsCall, ctx context.Context) {
+	returned := false
+	defer func() {
+		if r := recover(); r != nil {
+			cc.creds, cc.err = AWSCredentials{}, &cache.PanicError{Value: r, Stack: debug.Stack()}
+		} else if !returned {
+			cc.creds, cc.err = AWSCredentials{}, errors.New("credential fetch exited without returning")
 		}
 		p.mu.Lock()
-		c, err := p.creds, p.err
+		p.inflight = nil
+		if cc.err == nil {
+			p.creds = cc.creds
+		}
 		p.mu.Unlock()
-		return c, err
-	}
-	ch := make(chan struct{})
-	p.wait = ch
-	p.mu.Unlock()
-
-	c, err := p.Fetch(ctx)
-	p.mu.Lock()
-	p.wait = nil
-	p.err = err
-	if err == nil {
-		p.creds = c
-	}
-	p.mu.Unlock()
-	close(ch)
-	return c, err
+		close(cc.done)
+	}()
+	cc.creds, cc.err = p.Fetch(ctx)
+	returned = true
 }
 
 // StaticProvider returns fixed credentials.

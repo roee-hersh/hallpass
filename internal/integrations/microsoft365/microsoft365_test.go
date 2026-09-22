@@ -41,9 +41,16 @@ const (
 	chanPriv = "19:priv@thread.tacv2"
 	chanShr  = "19:shared@thread.tacv2"
 	chanMod  = "19:mod@thread.tacv2"
-	drive    = "b!drive1"
-	graphSP  = "eeeeeeee-0000-0000-0000-000000000001"
-	ownSP    = "eeeeeeee-0000-0000-0000-000000000002"
+	// chanNoType reports no membershipType at all.
+	chanNoType = "19:notype@thread.tacv2"
+	// groupHidden has visibility HiddenMembership; groupMissing does not exist.
+	groupHidden  = "bbbbbbbb-0000-0000-0000-000000000003"
+	groupMissing = "bbbbbbbb-0000-0000-0000-000000000099"
+	// nostateID is a user whose accountEnabled Graph does not report.
+	nostateID = "aaaaaaaa-0000-0000-0000-000000000005"
+	drive     = "b!drive1"
+	graphSP   = "eeeeeeee-0000-0000-0000-000000000001"
+	ownSP     = "eeeeeeee-0000-0000-0000-000000000002"
 )
 
 // fakeGraph is an in-memory Graph.
@@ -64,10 +71,26 @@ type fakeGraph struct {
 	roles    map[string][]string  // user id -> role template ids
 	teams    map[string]map[string][]string
 	channels map[string]channelDef
+	groupVis map[string]string            // group id -> visibility ("" = null); absent = 404
 	perms    map[string][]drivePermission // item -> permissions
 	owner    string                       // drive owner user id
 	appRoles []string                     // granted app role values
 	spDenied bool
+	// ignoreFilter makes members collections return the whole roster,
+	// as an upstream that does not apply the userId $filter would.
+	ignoreFilter bool
+	// driveHidden makes GET /drives/{id} answer 404 while the item's
+	// permissions stay readable.
+	driveHidden bool
+	// lastEscaped is the escaped path of the most recent Graph call, for
+	// asserting path escaping (itest.Call records the decoded path).
+	lastEscaped string
+}
+
+func (f *fakeGraph) escapedPath() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastEscaped
 }
 
 type channelDef struct {
@@ -84,19 +107,24 @@ func newFake(t *testing.T) *fakeGraph {
 			bobID:   {ID: bobID, UserPrincipalName: "bob@example.com", Mail: "bob@example.com", AccountEnabled: &enabled, UserType: "Member", DisplayName: "Bob"},
 			guestID: {ID: guestID, UserPrincipalName: "guest_gmail.com#EXT#@example.onmicrosoft.com", Mail: "guest@gmail.com", AccountEnabled: &enabled, UserType: "Guest", DisplayName: "Guest"},
 			offID:   {ID: offID, UserPrincipalName: "off@example.com", Mail: "off@example.com", AccountEnabled: &disabled, UserType: "Member", DisplayName: "Off"},
+			// nostate: accountEnabled absent from the response.
+			nostateID: {ID: nostateID, UserPrincipalName: "nostate@example.com", Mail: "nostate@example.com", UserType: "Member", DisplayName: "No State"},
 		},
-		byUPN:   map[string]string{"dana@example.com": danaID, "bob@example.com": bobID, "guest_gmail.com#EXT#@example.onmicrosoft.com": guestID, "off@example.com": offID},
+		byUPN: map[string]string{"dana@example.com": danaID, "bob@example.com": bobID, "guest_gmail.com#EXT#@example.onmicrosoft.com": guestID, "off@example.com": offID,
+			"nostate@example.com": nostateID, "a%b@example.com": danaID, "a/b@example.com": bobID},
 		byMail:  map[string]string{"guest@gmail.com": guestID, "dana.alias@example.com": danaID},
 		byProxy: map[string][]string{"smtp:dana.old@example.com": {danaID}, "smtp:shared@example.com": {danaID, bobID}},
-		groups:  map[string][]string{danaID: {groupA}},
+		groups:  map[string][]string{danaID: {groupA}, nostateID: {groupA}},
 		roles:   map[string][]string{danaID: {roleA}},
 		teams:   map[string]map[string][]string{teamA: {danaID: {"owner"}, bobID: {}}},
 		channels: map[string]channelDef{
-			chanStd:  {membershipType: "standard"},
-			chanPriv: {membershipType: "private", members: map[string][]string{danaID: {}}},
-			chanShr:  {membershipType: "shared", members: map[string][]string{danaID: {"owner"}}},
-			chanMod:  {membershipType: "standard", moderation: "moderators"},
+			chanStd:    {membershipType: "standard"},
+			chanPriv:   {membershipType: "private", members: map[string][]string{danaID: {}}},
+			chanShr:    {membershipType: "shared", members: map[string][]string{danaID: {"owner"}}},
+			chanMod:    {membershipType: "standard", moderation: "moderators"},
+			chanNoType: {},
 		},
+		groupVis: map[string]string{groupA: "Private", groupB: "", groupHidden: "HiddenMembership"},
 		perms:    map[string][]drivePermission{},
 		appRoles: []string{"User.Read.All", "GroupMember.Read.All", "TeamMember.Read.All", "ChannelMember.Read.All", "Files.Read.All"},
 	}
@@ -135,13 +163,19 @@ func write(w http.ResponseWriter, v any) {
 }
 
 func (f *fakeGraph) userJSON(u graphUser) map[string]any {
-	return map[string]any{"id": u.ID, "userPrincipalName": u.UserPrincipalName, "mail": u.Mail, "accountEnabled": *u.AccountEnabled, "userType": u.UserType, "displayName": u.DisplayName}
+	out := map[string]any{"id": u.ID, "userPrincipalName": u.UserPrincipalName, "mail": u.Mail, "userType": u.UserType, "displayName": u.DisplayName}
+	if u.AccountEnabled != nil {
+		out["accountEnabled"] = *u.AccountEnabled
+	}
+	return out
 }
 
 func (f *fakeGraph) memberList(members map[string][]string, userID string) []map[string]any {
 	out := []map[string]any{}
-	if roles, ok := members[userID]; ok {
-		out = append(out, map[string]any{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": userID, "roles": roles})
+	for id, roles := range members {
+		if f.ignoreFilter || id == userID {
+			out = append(out, map[string]any{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": id, "roles": roles})
+		}
 	}
 	return out
 }
@@ -167,8 +201,17 @@ func (f *fakeGraph) graph(w http.ResponseWriter, r *http.Request) {
 		graphErr(w, 401, "InvalidAuthenticationToken")
 		return
 	}
-	p := strings.TrimPrefix(r.URL.Path, "/v1.0/")
+	// Split on the escaped path so an escaped "/" inside a segment (a user
+	// principal name) stays in that segment, then decode each segment.
+	f.lastEscaped = r.URL.EscapedPath()
+	p := strings.TrimPrefix(r.URL.EscapedPath(), "/v1.0/")
 	seg := strings.Split(p, "/")
+	for i, s := range seg {
+		if u, err := url.PathUnescape(s); err == nil {
+			seg[i] = u
+		}
+	}
+	p = strings.Join(seg, "/")
 	q := r.URL.Query()
 	switch {
 	case p == "organization":
@@ -237,6 +280,22 @@ func (f *fakeGraph) graph(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		write(w, map[string]any{"value": out})
+	case seg[0] == "groups" && len(seg) == 2:
+		if q.Get("$select") != "id,visibility" {
+			f.t.Errorf("group lookup without select: %v", q)
+		}
+		vis, ok := f.groupVis[seg[1]]
+		if !ok {
+			graphErr(w, 404, "Request_ResourceNotFound")
+			return
+		}
+		out := map[string]any{"id": seg[1]}
+		if vis != "" {
+			out["visibility"] = vis
+		} else {
+			out["visibility"] = nil
+		}
+		write(w, out)
 	case seg[0] == "users" && len(seg) == 4 && seg[2] == "transitiveMemberOf" && seg[3] == "microsoft.graph.directoryRole":
 		if q.Get("$select") != "roleTemplateId" {
 			f.t.Errorf("roles without select: %v", q)
@@ -264,7 +323,10 @@ func (f *fakeGraph) graph(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(seg) == 4 {
-			out := map[string]any{"id": seg[3], "membershipType": ch.membershipType}
+			out := map[string]any{"id": seg[3]}
+			if ch.membershipType != "" {
+				out["membershipType"] = ch.membershipType
+			}
 			if ch.moderation != "" {
 				out["moderationSettings"] = map[string]any{"userNewMessageRestriction": ch.moderation}
 			}
@@ -278,7 +340,7 @@ func (f *fakeGraph) graph(w http.ResponseWriter, r *http.Request) {
 			graphErr(w, 400, "BadRequest")
 		}
 	case seg[0] == "drives" && len(seg) == 2:
-		if seg[1] != drive {
+		if seg[1] != drive || f.driveHidden {
 			graphErr(w, 404, "itemNotFound")
 			return
 		}
@@ -645,6 +707,60 @@ func TestDisabledAccountDeniesEverything(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, off, "user.active", "user:off@example.com"), integration.CodeDenied)
 }
 
+// A user whose accountEnabled Graph does not report is unknown for every
+// action, never treated as enabled.
+func TestMissingAccountEnabledIsUnknown(t *testing.T) {
+	_, _, c := setup(t, nil)
+	nostate := integration.User{Email: "nostate@example.com"}
+	id, err := c.ResolveIdentity(context.Background(), nostate)
+	if err != nil || id.Attr("account_enabled") != "unknown" {
+		t.Fatalf("%+v %v", id, err)
+	}
+	// nostate is in groupA, so only the enabled state keeps this from allow.
+	d := check(t, c, nostate, "group.member", "group:"+groupA)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "enabled") {
+		t.Error(d.Text)
+	}
+	itest.ExpectCode(t, check(t, c, nostate, "user.active", "user:nostate@example.com"), integration.CodeUnsupported)
+	itest.ExpectCode(t, check(t, c, nostate, "mail.send_as_self", "mailbox:nostate@example.com"), integration.CodeUnsupported)
+}
+
+// Email local parts may contain "%" and "/"; both must be path-escaped so the
+// lookup stays one segment. The fake routes on the escaped path, so an
+// unescaped "/" would miss the users route and "%" would not build a URL.
+func TestEmailPathEscaping(t *testing.T) {
+	srv, f, c := setup(t, nil)
+	ctx := context.Background()
+	cases := []struct{ email, id, path string }{
+		{"a%b@example.com", danaID, "/v1.0/users/a%25b@example.com"},
+		{"a/b@example.com", bobID, "/v1.0/users/a%2Fb@example.com"},
+		{"guest_gmail.com#EXT#@example.onmicrosoft.com", guestID, "/v1.0/users/guest_gmail.com%23EXT%23@example.onmicrosoft.com"},
+	}
+	for _, cs := range cases {
+		srv.Reset()
+		id, err := c.ResolveIdentity(ctx, integration.User{Email: cs.email})
+		if err != nil || id.ID != cs.id {
+			t.Errorf("%s: %+v %v", cs.email, id, err)
+		}
+		// token is cached after the first case; the lookup must be direct
+		// (one Graph call), never fall back to the mail filter.
+		var graphCalls []itest.Call
+		for _, call := range srv.Calls() {
+			if strings.HasPrefix(call.Path, "/v1.0/") {
+				graphCalls = append(graphCalls, call)
+			}
+		}
+		if len(graphCalls) != 1 {
+			t.Errorf("%s: %d Graph calls, want 1 direct lookup", cs.email, len(graphCalls))
+			continue
+		}
+		if got := f.escapedPath(); got != cs.path {
+			t.Errorf("%s: escaped path %q, want %q", cs.email, got, cs.path)
+		}
+	}
+}
+
 func TestGuestFlaggedInReason(t *testing.T) {
 	_, f, c := setup(t, nil)
 	f.groups[guestID] = []string{groupA}
@@ -688,6 +804,62 @@ func TestAction_group_member_deny(t *testing.T) {
 	_, _, c := setup(t, nil)
 	itest.ExpectCode(t, check(t, c, dana, "group.member", "group:"+groupB), integration.CodeDenied)
 	itest.ExpectCode(t, check(t, c, bob, "group.member", "group:"+groupA), integration.CodeDenied)
+}
+
+// A group that does not exist is not visible, and a hidden-membership group
+// the user is not seen in is unknown: checkMemberGroups omits both.
+func TestGroupMissingOrHidden(t *testing.T) {
+	srv, f, c := setup(t, nil)
+	itest.ExpectCode(t, check(t, c, dana, "group.member", "group:"+groupMissing), integration.CodeResourceNotVisible)
+	d := check(t, c, dana, "group.member", "group:"+groupHidden)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "Member.Read.Hidden") {
+		t.Error(d.Text)
+	}
+	// Proven membership in a hidden group is still an allow.
+	f.groups[danaID] = append(f.groups[danaID], groupHidden)
+	itest.ExpectCode(t, check(t, c, dana, "group.member", "group:"+groupHidden), integration.CodeAllowed)
+	// The visibility lookup precedes checkMemberGroups.
+	srv.Reset()
+	itest.ExpectCode(t, check(t, c, dana, "group.member", "group:"+groupA), integration.CodeAllowed)
+	var paths []string
+	for _, call := range srv.Calls() {
+		paths = append(paths, call.Method+" "+call.Path)
+	}
+	want := []string{"GET /v1.0/users/dana@example.com", "GET /v1.0/groups/" + groupA, "POST /v1.0/users/" + danaID + "/checkMemberGroups"}
+	if strings.Join(paths, ",") != strings.Join(want, ",") {
+		t.Errorf("calls %v", paths)
+	}
+}
+
+// The members $filter is never trusted: when the upstream returns the whole
+// roster, only the caller's own record counts.
+func TestMembershipIgnoresUnfilteredRoster(t *testing.T) {
+	_, f, c := setup(t, nil)
+	f.ignoreFilter = true
+	itest.ExpectCode(t, check(t, c, guest, "team.member", "team:"+teamA), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, bob, "team.owner", "team:"+teamA), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, bob, "channel.read", "team:"+teamA+"/channel/"+chanPriv), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, bob, "channel.owner", "team:"+teamA+"/channel/"+chanShr), integration.CodeDenied)
+	// Real members are still found in the roster.
+	itest.ExpectCode(t, check(t, c, bob, "team.member", "team:"+teamA), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, dana, "team.owner", "team:"+teamA), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, dana, "channel.read", "team:"+teamA+"/channel/"+chanPriv), integration.CodeAllowed)
+}
+
+// A channel without a membershipType is not assumed to be standard.
+func TestChannelWithoutMembershipTypeIsUnknown(t *testing.T) {
+	srv, _, c := setup(t, nil)
+	d := check(t, c, bob, "channel.read", "team:"+teamA+"/channel/"+chanNoType)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "membership type") {
+		t.Error(d.Text)
+	}
+	if strings.HasSuffix(srv.LastCall().Path, "/members") {
+		t.Error("consulted the team roster for a channel of unknown type")
+	}
+	itest.ExpectCode(t, check(t, c, bob, "channel.message.post", "team:"+teamA+"/channel/"+chanNoType), integration.CodeUnsupported)
+	itest.ExpectCode(t, check(t, c, dana, "channel.owner", "team:"+teamA+"/channel/"+chanNoType), integration.CodeUnsupported)
 }
 
 func TestCheckMemberGroupsBatching(t *testing.T) {
@@ -853,6 +1025,90 @@ func TestAction_file_read_deny(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, dana, "file.read", fileRes("anon")), integration.CodeUnsupported)
 }
 
+// A guest cannot redeem an organization-scope link, so it is not credited;
+// other grants still apply.
+func TestGuestCannotUseOrganizationLink(t *testing.T) {
+	_, f, c := setup(t, nil)
+	f.perms["orglink"] = []drivePermission{perm([]string{"write"}, link("organization"))}
+	d := check(t, c, guest, "file.read", fileRes("orglink"))
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "guest") {
+		t.Error(d.Text)
+	}
+	// A direct grant or a group grant on the same item is still evaluated.
+	f.perms["orglink-direct"] = []drivePermission{perm([]string{"write"}, link("organization")), perm([]string{"read"}, toUser(guestID))}
+	itest.ExpectCode(t, check(t, c, guest, "file.read", fileRes("orglink-direct")), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, guest, "file.edit", fileRes("orglink-direct")), integration.CodeDenied)
+	f.groups[guestID] = []string{groupA}
+	f.perms["orglink-group"] = []drivePermission{perm([]string{"write"}, link("organization")), perm([]string{"write"}, toGroup(groupA))}
+	itest.ExpectCode(t, check(t, c, guest, "file.edit", fileRes("orglink-group")), integration.CodeAllowed)
+	// Members still use the link.
+	itest.ExpectCode(t, check(t, c, bob, "file.edit", fileRes("orglink")), integration.CodeAllowed)
+}
+
+// A 404 on the drive-owner lookup does not end the evaluation: group and
+// link rules still run.
+func TestDriveOwnerLookup404IsIgnored(t *testing.T) {
+	srv, f, c := setup(t, nil)
+	f.driveHidden = true
+	f.perms["group"] = []drivePermission{perm([]string{"write"}, toGroup(groupA))}
+	itest.ExpectCode(t, check(t, c, dana, "file.edit", fileRes("group")), integration.CodeAllowed)
+	f.perms["orglink"] = []drivePermission{perm([]string{"read"}, link("organization"))}
+	itest.ExpectCode(t, check(t, c, bob, "file.read", fileRes("orglink")), integration.CodeAllowed)
+	f.perms["none"] = []drivePermission{perm([]string{"owner"}, toUser(bobID))}
+	itest.ExpectCode(t, check(t, c, dana, "file.read", fileRes("none")), integration.CodeDenied)
+	// The lookup was attempted and answered 404.
+	var sawDrive bool
+	for _, call := range srv.Calls() {
+		if call.Path == "/v1.0/drives/"+drive {
+			sawDrive = true
+		}
+	}
+	if !sawDrive {
+		t.Error("drive owner was not looked up")
+	}
+	// Other failures on the lookup still surface.
+	srv.JSON("GET", "/v1.0/drives/"+drive, 500, `{"error":{"code":"x","message":"`+itest.Canary+`m"}}`)
+	itest.ExpectCode(t, check(t, c, dana, "file.read", fileRes("none")), integration.CodeUpstreamError)
+}
+
+// Unrecognised role strings on a grant that reaches the caller, and sharing
+// links with an unmodelled scope, are unknown rather than deny.
+func TestUnknownRoleOrLinkScopeIsUnknown(t *testing.T) {
+	_, f, c := setup(t, nil)
+	f.perms["custom"] = []drivePermission{perm([]string{"sp.full control"}, toUser(danaID))}
+	d := check(t, c, dana, "file.edit", fileRes("custom"))
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "does not model") {
+		t.Error(d.Text)
+	}
+	// Read plus a custom level: the custom level may include write.
+	f.perms["read-custom"] = []drivePermission{perm([]string{"read", "sp.views"}, toUser(danaID))}
+	itest.ExpectCode(t, check(t, c, dana, "file.edit", fileRes("read-custom")), integration.CodeUnsupported)
+	itest.ExpectCode(t, check(t, c, dana, "file.read", fileRes("read-custom")), integration.CodeAllowed)
+	// Via a group the caller is in.
+	f.perms["group-custom"] = []drivePermission{perm([]string{"sp.full control"}, toGroup(groupA))}
+	itest.ExpectCode(t, check(t, c, dana, "file.delete", fileRes("group-custom")), integration.CodeUnsupported)
+	// Via a group the caller is not in, or on another user: still deny.
+	f.perms["other-custom"] = []drivePermission{perm([]string{"sp.full control"}, toUser(bobID)), perm([]string{"sp.views"}, toGroup(groupB))}
+	itest.ExpectCode(t, check(t, c, dana, "file.read", fileRes("other-custom")), integration.CodeDenied)
+	// On an organization link, for a member but not for a guest.
+	f.perms["link-custom"] = []drivePermission{perm([]string{"sp.views"}, link("organization"))}
+	itest.ExpectCode(t, check(t, c, dana, "file.read", fileRes("link-custom")), integration.CodeUnsupported)
+	itest.ExpectCode(t, check(t, c, guest, "file.read", fileRes("link-custom")), integration.CodeDenied)
+	// A link scope hallpass does not model.
+	f.perms["scope"] = []drivePermission{perm([]string{"read"}, link("existingAccess"))}
+	d = check(t, c, dana, "file.read", fileRes("scope"))
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "existingAccess") {
+		t.Error(d.Text)
+	}
+	// A "users" link lists its people in grantedToIdentitiesV2: handled there.
+	f.perms["users"] = []drivePermission{perm([]string{"read"}, link("users"), toGroup(groupA))}
+	itest.ExpectCode(t, check(t, c, dana, "file.read", fileRes("users")), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, bob, "file.read", fileRes("users")), integration.CodeDenied)
+}
+
 func TestAction_file_edit_allow(t *testing.T) {
 	_, f, c := setup(t, nil)
 	f.perms["w"] = []drivePermission{perm([]string{"write"}, toUser(danaID))}
@@ -910,13 +1166,22 @@ func TestAction_mail_send_as_self_allow(t *testing.T) {
 }
 
 func TestAction_mail_send_as_self_deny(t *testing.T) {
-	_, f, c := setup(t, nil)
+	_, _, c := setup(t, nil)
 	itest.ExpectCode(t, check(t, c, off, "mail.send_as_self", "mailbox:off@example.com"), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, dana, "mail.send_as_self", "mailbox:bob@example.com"), integration.CodeUnsupported)
+}
+
+// An empty mail attribute does not prove there is no mailbox: unknown.
+func TestSendAsSelfWithoutMailIsUnknown(t *testing.T) {
+	_, f, c := setup(t, nil)
 	u := f.users[bobID]
 	u.Mail = ""
 	f.users[bobID] = u
-	itest.ExpectCode(t, check(t, c, bob, "mail.send_as_self", "mailbox:bob@example.com"), integration.CodeDenied)
-	itest.ExpectCode(t, check(t, c, dana, "mail.send_as_self", "mailbox:bob@example.com"), integration.CodeUnsupported)
+	d := check(t, c, bob, "mail.send_as_self", "mailbox:bob@example.com")
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	if !strings.Contains(d.Text, "mail attribute") {
+		t.Error(d.Text)
+	}
 }
 
 // Exchange delegation and calendar access on another mailbox are always
