@@ -5,8 +5,9 @@
 // channel with conversations.info, checks membership with users.conversations
 // (falling back to conversations.members for users in very many channels) and
 // reads #general's posting rule with team.preferences.list and user group
-// membership with usergroups.list. Every call is a read; nothing is posted,
-// joined or changed.
+// membership with usergroups.list. The probe also lists public channels with
+// conversations.list to find #general. Every call is a read; nothing is
+// posted, joined or changed.
 package slack
 
 import (
@@ -344,6 +345,18 @@ func isGuest(id integration.Identity) bool {
 	return id.Attr(attrRestricted) == "true" || id.Attr(attrUltraRestricted) == "true"
 }
 
+// otherWorkspace reports whether, on an Enterprise Grid org-level install
+// addressed with team_id, the user object belongs to a different workspace.
+// Slack then says nothing about the user's membership of the addressed
+// workspace, so rules that rest on "any full member of this workspace" are
+// not evaluated.
+// UNVERIFIED: on a Grid org-level install, the team_id of the user object
+// users.lookupByEmail returns names the user's workspace; a user of the
+// addressed workspace is taken to carry the configured team_id.
+func (c *Connection) otherWorkspace(id integration.Identity) bool {
+	return c.teamID != "" && id.Attr(attrTeamID) != "" && id.Attr(attrTeamID) != c.teamID
+}
+
 func role(id integration.Identity) string {
 	switch {
 	case id.Attr(attrPrimaryOwner) == "true":
@@ -397,31 +410,37 @@ func parsePosters(raw json.RawMessage) (*posters, error) {
 }
 
 // allows reports whether the identity is among the posters. An empty rule
-// means everyone.
-func (p *posters) allows(id integration.Identity) bool {
+// means everyone. When the identity matches nothing and the rule names a
+// type hallpass does not model, unknown carries that type: the rule could
+// not be evaluated, so the caller answers unsupported rather than deny.
+func (p *posters) allows(id integration.Identity) (ok bool, unknown string) {
 	if p == nil || (len(p.Type) == 0 && len(p.User) == 0) {
-		return true
+		return true, ""
 	}
 	for _, t := range p.Type {
 		switch t {
 		case "everyone", "regular", "ra":
-			return true
+			return true, ""
 		case "admin":
 			if isAdmin(id) {
-				return true
+				return true, ""
 			}
 		case "owner":
 			if isOwner(id) {
-				return true
+				return true, ""
+			}
+		default:
+			if unknown == "" {
+				unknown = t
 			}
 		}
 	}
 	for _, u := range p.User {
 		if u == id.ID {
-			return true
+			return true, ""
 		}
 	}
-	return false
+	return false, unknown
 }
 
 func (p *posters) String() string {
@@ -455,9 +474,19 @@ type channel struct {
 	IsMember    bool   `json:"is_member"` // the bot
 	IsExtShared bool   `json:"is_ext_shared"`
 	IsShared    bool   `json:"is_shared"`
-	Properties  struct {
+	// Properties is nil when conversations.info returned no properties object.
+	Properties *struct {
 		PostingRestrictedTo json.RawMessage `json:"posting_restricted_to"`
 	} `json:"properties"`
+}
+
+// postingRestrictedTo is the raw posting_restricted_to property, or nil when
+// the channel object carries no properties at all.
+func (ch *channel) postingRestrictedTo() json.RawMessage {
+	if ch.Properties == nil {
+		return nil
+	}
+	return ch.Properties.PostingRestrictedTo
 }
 
 func (ch *channel) label() string {
@@ -648,12 +677,12 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		if ch.IsArchived {
 			return integration.Denied("%s is archived; nobody can be invited", ch.label()), nil
 		}
-		return c.prefGate(id, "invite members to channels"), nil
+		return c.memberPrefGate(ctx, id, ch, "invite members to channels")
 	case "channel.rename":
 		if ch.IsArchived {
 			return integration.Denied("%s is archived and cannot be renamed", ch.label()), nil
 		}
-		return c.prefGate(id, "rename channels"), nil
+		return c.memberPrefGate(ctx, id, ch, "rename channels")
 	case "channel.archive":
 		if ch.IsArchived {
 			return integration.Denied("%s is already archived", ch.label()), nil
@@ -661,9 +690,32 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		if ch.IsGeneral {
 			return integration.Denied("%s is the workspace's general channel and cannot be archived", ch.label()), nil
 		}
-		return c.prefGate(id, "archive channels"), nil
+		return c.memberPrefGate(ctx, id, ch, "archive channels")
 	}
 	return integration.Decision{}, errors.New("unreachable: unknown action")
+}
+
+// memberPrefGate answers the channel-scoped actions a workspace preference
+// governs (invite, rename, archive). They all act from inside the channel,
+// so membership is checked first: a non-member of a private channel is
+// refused outright, a guest cannot join on their own, and anyone else could
+// join a public channel first, which hallpass does not assume. Members go
+// through prefGate.
+func (c *Connection) memberPrefGate(ctx context.Context, id integration.Identity, ch *channel, verb string) (integration.Decision, error) {
+	member, err := c.isMember(ctx, id.ID, ch.ID)
+	if err != nil {
+		return integration.Decision{}, err
+	}
+	if !member {
+		switch {
+		case ch.IsPrivate:
+			return integration.Denied("%s is private and %s is not a member", ch.label(), id.Display), nil
+		case isGuest(id):
+			return integration.Denied("%s is a %s and not a member of %s", id.Display, role(id), ch.label()), nil
+		}
+		return integration.Unsupported("%s is not a member of %s; joining first is possible, but the action needs membership", id.Display, ch.label()), nil
+	}
+	return c.prefGate(id, verb), nil
 }
 
 func (c *Connection) checkUsergroup(ctx context.Context, id integration.Identity, groupID string) (integration.Decision, error) {
@@ -704,6 +756,9 @@ func (c *Connection) checkRead(ctx context.Context, id integration.Identity, ch 
 		}
 		return integration.Denied("%s is a %s and not a member of %s", id.Display, role(id), ch.label()), nil
 	}
+	if c.otherWorkspace(id) {
+		return integration.Unsupported("%s belongs to another workspace of the organization; whether they are a member of the workspace that owns %s is not visible", id.Display, ch.label()), nil
+	}
 	return integration.Allowed("%s is public%s; any full member may read it", ch.label(), archived), nil
 }
 
@@ -723,6 +778,9 @@ func (c *Connection) checkJoin(ctx context.Context, id integration.Identity, ch 
 			return integration.Denied("%s is private; %s must be invited", ch.label(), id.Display), nil
 		}
 		return integration.Denied("%s is a %s and cannot join channels on their own", id.Display, role(id)), nil
+	}
+	if c.otherWorkspace(id) {
+		return integration.Unsupported("%s belongs to another workspace of the organization; whether they are a member of the workspace that owns %s is not visible", id.Display, ch.label()), nil
 	}
 	return integration.Allowed("%s is public; any full member may join it", ch.label()), nil
 }
@@ -749,27 +807,43 @@ func (c *Connection) checkPost(ctx context.Context, id integration.Identity, ch 
 		if err != nil {
 			return integration.Decision{}, err
 		}
-		if !p.allows(id) {
+		if ok, unknown := p.allows(id); !ok {
+			if unknown != "" {
+				return integration.Unsupported("who_can_post_general names a poster type %q hallpass does not understand", unknown), nil
+			}
 			return integration.Denied("posting in %s is restricted to %s and %s is a %s", ch.label(), p, id.Display, role(id)), nil
 		}
 	}
-	restricted, err := parsePosters(ch.Properties.PostingRestrictedTo)
+	restricted, err := parsePosters(ch.postingRestrictedTo())
 	if err != nil {
 		return integration.Unsupported("%s has a posting restriction in a shape hallpass does not understand", ch.label()), nil
 	}
 	if restricted == nil {
-		// UNVERIFIED: whether a bot token sees properties.posting_restricted_to.
-		return integration.Allowed("%s is a member of %s; no posting restriction is visible to the bot", id.Display, ch.label()), nil
-	}
-	if !restricted.allows(id) && !isAdmin(id) {
-		if thread {
-			// UNVERIFIED: posting_restricted_to is taken to limit top-level
-			// posts only, not thread replies.
-			return integration.Allowed("%s is a member of %s; top-level posting is restricted to %s but thread replies are not", id.Display, ch.label(), restricted), nil
+		// UNVERIFIED: whether a bot token sees properties.posting_restricted_to,
+		// and whether Slack omits it for an unrestricted channel. An absent
+		// property is therefore not taken as "unrestricted" unless the
+		// connection opts in with assume_default_prefs.
+		if c.assumeDefaults {
+			return integration.Allowed("%s is a member of %s; no posting restriction is visible to the bot and assume_default_prefs treats the channel as unrestricted", id.Display, ch.label()), nil
 		}
-		return integration.Denied("posting in %s is restricted to %s and %s is a %s", ch.label(), restricted, id.Display, role(id)), nil
+		return integration.Unsupported("posting restrictions of %s are not visible to the bot (no posting_restricted_to property); set assume_default_prefs: true to treat the channel as unrestricted", ch.label()), nil
 	}
-	return integration.Allowed("%s is a member of %s", id.Display, ch.label()), nil
+	if isAdmin(id) {
+		return integration.Allowed("%s is a member of %s", id.Display, ch.label()), nil
+	}
+	ok, unknown := restricted.allows(id)
+	if ok {
+		return integration.Allowed("%s is a member of %s", id.Display, ch.label()), nil
+	}
+	if thread {
+		// UNVERIFIED: posting_restricted_to is taken to limit top-level
+		// posts only, not thread replies.
+		return integration.Allowed("%s is a member of %s; top-level posting is restricted to %s but thread replies are not", id.Display, ch.label(), restricted), nil
+	}
+	if unknown != "" {
+		return integration.Unsupported("the posting restriction of %s names a poster type %q hallpass does not understand", ch.label(), unknown), nil
+	}
+	return integration.Denied("posting in %s is restricted to %s and %s is a %s", ch.label(), restricted, id.Display, role(id)), nil
 }
 
 // prefGate answers the actions governed by a workspace preference a bot
@@ -839,7 +913,62 @@ func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error)
 		}
 		return integration.ProbeResult{}, classify(err)
 	}
+
+	// Whether the bot sees channel properties at all, read off #general.
+	genID, err := c.generalChannelID(ctx)
+	if err != nil {
+		return integration.ProbeResult{}, err
+	}
+	if genID == "" {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("#general was not found among the first %d pages of public channels; whether channel properties are visible to the bot was not checked", generalListPages))
+		return out, nil
+	}
+	gen, err := c.channel(ctx, genID)
+	if err != nil {
+		return integration.ProbeResult{}, err
+	}
+	if gen.Properties != nil {
+		out.Summary += "; channel properties visible"
+	} else {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("conversations.info on #general (%s) returned no properties object; message.post answers unknown for channels without a visible posting_restricted_to unless assume_default_prefs is set", genID))
+	}
 	return out, nil
+}
+
+// generalListPages bounds the conversations.list pages the probe reads to
+// find #general, which is the workspace's oldest channel and listed early.
+const generalListPages = 5
+
+// generalChannelID finds the workspace's general channel with
+// conversations.list; "" when it is not among the first pages.
+func (c *Connection) generalChannelID(ctx context.Context) (string, error) {
+	cursor := ""
+	for page := 0; page < generalListPages; page++ {
+		q := url.Values{"types": {"public_channel"}, "exclude_archived": {"true"}, "limit": {"200"}}
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+		var out struct {
+			Channels []struct {
+				ID        string `json:"id"`
+				IsGeneral bool   `json:"is_general"`
+			} `json:"channels"`
+		}
+		res, err := c.call(ctx, "conversations.list", q, &out)
+		if err != nil {
+			return "", classify(err)
+		}
+		for _, ch := range out.Channels {
+			if ch.IsGeneral && ch.ID != "" {
+				return ch.ID, nil
+			}
+		}
+		cursor = res.NextCursor
+		if cursor == "" {
+			return "", nil
+		}
+	}
+	return "", nil
 }
 
 // scopeWarnings reads a comma-separated scope list.

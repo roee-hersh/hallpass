@@ -38,6 +38,7 @@ const (
 	cGeneral  = "C0000GENRL"
 	cRestrict = "C0000RSTRC"
 	cArchived = "C0000ARCHV"
+	cNoProps  = "C0000NOPRP" // conversations.info returns no properties object
 	gPrivate  = "G0000PRIVT"
 	gHidden   = "G0000HIDDN"
 	sGroup    = "S0000GROUP"
@@ -60,6 +61,7 @@ type fakeSlack struct {
 	ugScope   bool              // usergroups:read granted
 	pageSize  int               // users.conversations page size, 0 = one page
 	memberPS  int               // conversations.members page size, 0 = one page
+	listPS    int               // conversations.list page size, 0 = one page
 	fail      map[string]string // method -> ok:false error code
 	needed    string            // scope named on missing_scope
 	scopesHdr string            // X-OAuth-Scopes on auth.test
@@ -78,10 +80,18 @@ func user(id, email string, extra map[string]any) map[string]any {
 	return u
 }
 
+// chanObj builds a channel object. By default it carries a properties object
+// with an empty posting rule (everyone may post); pass "properties": nil to
+// leave the object out, as Slack may for a channel without properties.
 func chanObj(id, name string, extra map[string]any) map[string]any {
 	c := map[string]any{"id": id, "name": name, "is_channel": true, "is_archived": false, "is_private": false,
-		"is_general": false, "is_member": true, "is_ext_shared": false, "is_shared": false, "purpose": map[string]any{"value": itest.Canary + "purpose"}}
+		"is_general": false, "is_member": true, "is_ext_shared": false, "is_shared": false, "purpose": map[string]any{"value": itest.Canary + "purpose"},
+		"properties": map[string]any{"posting_restricted_to": map[string]any{"type": []string{}, "user": []string{}}}}
 	for k, v := range extra {
+		if v == nil {
+			delete(c, k)
+			continue
+		}
 		c[k] = v
 	}
 	return c
@@ -109,10 +119,11 @@ func newFake() *fakeSlack {
 			cGeneral:  {obj: chanObj(cGeneral, "general", map[string]any{"is_general": true}), members: []string{uFull, uAdmin, uOwner, uGuest}, visible: true},
 			cRestrict: {obj: chanObj(cRestrict, "announcements", map[string]any{"properties": map[string]any{"posting_restricted_to": map[string]any{"type": []string{"admin"}, "user": []string{uUltra}}}}), members: []string{uFull, uAdmin, uGuest, uUltra}, visible: true},
 			cArchived: {obj: chanObj(cArchived, "old", map[string]any{"is_archived": true}), members: []string{uFull, uAdmin}, visible: true},
+			cNoProps:  {obj: chanObj(cNoProps, "plain", map[string]any{"properties": nil}), members: []string{uFull, uAdmin, uGuest}, visible: true},
 			gPrivate:  {obj: chanObj(gPrivate, "secret", map[string]any{"is_private": true, "is_channel": false, "is_group": true}), members: []string{uFull, uGuest}, visible: true},
 			gHidden:   {obj: chanObj(gHidden, "hidden", map[string]any{"is_private": true}), members: []string{uFull}, visible: false},
 		},
-		order:     []string{cPublic, cGeneral, cRestrict, cArchived, gPrivate, gHidden},
+		order:     []string{cPublic, cGeneral, cRestrict, cArchived, cNoProps, gPrivate, gHidden},
 		groups:    []map[string]any{{"id": sGroup, "handle": "oncall", "users": []string{uFull, uAdmin}}},
 		prefs:     map[string]any{"who_can_post_general": map[string]any{"type": []string{"admin"}, "user": []string{}}, "msg_edit_window_mins": -1},
 		prefScope: true,
@@ -216,6 +227,20 @@ func (f *fakeSlack) handler(t *testing.T) http.HandlerFunc {
 			}
 			lo, hi, next := page(r, len(mine), f.pageSize)
 			write(w, map[string]any{"ok": true, "channels": mine[lo:hi], "response_metadata": map[string]any{"next_cursor": next}})
+		case "conversations.list":
+			if q.Get("types") != "public_channel" || q.Get("exclude_archived") != "true" || q.Get("limit") == "" {
+				t.Errorf("conversations.list query %v", q)
+			}
+			var list []map[string]any
+			for _, id := range f.order {
+				ch := f.channels[id]
+				if !ch.visible || ch.obj["is_private"] == true || ch.obj["is_archived"] == true {
+					continue
+				}
+				list = append(list, ch.obj)
+			}
+			lo, hi, next := page(r, len(list), f.listPS)
+			write(w, map[string]any{"ok": true, "channels": list[lo:hi], "response_metadata": map[string]any{"next_cursor": next}})
 		case "conversations.members":
 			ch, ok := f.channels[q.Get("channel")]
 			if !ok || !ch.visible {
@@ -511,7 +536,8 @@ func TestTeamID(t *testing.T) {
 
 func TestMembershipPagination(t *testing.T) {
 	srv, f, c := setup(t, nil)
-	f.pageSize = 1 // dana is in 5 visible channels: public, general, announcements, old, secret
+	f.pageSize = 1 // dana is in 6 visible channels; secret is the fifth: public, general, announcements, old, plain, secret
+	f.order = []string{cPublic, cGeneral, cRestrict, cArchived, gPrivate, cNoProps, gHidden}
 	d := check(t, c, dana, "message.post", "channel:"+gPrivate)
 	itest.ExpectCode(t, d, integration.CodeAllowed)
 	ms := methods(srv)
@@ -629,10 +655,159 @@ func TestPostingRestriction(t *testing.T) {
 	d = check(t, c, dana, "message.post_thread", "channel:"+cRestrict)
 	itest.ExpectCode(t, d, integration.CodeAllowed)
 	expectText(t, d, "thread replies")
-	// Without a visible restriction the text says so.
+	// An empty rule means everyone.
 	d = check(t, c, dana, "message.post", "channel:"+cPublic)
 	itest.ExpectCode(t, d, integration.CodeAllowed)
-	expectText(t, d, "no posting restriction is visible")
+	expectText(t, d, "is a member of")
+}
+
+// An absent posting_restricted_to is not "unrestricted": whether a bot token
+// sees the property is unverified, so the answer is unknown unless the
+// connection opts in with assume_default_prefs.
+func TestPostingPropertyAbsent(t *testing.T) {
+	_, f, c := setup(t, nil)
+	for _, a := range []string{"message.post", "message.post_thread", "file.upload"} {
+		d := check(t, c, dana, a, "channel:"+cNoProps)
+		itest.ExpectCode(t, d, integration.CodeUnsupported)
+		expectText(t, d, "not visible to the bot")
+		itest.ExpectCode(t, check(t, c, admin, a, "channel:"+cNoProps), integration.CodeUnsupported)
+	}
+	// A properties object without the posting_restricted_to key is absent too.
+	f.channels[cNoProps].obj["properties"] = map[string]any{"canvas": map[string]any{"is_empty": true}}
+	itest.ExpectCode(t, check(t, c, dana, "message.post", "channel:"+cNoProps), integration.CodeUnsupported)
+	// Membership and archival are still decided first.
+	itest.ExpectCode(t, check(t, c, ultra, "message.post", "channel:"+cNoProps), integration.CodeDenied)
+	f.channels[cNoProps].obj["is_archived"] = true
+	itest.ExpectCode(t, check(t, c, dana, "message.post", "channel:"+cNoProps), integration.CodeDenied)
+
+	_, _, c = setup(t, map[string]string{"assume_default_prefs": "true"})
+	d := check(t, c, dana, "message.post", "channel:"+cNoProps)
+	itest.ExpectCode(t, d, integration.CodeAllowed)
+	expectText(t, d, "no posting restriction is visible to the bot")
+	expectText(t, d, "assume_default_prefs")
+	itest.ExpectCode(t, check(t, c, guest, "message.post", "channel:"+cNoProps), integration.CodeAllowed)
+	// #general's own rule still applies before the channel property.
+	_, f, c = setup(t, map[string]string{"assume_default_prefs": "true"})
+	f.channels[cGeneral].obj["properties"] = nil
+	itest.ExpectCode(t, check(t, c, dana, "message.post", "channel:"+cGeneral), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, admin, "message.post", "channel:"+cGeneral), integration.CodeAllowed)
+}
+
+// A posting rule naming a poster type hallpass does not model cannot be
+// evaluated: unknown, not deny.
+func TestUnrecognisedPosterType(t *testing.T) {
+	_, f, c := setup(t, nil)
+	f.prefs["who_can_post_general"] = map[string]any{"type": []string{"something_new"}, "user": []string{}}
+	d := check(t, c, dana, "message.post", "channel:"+cGeneral)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	expectText(t, d, "something_new")
+	itest.ExpectCode(t, check(t, c, admin, "message.post", "channel:"+cGeneral), integration.CodeUnsupported)
+	// A recognised match still wins.
+	f.prefs["who_can_post_general"] = map[string]any{"type": []string{"admin", "something_new"}, "user": []string{uGuest}}
+	itest.ExpectCode(t, check(t, c, admin, "message.post", "channel:"+cGeneral), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, guest, "message.post", "channel:"+cGeneral), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, dana, "message.post", "channel:"+cGeneral), integration.CodeUnsupported)
+
+	f.channels[cRestrict].obj["properties"] = map[string]any{"posting_restricted_to": map[string]any{"type": []string{"something_new"}, "user": []string{uUltra}}}
+	d = check(t, c, dana, "message.post", "channel:"+cRestrict)
+	itest.ExpectCode(t, d, integration.CodeUnsupported)
+	expectText(t, d, "something_new")
+	itest.ExpectCode(t, check(t, c, dana, "file.upload", "channel:"+cRestrict), integration.CodeUnsupported)
+	// Admins bypass the channel restriction, named users match, threads are
+	// not limited by it.
+	itest.ExpectCode(t, check(t, c, admin, "message.post", "channel:"+cRestrict), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, ultra, "message.post", "channel:"+cRestrict), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, dana, "message.post_thread", "channel:"+cRestrict), integration.CodeAllowed)
+	// A recognised type that positively excludes the user is still a deny.
+	f.channels[cRestrict].obj["properties"] = map[string]any{"posting_restricted_to": map[string]any{"type": []string{"owner"}, "user": []string{}}}
+	itest.ExpectCode(t, check(t, c, dana, "message.post", "channel:"+cRestrict), integration.CodeDenied)
+}
+
+// Invite, rename and archive act from inside the channel: membership first.
+func TestChannelActionsNeedMembership(t *testing.T) {
+	srv, f, c := setup(t, nil)
+	for _, a := range []string{"channel.invite", "channel.rename", "channel.archive"} {
+		// Admins and owners who are not members of a private channel.
+		for _, u := range []integration.User{admin, owner} {
+			d := check(t, c, u, a, "channel:"+gPrivate)
+			itest.ExpectCode(t, d, integration.CodeDenied)
+			expectText(t, d, "not a member")
+		}
+		// A full member of the private channel: the preference gate as usual.
+		d := check(t, c, dana, a, "channel:"+gPrivate)
+		itest.ExpectCode(t, d, integration.CodeUnsupported)
+		expectText(t, d, "not readable by a bot token")
+		// A guest member of the private channel is refused by the gate.
+		itest.ExpectCode(t, check(t, c, guest, a, "channel:"+gPrivate), integration.CodeDenied)
+	}
+	if count(methods(srv), "users.conversations") == 0 {
+		t.Error("membership never read")
+	}
+	// An admin member of a private channel is allowed.
+	f.channels[gPrivate].members = append(f.channels[gPrivate].members, uAdmin)
+	for _, a := range []string{"channel.invite", "channel.rename", "channel.archive"} {
+		itest.ExpectCode(t, check(t, c, admin, a, "channel:"+gPrivate), integration.CodeAllowed)
+	}
+	// Public channel, not a member: joining first is possible, so unknown
+	// for admins and full members, deny for guests.
+	f.channels[cPublic].members = []string{uOwner}
+	for _, a := range []string{"channel.invite", "channel.rename", "channel.archive"} {
+		for _, u := range []integration.User{admin, dana} {
+			d := check(t, c, u, a, "channel:"+cPublic)
+			itest.ExpectCode(t, d, integration.CodeUnsupported)
+			expectText(t, d, "not a member")
+			expectText(t, d, "joining first is possible")
+		}
+		for _, u := range []integration.User{guest, ultra} {
+			d := check(t, c, u, a, "channel:"+cPublic)
+			itest.ExpectCode(t, d, integration.CodeDenied)
+			expectText(t, d, "not a member")
+		}
+		itest.ExpectCode(t, check(t, c, owner, a, "channel:"+cPublic), integration.CodeAllowed)
+	}
+	// assume_default_prefs does not turn a non-member into an allow.
+	_, f, c = setup(t, map[string]string{"assume_default_prefs": "true"})
+	f.channels[cPublic].members = []string{uOwner}
+	itest.ExpectCode(t, check(t, c, dana, "channel.invite", "channel:"+cPublic), integration.CodeUnsupported)
+	itest.ExpectCode(t, check(t, c, admin, "channel.archive", "channel:"+gPrivate), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, dana, "channel.rename", "channel:"+gPrivate), integration.CodeAllowed)
+	// Archived and #general answers come before the membership read.
+	srv, _, c = setup(t, nil)
+	itest.ExpectCode(t, check(t, c, admin, "channel.archive", "channel:"+cGeneral), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, admin, "channel.invite", "channel:"+cArchived), integration.CodeDenied)
+	if count(methods(srv), "users.conversations") != 0 {
+		t.Error("membership read for an answer that does not depend on it")
+	}
+}
+
+// On an Enterprise Grid org-level install the user object may belong to
+// another workspace of the organization; "any full member of this workspace"
+// is then not established.
+func TestGridTeamMismatch(t *testing.T) {
+	_, f, c := setup(t, map[string]string{"team_id": "T0000OTHR1"})
+	for _, a := range []string{"channel.read", "channel.join"} {
+		d := check(t, c, dana, a, "channel:"+cPublic)
+		itest.ExpectCode(t, d, integration.CodeUnsupported)
+		expectText(t, d, "another workspace of the organization")
+		itest.ExpectCode(t, check(t, c, admin, a, "channel:"+cPublic), integration.CodeUnsupported)
+	}
+	// Positive facts still decide: membership of a private channel, guests.
+	itest.ExpectCode(t, check(t, c, dana, "channel.read", "channel:"+gPrivate), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, admin, "channel.read", "channel:"+gPrivate), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, ultra, "channel.read", "channel:"+cPublic), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, guest, "channel.join", "channel:"+cPublic), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, dana, "channel.join", "channel:"+cArchived), integration.CodeDenied)
+	// A user object without team_id cannot be compared.
+	delete(f.users["dana@example.com"], "team_id")
+	itest.ExpectCode(t, check(t, c, dana, "channel.read", "channel:"+cPublic), integration.CodeAllowed)
+
+	// The same workspace, or no team_id on the connection: allowed as before.
+	_, _, c = setup(t, map[string]string{"team_id": "T0000TEAM1"})
+	itest.ExpectCode(t, check(t, c, dana, "channel.read", "channel:"+cPublic), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, dana, "channel.join", "channel:"+cPublic), integration.CodeAllowed)
+	_, f, c = setup(t, nil)
+	f.users["dana@example.com"]["team_id"] = "T0000OTHR1"
+	itest.ExpectCode(t, check(t, c, dana, "channel.read", "channel:"+cPublic), integration.CodeAllowed)
 }
 
 func TestReadAndJoinRules(t *testing.T) {
@@ -782,7 +957,7 @@ func TestProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(r.Summary, "U0000HALLP") || !strings.Contains(r.Summary, "Acme") || !strings.Contains(r.Summary, "B0000HALLP") {
+	if !strings.Contains(r.Summary, "U0000HALLP") || !strings.Contains(r.Summary, "Acme") || !strings.Contains(r.Summary, "B0000HALLP") || !strings.Contains(r.Summary, "channel properties visible") {
 		t.Errorf("summary %q", r.Summary)
 	}
 	if len(r.Warnings) != 0 {
@@ -827,6 +1002,69 @@ func TestProbe(t *testing.T) {
 	}
 }
 
+// The probe reads #general to report whether channel properties are visible.
+func TestProbeChannelProperties(t *testing.T) {
+	srv, f, c := setup(t, nil)
+	f.listPS = 1 // #general is the second public channel listed
+	r, err := c.Probe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.Summary, "channel properties visible") || len(r.Warnings) != 0 {
+		t.Errorf("summary %q warnings %v", r.Summary, r.Warnings)
+	}
+	ms := methods(srv)
+	if n := count(ms, "conversations.list"); n != 2 {
+		t.Errorf("conversations.list called %d times, want 2 (%v)", n, ms)
+	}
+	var infos []string
+	for _, cl := range srv.Calls() {
+		if strings.HasSuffix(cl.Path, "conversations.list") {
+			if cl.Query.Get("types") != "public_channel" || cl.Query.Get("exclude_archived") != "true" || cl.Query.Get("limit") != "200" {
+				t.Errorf("conversations.list query %v", cl.Query)
+			}
+		}
+		if strings.HasSuffix(cl.Path, "conversations.info") {
+			infos = append(infos, cl.Query.Get("channel"))
+		}
+	}
+	if strings.Join(infos, ",") != cGeneral {
+		t.Errorf("conversations.info called for %v, want only #general", infos)
+	}
+
+	// No properties object on #general: warn.
+	f.channels[cGeneral].obj["properties"] = nil
+	r, err = c.Probe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(r.Summary, "channel properties visible") {
+		t.Errorf("summary %q", r.Summary)
+	}
+	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "no properties object") || !strings.Contains(r.Warnings[0], "assume_default_prefs") {
+		t.Errorf("warnings %v", r.Warnings)
+	}
+	// #general not listed: warn, without a conversations.info call.
+	f.channels[cGeneral].obj["is_general"] = false
+	srv.Reset()
+	r, err = c.Probe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "#general was not found") {
+		t.Errorf("warnings %v", r.Warnings)
+	}
+	if count(methods(srv), "conversations.info") != 0 {
+		t.Error("conversations.info called without #general")
+	}
+	// Failures of the listing are the probe's failures.
+	f.fail["conversations.list"] = "missing_scope"
+	f.needed = "channels:read"
+	if _, err := c.Probe(context.Background()); !isCode(err, integration.CodeCredentialRejected) {
+		t.Errorf("conversations.list missing_scope: %v", err)
+	}
+}
+
 func TestPostersParsing(t *testing.T) {
 	full := integration.Identity{ID: uFull}
 	adm := integration.Identity{ID: uAdmin, Attrs: map[string]string{attrAdmin: "true"}}
@@ -835,6 +1073,7 @@ func TestPostersParsing(t *testing.T) {
 		raw            string
 		full, adm, own bool
 		nilP, err      bool
+		unknown        string // reported for whoever is not allowed
 	}{
 		{raw: "", nilP: true},
 		{raw: "null", nilP: true},
@@ -842,6 +1081,9 @@ func TestPostersParsing(t *testing.T) {
 		{raw: `{"type":[],"user":[]}`, full: true, adm: true, own: true},
 		{raw: `{"type":["admin"],"user":[]}`, adm: true, own: true},
 		{raw: `{"type":["owner"],"user":["` + uFull + `"]}`, full: true, own: true},
+		{raw: `{"type":["weird"],"user":[]}`, unknown: "weird"},
+		{raw: `{"type":["admin","weird"],"user":["` + uFull + `"]}`, full: true, adm: true, own: true},
+		{raw: `{"type":["weird","owner"],"user":[]}`, own: true, unknown: "weird"},
 		{raw: `"everyone"`, full: true, adm: true, own: true},
 		{raw: `"admin"`, adm: true, own: true},
 		{raw: `"owner"`, own: true},
@@ -866,8 +1108,21 @@ func TestPostersParsing(t *testing.T) {
 			}
 			continue
 		}
-		if p.allows(full) != cs.full || p.allows(adm) != cs.adm || p.allows(own) != cs.own {
-			t.Errorf("%s: full=%v adm=%v own=%v", cs.raw, p.allows(full), p.allows(adm), p.allows(own))
+		for _, id := range []struct {
+			id   integration.Identity
+			want bool
+		}{{full, cs.full}, {adm, cs.adm}, {own, cs.own}} {
+			ok, unknown := p.allows(id.id)
+			if ok != id.want {
+				t.Errorf("%s: %s allowed=%v, want %v", cs.raw, id.id.ID, ok, id.want)
+			}
+			wantUnknown := ""
+			if !ok {
+				wantUnknown = cs.unknown
+			}
+			if unknown != wantUnknown {
+				t.Errorf("%s: %s unknown=%q, want %q", cs.raw, id.id.ID, unknown, wantUnknown)
+			}
 		}
 	}
 }
@@ -967,6 +1222,7 @@ func TestAction_channel_invite_allow(t *testing.T) {
 func TestAction_channel_invite_deny(t *testing.T) {
 	_, _, c := setup(t, nil)
 	itest.ExpectCode(t, check(t, c, guest, "channel.invite", "channel:"+cPublic), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, admin, "channel.invite", "channel:"+gPrivate), integration.CodeDenied)
 }
 func TestAction_channel_create_allow(t *testing.T) {
 	_, _, c := setup(t, nil)
@@ -983,6 +1239,7 @@ func TestAction_channel_archive_allow(t *testing.T) {
 func TestAction_channel_archive_deny(t *testing.T) {
 	_, _, c := setup(t, nil)
 	itest.ExpectCode(t, check(t, c, guest, "channel.archive", "channel:"+cPublic), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, admin, "channel.archive", "channel:"+gPrivate), integration.CodeDenied)
 }
 func TestAction_channel_rename_allow(t *testing.T) {
 	_, _, c := setup(t, nil)
@@ -991,4 +1248,5 @@ func TestAction_channel_rename_allow(t *testing.T) {
 func TestAction_channel_rename_deny(t *testing.T) {
 	_, _, c := setup(t, nil)
 	itest.ExpectCode(t, check(t, c, guest, "channel.rename", "channel:"+cPublic), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, admin, "channel.rename", "channel:"+gPrivate), integration.CodeDenied)
 }

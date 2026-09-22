@@ -48,7 +48,7 @@ unknown (`upstream_rate_limited`).
 | `credential` | bot token, `env:` or `file:` |
 | `url` | Web API base URL; change only for a proxy |
 | `team_id` | workspace to address when the app is installed at the Enterprise Grid org level; sent as `team_id` on every call |
-| `assume_default_prefs` | `true`: a workspace preference the bot cannot read (`who_can_post_general` without the scope or field, and "who can create / invite / archive / rename" which no bot token can read) is taken to be Slack's default, "everyone". `false`: those cases answer unknown |
+| `assume_default_prefs` | `true`: a workspace preference the bot cannot read (`who_can_post_general` without the scope or field, "who can create / invite / archive / rename" which no bot token can read, and a channel whose `posting_restricted_to` property is not visible) is taken to be Slack's default, "everyone". `false`: those cases answer unknown |
 
 ## Resources
 
@@ -67,16 +67,16 @@ Ids only, never names: `channel:C0123456789`.
 | `user.active` | `workspace` | allow unless deactivated, a bot, or invited and not yet joined |
 | `workspace.admin` | `workspace` | allow for `is_admin` / `is_owner` / `is_primary_owner` |
 | `org.admin` | `workspace` | allow for `enterprise_user.is_admin` / `is_owner`; unknown outside Enterprise Grid |
-| `channel.read` | `channel` | public: allow for full members, guests only when a member; private: allow iff member; archived channels stay readable |
-| `channel.join` | `channel` | public and not archived: allow for full members, guests only when already a member; private: allow only when already a member; archived: deny |
-| `message.post` | `channel` | deny when archived or not a member; in `#general` apply `who_can_post_general`; apply `posting_restricted_to` unless the user is an admin; else allow |
+| `channel.read` | `channel` | public: allow for full members, guests only when a member; private: allow iff member; archived channels stay readable. With `team_id` set, a full member whose user object carries another `team_id` answers unknown (see below) |
+| `channel.join` | `channel` | public and not archived: allow for full members, guests only when already a member; private: allow only when already a member; archived: deny. Same `team_id` rule as `channel.read` |
+| `message.post` | `channel` | deny when archived or not a member; in `#general` apply `who_can_post_general`; then `posting_restricted_to`: absent answers unknown (allow with `assume_default_prefs: true`), admins bypass it, a poster type hallpass does not model answers unknown, otherwise allow iff the user is among the posters |
 | `message.post_thread` | `channel` | as `message.post`, but `posting_restricted_to` does not block replies (allow with a caveat in the text) |
 | `file.upload` | `channel` | as `message.post` |
 | `usergroup.member` | `usergroup` | allow iff the user id is in the group's `users` |
-| `channel.invite` | `channel` | deny for guests, allow for admins and owners, unknown for full members (see below); deny when archived |
+| `channel.invite` | `channel` | deny when archived; then membership: not a member of a private channel denies, a guest who is not a member denies, anyone else who is not a member of a public channel answers unknown (joining first is possible); members: deny for guests, allow for admins and owners, unknown for full members (see below) |
 | `channel.create` | `workspace` | deny for guests, allow for admins and owners, unknown for full members |
-| `channel.archive` | `channel` | as above; deny when already archived or the channel is `#general` |
-| `channel.rename` | `channel` | as above; deny when archived |
+| `channel.archive` | `channel` | as `channel.invite`; deny when already archived or the channel is `#general` |
+| `channel.rename` | `channel` | as `channel.invite`; deny when archived |
 
 Deactivated, bot and invited-but-not-joined accounts are denied every action.
 
@@ -96,11 +96,17 @@ Deactivated, bot and invited-but-not-joined accounts are denied every action.
 | `ratelimited` or HTTP 429 after one retry | unknown (`upstream_rate_limited`) |
 | any other `ok: false` error, 5xx, timeout | unknown (`upstream_error` / `upstream_timeout`) |
 | workspace preference not readable by a bot token (`channel.create/invite/archive/rename` for a full member) | unknown (`unsupported`), or allow with `assume_default_prefs: true` |
+| `channel.invite/archive/rename` by an admin or full member who is not a member of a public channel | unknown (`unsupported`): joining first is possible, which hallpass does not assume |
+| `channel.invite/archive/rename` by a non-member of a private channel, or a guest non-member | deny |
 | `who_can_post_general` absent or in an unrecognised shape | unknown (`unsupported`), or allow with `assume_default_prefs: true` when absent |
+| `who_can_post_general` or `posting_restricted_to` names a poster `type` other than `everyone`, `regular`, `ra`, `admin`, `owner`, and nothing else in the rule matches the user | unknown (`unsupported`) |
+| `posting_restricted_to` absent from the channel object (no `properties`, or no such key) | unknown (`unsupported`), or allow with `assume_default_prefs: true` |
+| `team_id` set and the user object's `team_id` differs, on `channel.read` / `channel.join` of a public channel by a full member | unknown (`unsupported`): the user belongs to another workspace of the organization |
 | user in more channels than 5 pages of `users.conversations` | membership read from `conversations.members` instead (up to 50 pages, then `unsupported`) |
 
 Membership checks are skipped when they cannot change the answer (a full member reading or joining a
-public channel).
+public channel). They always run for `message.post`, `message.post_thread`, `file.upload`,
+`channel.invite`, `channel.archive` and `channel.rename`, which act from inside the channel.
 
 ## What it cannot see
 
@@ -109,10 +115,16 @@ public channel).
   for those actions unless `assume_default_prefs` is set.
 - Private channels the bot is not in. They look identical to non-existent channels
   (`channel_not_found`) and answer `resource_not_visible`.
+- Whether a channel without a visible `posting_restricted_to` is unrestricted or the bot cannot see
+  the restriction. Such channels answer unknown for posting unless `assume_default_prefs` is set;
+  `hallpass probe` reports "channel properties visible" when `conversations.info` on `#general`
+  returns a `properties` object and warns otherwise.
 - Slack Connect: external users (`is_stranger`) and what a shared channel's other workspace allows.
 - Enterprise Grid: only the org-level `enterprise_user.is_admin` / `is_owner` is read. The
   per-workspace `is_admin` on a Grid user object is the value for the workspace addressed by
-  `team_id`, which is not verified.
+  `team_id`, which is not verified. A user whose object carries another `team_id` may still be a
+  member of the addressed workspace; hallpass answers unknown where the rule would rest on that
+  membership alone.
 - Huddles, canvases, lists, DMs and group DMs (`D...` ids are rejected), message editing and deletion,
   channel-level "who can post" set through Slack's admin tools other than `posting_restricted_to`.
 - Guest expiry dates, channel-specific guest restrictions beyond membership.
@@ -127,9 +139,13 @@ against a real workspace.
 - The shape of `who_can_post_general` in `team.preferences.list`. Read as `{"type":["admin"|"owner"],
   "user":["U..."]}`; a string form is accepted too, with `everyone`, `regular` and `ra` meaning
   everyone, `admin` meaning admins and owners, `owner` meaning owners, and anything else unknown.
-- Whether `conversations.info` exposes `properties.posting_restricted_to` to a bot token. When it is
-  absent the channel is treated as unrestricted and the decision text says "no posting restriction
-  is visible to the bot".
+- Whether `conversations.info` exposes `properties.posting_restricted_to` to a bot token, and whether
+  Slack omits it for an unrestricted channel. An absent property is not taken as "unrestricted":
+  posting answers unknown, or allow with `assume_default_prefs: true` and a decision text saying "no
+  posting restriction is visible to the bot".
+- On a Grid org-level install, the `team_id` of the user object `users.lookupByEmail` returns names
+  the user's workspace; a user of the workspace addressed by `team_id` is taken to carry that
+  `team_id`.
 - `posting_restricted_to` limits top-level posts only: `message.post_thread` allows with a caveat when
   the user is not among the posters.
 - Slack's default for the "who can create / invite / archive / rename channels" preferences is
@@ -142,7 +158,8 @@ against a real workspace.
 Unit tests run against a fake Web API in `internal/integrations/slack/slack_test.go` with fixture
 users (full member, admin, owner, two guest kinds, deactivated, bot, invited, external, two Grid
 users) and channels (public, `#general` with a posting rule, a channel with `posting_restricted_to`,
-archived, private with the bot, private without the bot). Against a real workspace:
+archived, a channel without a `properties` object, private with the bot, private without the bot).
+Against a real workspace:
 
 ```sh
 hallpass probe -config hallpass.yaml -connection slack-acme
@@ -151,4 +168,6 @@ curl -X POST localhost:8080/check -H "Authorization: Bearer $HALLPASS_API_KEY" -
 ```
 
 The probe reports the bot user and workspace from `auth.test`, confirms `users:read.email` with a
-lookup that cannot match, and warns about missing optional scopes and any write scope.
+lookup that cannot match, warns about missing optional scopes and any write scope, and finds
+`#general` with `conversations.list` to report whether `conversations.info` returns a `properties`
+object ("channel properties visible"), warning when it does not.
