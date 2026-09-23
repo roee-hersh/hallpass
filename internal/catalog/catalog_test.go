@@ -23,6 +23,10 @@ func TestParseResource(t *testing.T) {
 		{in: "ns:x?resource=a&resource=b", wantErr: true},
 		{in: "ns:x?Bad=1", wantErr: true},
 		{in: "ns:x?%zz", wantErr: true},
+		{in: "ns:x?k=%0A", wantErr: true},
+		{in: "ns:x?k=%C2%85", wantErr: true},
+		{in: "ns:x\u0085y", wantErr: true},
+		{in: "ns:x?k=caf%C3%A9", typ: "ns", id: "x", q: map[string]string{"k": "café"}},
 	}
 	for _, c := range cases {
 		r, err := ParseResource(c.in)
