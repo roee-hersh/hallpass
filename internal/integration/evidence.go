@@ -34,8 +34,8 @@ type Call struct {
 	// ETag and the body was not empty.
 	SHA256 string `json:"sha256,omitempty"`
 	// Cached marks a call that was not made for this check: its result was
-	// served from the identity cache, and this is the evidence recorded
-	// when the call was made.
+	// served from a cache (the identity cache, or one an integration keeps),
+	// and this is the evidence recorded when the call was made.
 	Cached bool `json:"cached,omitempty"`
 }
 
@@ -46,6 +46,10 @@ const MaxEvidenceCalls = 100
 // Recorder collects the evidence of one check. It is safe for concurrent
 // use: a shared fill may still be running on a detached context after the
 // check that started it has returned.
+//
+// The engine gives every check a Recorder through its context; httpx
+// records each response it returns on it, and cache.TTL.Do replays the
+// evidence of a cached fill on it, marked cached.
 type Recorder struct {
 	mu        sync.Mutex
 	calls     []Call
@@ -66,14 +70,14 @@ func (r *Recorder) Record(c Call) {
 	r.calls = append(r.calls, c)
 }
 
-// AddCached adds ev's calls, marked as served from a cache. A nil ev adds
-// nothing.
-func (r *Recorder) AddCached(ev *Evidence) {
+// Add adds ev's calls, marked as served from a cache when cached is set,
+// and carries ev's truncation over. A nil ev adds nothing.
+func (r *Recorder) Add(ev *Evidence, cached bool) {
 	if r == nil || ev == nil {
 		return
 	}
 	for _, c := range ev.Upstream {
-		c.Cached = true
+		c.Cached = c.Cached || cached
 		r.Record(c)
 	}
 	if ev.Truncated {
@@ -99,16 +103,16 @@ func (r *Recorder) Evidence() *Evidence {
 
 type recorderKey struct{}
 
-// WithRecorder returns a context on which RecordCall adds to a new
-// Recorder. The engine sets one up for every check.
+// WithRecorder returns a context carrying a new Recorder. The engine sets
+// one up for every check.
 func WithRecorder(ctx context.Context) (context.Context, *Recorder) {
 	r := &Recorder{}
 	return context.WithValue(ctx, recorderKey{}, r), r
 }
 
-// WithoutRecorder returns a context on which RecordCall records nothing.
-// httpx runs Auth funcs on it: a token exchange is not what a decision was
-// based on, and its response carries the credential.
+// WithoutRecorder returns a context whose RecorderFrom is nil. httpx runs
+// Auth funcs on it and authx fetches tokens on it: a token exchange is not
+// what a decision was based on, and its response carries the credential.
 func WithoutRecorder(ctx context.Context) context.Context {
 	if ctx.Value(recorderKey{}) == nil {
 		return ctx
@@ -116,8 +120,9 @@ func WithoutRecorder(ctx context.Context) context.Context {
 	return context.WithValue(ctx, recorderKey{}, (*Recorder)(nil))
 }
 
-// RecordCall records c on the context's Recorder, if it has one.
-func RecordCall(ctx context.Context, c Call) {
+// RecorderFrom returns the context's Recorder, or nil when the context has
+// none or recording is suppressed. Every Recorder method accepts nil.
+func RecorderFrom(ctx context.Context) *Recorder {
 	r, _ := ctx.Value(recorderKey{}).(*Recorder)
-	r.Record(c)
+	return r
 }

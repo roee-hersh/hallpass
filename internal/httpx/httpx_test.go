@@ -461,6 +461,24 @@ func TestEvidence(t *testing.T) {
 	if strings.Contains(string(b), canary) || strings.Contains(string(b), "token") {
 		t.Fatalf("evidence leaked: %s", b)
 	}
+	// Only the response Do returns is evidence: a retried 503 is not.
+	var flaps atomic.Int32
+	flaky := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if flaps.Add(1) == 1 {
+			w.WriteHeader(503)
+			return
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer flaky.Close()
+	fc := newTestClient(t, flaky, &bytes.Buffer{})
+	fctx, frec := integration.WithRecorder(context.Background())
+	if _, err := fc.Do(fctx, &Request{Path: "/flaky"}); err != nil || flaps.Load() != 2 {
+		t.Fatal(err, flaps.Load())
+	}
+	if ev := frec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Status != 200 {
+		t.Fatalf("retried attempt recorded: %+v", ev)
+	}
 	// A request that never got a response leaves no evidence.
 	srv.Close()
 	rec2ctx, rec2 := integration.WithRecorder(context.Background())

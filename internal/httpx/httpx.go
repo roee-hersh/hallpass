@@ -172,6 +172,8 @@ type Response struct {
 	Status int
 	Header http.Header
 	Body   []byte
+	// method and path describe the request, for the evidence record.
+	method, path string
 }
 
 // JSON decodes the body into v.
@@ -295,10 +297,24 @@ func (r *Request) idempotent() bool {
 
 // Do performs the request. Retries happen only for idempotent requests on
 // connection errors, 502/503/504 and 429 with a short Retry-After.
+//
+// The response Do returns, of any status, is recorded as evidence on the
+// context's integration.Recorder when it has one: method, path, status and
+// the ETag or the body's hash. Attempts that were retried are not.
 func (c *Client) Do(ctx context.Context, r *Request) (*Response, error) {
 	if ctx == nil {
 		return nil, errors.New("nil context")
 	}
+	resp, err := c.do(ctx, r)
+	if resp != nil {
+		if rec := integration.RecorderFrom(ctx); rec != nil {
+			rec.Record(evidenceOf(resp))
+		}
+	}
+	return resp, err
+}
+
+func (c *Client) do(ctx context.Context, r *Request) (*Response, error) {
 	retries := c.Retries
 	if retries == 0 {
 		retries = 2
@@ -362,8 +378,7 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 		return nil, ErrBodyTooLarge
 	}
 	c.logCall(req, res.StatusCode, start, nil)
-	integration.RecordCall(ctx, evidenceOf(req, res, body))
-	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body}
+	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body, method: req.Method, path: req.URL.EscapedPath()}
 	if res.StatusCode >= 400 && !(r.Accept4xx && res.StatusCode < 500) {
 		return out, &StatusError{
 			Status:  res.StatusCode,
@@ -383,12 +398,12 @@ const maxETag = 128
 // evidenceOf describes one completed response for the decision log: method,
 // path (no query, no host), status, and the ETag or the body's SHA-256. The
 // body itself and every other header stay out.
-func evidenceOf(req *http.Request, res *http.Response, body []byte) integration.Call {
-	c := integration.Call{Method: req.Method, Path: req.URL.EscapedPath(), Status: res.StatusCode}
-	if etag := strings.TrimSpace(res.Header.Get("ETag")); etag != "" && validETag(etag) {
+func evidenceOf(r *Response) integration.Call {
+	c := integration.Call{Method: r.method, Path: r.path, Status: r.Status}
+	if etag := strings.TrimSpace(r.Header.Get("ETag")); etag != "" && validETag(etag) {
 		c.ETag = etag
-	} else if len(body) > 0 {
-		sum := sha256.Sum256(body)
+	} else if len(r.Body) > 0 {
+		sum := sha256.Sum256(r.Body)
 		c.SHA256 = hex.EncodeToString(sum[:])
 	}
 	return c

@@ -85,9 +85,6 @@ type Engine struct {
 type idEntry struct {
 	id  integration.Identity
 	err *integration.Error
-	// ev is the evidence of the lookup, replayed as cached on every check
-	// the entry serves.
-	ev *integration.Evidence
 }
 
 // Build constructs every connection in dependency order.
@@ -323,7 +320,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	defer cancel()
 	ctx, rec := integration.WithRecorder(ctx)
 
-	identity, err := e.identity(ctx, c, user, req.Fresh, rec)
+	identity, err := e.identity(ctx, c, user, req.Fresh)
 	if err != nil {
 		d := integration.ToDecision(err)
 		d.Evidence = rec.Evidence()
@@ -381,53 +378,32 @@ func identityKey(connID string, u integration.User) string {
 	return strings.Join(parts, "\x00")
 }
 
-// identity resolves u through the identity cache. The lookup runs on its own
-// Recorder so that its evidence is kept with the cache entry; the calls are
-// then added to rec, marked cached unless this call made them. A fresh
-// request looks up without consulting the cache and replaces the entry.
-func (e *Engine) identity(ctx context.Context, c *conn, u integration.User, fresh bool, rec *integration.Recorder) (integration.Identity, error) {
+// identity resolves u through the identity cache, which also carries the
+// evidence of the lookup to every check it serves. A fresh request drops
+// the cached entry first, so it looks up again (or joins a lookup already
+// in flight) and its answer replaces the entry.
+func (e *Engine) identity(ctx context.Context, c *conn, u integration.User, fresh bool) (integration.Identity, error) {
 	key := identityKey(c.settings.ID, u)
-	// looked is set by the fill when it runs; a caller whose fill did not
-	// run got the entry from the cache or from another caller's lookup.
-	looked := false
 	fill := func(ctx context.Context) (idEntry, time.Duration, error) {
-		looked = true
-		ctx, lookup := integration.WithRecorder(ctx)
 		id, err := c.c.ResolveIdentity(ctx, u)
-		ev := lookup.Evidence()
 		if err == nil {
-			return idEntry{id: id, ev: ev}, e.idTTL, nil
+			return idEntry{id: id}, e.idTTL, nil
 		}
 		var ie *integration.Error
 		if errors.As(err, &ie) && (ie.Code == integration.CodeUserNotFound || ie.Code == integration.CodeUserAmbiguous) {
-			return idEntry{err: ie, ev: ev}, e.negTTL, nil
+			return idEntry{err: ie}, e.negTTL, nil
 		}
-		return idEntry{ev: ev}, 0, err
+		return idEntry{}, 0, err
 	}
 	var ent idEntry
 	var err error
-	switch {
-	case e.idTTL > 0 && !fresh:
+	if e.idTTL > 0 {
+		if fresh {
+			e.idCache.Delete(key)
+		}
 		ent, err = e.idCache.Do(ctx, key, fill)
-	case e.idTTL > 0:
-		var ttl time.Duration
-		ent, ttl, err = fill(ctx)
-		if err == nil {
-			e.idCache.Set(key, ent, ttl)
-		}
-	default:
+	} else {
 		ent, _, err = fill(ctx)
-	}
-	// A caller whose ctx ended while a shared lookup was still running
-	// must not read looked or the entry: both are still being written.
-	if ctx.Err() == nil {
-		if looked {
-			for _, call := range evidenceCalls(ent.ev) {
-				rec.Record(call)
-			}
-		} else {
-			rec.AddCached(ent.ev)
-		}
 	}
 	if err != nil {
 		return integration.Identity{}, err
@@ -436,14 +412,6 @@ func (e *Engine) identity(ctx context.Context, c *conn, u integration.User, fres
 		return integration.Identity{}, ent.err
 	}
 	return ent.id, nil
-}
-
-// evidenceCalls returns ev's calls, or nothing for a nil ev.
-func evidenceCalls(ev *integration.Evidence) []integration.Call {
-	if ev == nil {
-		return nil
-	}
-	return ev.Upstream
 }
 
 // Flush empties both caches. Tests and future admin endpoints use it.

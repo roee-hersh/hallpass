@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/roee-hersh/hallpass/internal/integration"
 )
 
 func TestGetSetExpiry(t *testing.T) {
@@ -251,4 +253,106 @@ func TestDetach(t *testing.T) {
 	if time.Until(dl2) > 5*time.Second {
 		t.Fatalf("leader deadline not carried: %v", dl2)
 	}
+}
+
+// Do carries the evidence of a fill to every caller it serves: the leader
+// gets the calls as its own, a waiter and a later hit get them marked
+// cached, and a fill that failed still reports what it saw to its leader.
+func TestDoEvidence(t *testing.T) {
+	c := New[string, int](0)
+	call := func(p string) integration.Call { return integration.Call{Method: "GET", Path: p, Status: 200} }
+	fill := func(ctx context.Context) (int, time.Duration, error) {
+		integration.RecorderFrom(ctx).Record(call("/lookup"))
+		return 1, time.Minute, nil
+	}
+	ctx, rec := integration.WithRecorder(context.Background())
+	if _, err := c.Do(ctx, "k", fill); err != nil {
+		t.Fatal(err)
+	}
+	if ev := rec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached || ev.Upstream[0].Path != "/lookup" {
+		t.Fatalf("leader: %+v", ev)
+	}
+	// A hit replays the fill's evidence, marked cached.
+	ctx2, rec2 := integration.WithRecorder(context.Background())
+	if _, err := c.Do(ctx2, "k", fill); err != nil {
+		t.Fatal(err)
+	}
+	if ev := rec2.Evidence(); ev == nil || len(ev.Upstream) != 1 || !ev.Upstream[0].Cached {
+		t.Fatalf("hit: %+v", ev)
+	}
+	// A context without a recorder is fine.
+	if _, err := c.Do(context.Background(), "k", fill); err != nil {
+		t.Fatal(err)
+	}
+
+	// A waiter on another caller's fill gets the calls marked cached; the
+	// leader gets them as its own.
+	started := make(chan struct{})
+	release := make(chan struct{})
+	slow := func(ctx context.Context) (int, time.Duration, error) {
+		integration.RecorderFrom(ctx).Record(call("/slow"))
+		close(started)
+		<-release
+		return 2, time.Minute, nil
+	}
+	lctx, lrec := integration.WithRecorder(context.Background())
+	wctx, wrec := integration.WithRecorder(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); c.Do(lctx, "slow", slow) }()
+	<-started
+	// The waiter joins the in-flight call: its own fill never runs (it
+	// would close started twice and panic).
+	go func() { defer wg.Done(); c.Do(wctx, "slow", slow) }()
+	for c.inflightCount() != 1 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond) // let the waiter reach Do's select
+	close(release)
+	wg.Wait()
+	if ev := lrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached {
+		t.Fatalf("leader of shared fill: %+v", ev)
+	}
+	if ev := wrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || !ev.Upstream[0].Cached {
+		t.Fatalf("waiter: %+v", ev)
+	}
+
+	// A failed fill is not stored but its leader still sees the evidence;
+	// a fill that asks not to be stored (ttl 0) is live evidence too.
+	ectx, erec := integration.WithRecorder(context.Background())
+	_, err := c.Do(ectx, "err", func(ctx context.Context) (int, time.Duration, error) {
+		integration.RecorderFrom(ctx).Record(integration.Call{Method: "GET", Path: "/err", Status: 503})
+		return 0, 0, errors.New("upstream")
+	})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if ev := erec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Status != 503 || ev.Upstream[0].Cached {
+		t.Fatalf("failed fill: %+v", ev)
+	}
+	zctx, zrec := integration.WithRecorder(context.Background())
+	c.Do(zctx, "zero", func(ctx context.Context) (int, time.Duration, error) {
+		integration.RecorderFrom(ctx).Record(call("/zero"))
+		return 0, 0, nil
+	})
+	if ev := zrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached {
+		t.Fatalf("unstored fill: %+v", ev)
+	}
+	if _, ok := c.Get("zero"); ok {
+		t.Fatal("ttl 0 stored")
+	}
+	// Set stores no evidence, so a hit on it replays nothing.
+	c.Set("set", 3, time.Minute)
+	sctx, srec := integration.WithRecorder(context.Background())
+	c.Do(sctx, "set", fill)
+	if srec.Evidence() != nil {
+		t.Fatalf("Set entry has evidence: %+v", srec.Evidence())
+	}
+}
+
+// inflightCount reports the fills in flight, for the evidence test.
+func (c *TTL[K, V]) inflightCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.inflight)
 }

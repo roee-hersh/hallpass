@@ -9,6 +9,8 @@ import (
 	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/roee-hersh/hallpass/internal/integration"
 )
 
 // TTL is a bounded, time-limited map. Zero or negative TTLs disable storage
@@ -24,12 +26,17 @@ type TTL[K comparable, V any] struct {
 type entry[V any] struct {
 	v   V
 	exp time.Time
+	// ev is the evidence of the fill that produced v, replayed on hits.
+	ev *integration.Evidence
 }
 
 type call[V any] struct {
 	done chan struct{}
 	v    V
 	err  error
+	// rec is the fill's own Recorder; its Evidence is final once done is
+	// closed.
+	rec *integration.Recorder
 }
 
 // New creates a cache holding at most max entries (0 means 10000).
@@ -145,6 +152,13 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // with concurrent callers. The fill decides the TTL by returning it; a TTL
 // of 0 means "do not store". Errors are never stored.
 //
+// The upstream calls a fill makes are its evidence (see
+// integration.Recorder). The fill runs on its own Recorder; the caller
+// that ran it gets the calls on its context's Recorder as its own, a
+// caller that waited for another's fill or hit the cache gets them marked
+// cached. So a decision served from a cached lookup still shows what the
+// upstream said when the lookup was made.
+//
 // The fill runs in its own goroutine on a context detached from the first
 // caller's cancellation (see Detach) rather than on ctx itself: otherwise
 // that caller going away would abort the fill and hand every waiter a
@@ -152,15 +166,19 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // stops waiting when its own ctx is done. A panic in fill becomes a
 // *PanicError for everyone waiting on it.
 func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
-	if v, ok := c.Get(k); ok {
+	rec := integration.RecorderFrom(ctx)
+	if v, ev, ok := c.get(k); ok {
+		rec.Add(ev, true)
 		return v, nil
 	}
 	c.mu.Lock()
 	cl, ok := c.inflight[k]
-	if !ok {
+	leader := !ok
+	if leader {
 		cl = &call[V]{done: make(chan struct{})}
 		c.inflight[k] = cl
 		fctx, cancel := Detach(ctx, DefaultFillTimeout)
+		fctx, cl.rec = integration.WithRecorder(fctx)
 		go func() {
 			defer cancel()
 			c.fill(k, cl, fctx, fill)
@@ -169,11 +187,29 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 	c.mu.Unlock()
 	select {
 	case <-cl.done:
+		// cl is complete: the fill's goroutine closed done after its
+		// last write.
+		rec.Add(cl.rec.Evidence(), !leader)
 		return cl.v, cl.err
 	case <-ctx.Done():
 		var zero V
 		return zero, ctx.Err()
 	}
+}
+
+// get is Get that also returns the entry's evidence.
+func (c *TTL[K, V]) get(k K) (V, *integration.Evidence, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.items[k]
+	if !ok || !c.now().Before(e.exp) {
+		if ok {
+			delete(c.items, k)
+		}
+		var zero V
+		return zero, nil, false
+	}
+	return e.v, e.ev, true
 }
 
 // fill runs one fill for k, then always removes the inflight entry and
@@ -193,7 +229,7 @@ func (c *TTL[K, V]) fill(k K, cl *call[V], ctx context.Context, fill func(ctx co
 		delete(c.inflight, k)
 		if cl.err == nil && ttl > 0 {
 			c.evictLocked()
-			c.items[k] = entry[V]{v: cl.v, exp: c.now().Add(ttl)}
+			c.items[k] = entry[V]{v: cl.v, exp: c.now().Add(ttl), ev: cl.rec.Evidence()}
 		}
 		c.mu.Unlock()
 		close(cl.done)

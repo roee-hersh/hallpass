@@ -210,9 +210,10 @@ query string, which may carry user data, and never a host beyond the connection'
 status, and the response's `ETag` when the upstream sent one, else the SHA-256 of the response body.
 Response bodies, other headers and credentials are never logged; the token exchange an integration
 makes to authenticate is not evidence and is left out. A call marked `cached` was not made for this
-check: its result was served from the identity cache, and the entry shows the evidence recorded when
-it was made. A decision served from the decision cache has `cached: true` and carries the evidence of
-the check that produced it. `fresh: true` marks a check that skipped the caches on the caller's
+check: its result was served from a cache (the identity cache, or a lookup the integration keeps
+such as a role definition or a policy), and the entry shows the evidence recorded when the call was
+made. A decision served from the decision cache has `cached: true` and carries the evidence of the
+check that produced it. `fresh: true` marks a check that skipped the caches on the caller's
 request. The list is capped at 100 calls; `truncated: true` says more were made.
 
 ## Configuration

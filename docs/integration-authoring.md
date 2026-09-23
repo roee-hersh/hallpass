@@ -76,9 +76,9 @@ another host, so the credential never travels there). Bodies are never logged. U
 
 Every response `httpx` completes during `ResolveIdentity` and `Check` is recorded as evidence on the
 decision (method, path, status, and the `ETag` or the body's SHA-256) and written to the decision log
-by the engine; an integration does nothing for this. Calls made from the client's `Auth` func (a
-token exchange) are not recorded. A lookup an integration caches itself is evidence only for the
-check that made it.
+by the engine; an integration does nothing for this. Calls made from the client's `Auth` func or
+by an `authx` token source are not recorded. A lookup an integration caches in a `cache.TTL`
+(role definitions, policies) is replayed, marked `cached`, on every check the entry serves.
 
 ## Auth (`internal/authx`)
 
