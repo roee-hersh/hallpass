@@ -10,6 +10,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/fake"
 	"github.com/roee-hersh/hallpass/internal/integrations/github"
 	"github.com/roee-hersh/hallpass/internal/integrations/gitlab"
+	"github.com/roee-hersh/hallpass/internal/integrations/googlecloud"
 	"github.com/roee-hersh/hallpass/internal/integrations/googleworkspace"
 	"github.com/roee-hersh/hallpass/internal/integrations/jira"
 	"github.com/roee-hersh/hallpass/internal/integrations/kubernetes"
@@ -33,5 +34,6 @@ func Registry() *integration.Registry {
 	r.Register(salesforce.Integration{})
 	r.Register(microsoft365.Integration{})
 	r.Register(googleworkspace.Integration{})
+	r.Register(googlecloud.Integration{})
 	return r
 }
