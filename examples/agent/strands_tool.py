@@ -4,9 +4,11 @@ The tools are defined once. The application sets ``current_user`` (and
 optionally ``current_groups``) for the session before it runs the agent, so
 the acting user is never chosen by the model:
 
-    current_user.set("dana@example.com")
+    current_user.set(user.email)  # in the request handler, from your auth
     agent = Agent(tools=tools)
     agent("Write 'hello' to thing 1.")
+
+See docs/agents.md, "Where the user comes from", for a web app example.
 
 Needs ``strands-agents`` (pip install -r requirements.txt).
 """
@@ -65,5 +67,7 @@ if __name__ == "__main__":
 
     from strands import Agent
 
+    # Demo only: the command line stands in for the user a real request was
+    # authenticated as (see docs/agents.md, "Where the user comes from").
     current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
     Agent(tools=tools)("Write 'hello' to thing 1.")

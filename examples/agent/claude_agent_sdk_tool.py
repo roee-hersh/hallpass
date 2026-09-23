@@ -4,12 +4,14 @@ The tools live in an in-process MCP server, defined once. The application
 sets ``current_user`` (and optionally ``current_groups``) for the session
 before it runs a query, so the acting user is never chosen by the model:
 
-    current_user.set("dana@example.com")
+    current_user.set(user.email)  # in the request handler, from your auth
     options = ClaudeAgentOptions(
         mcp_servers={"hallpass": server},
         allowed_tools=["mcp__hallpass__check_permission", "mcp__hallpass__write_thing"],
     )
     async for message in query(prompt="...", options=options): ...
+
+See docs/agents.md, "Where the user comes from", for a Slack bot example.
 
 Needs ``claude-agent-sdk`` (pip install -r requirements.txt).
 """
@@ -71,6 +73,8 @@ if __name__ == "__main__":
 
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
+    # Demo only: the command line stands in for the user a real request was
+    # authenticated as (see docs/agents.md, "Where the user comes from").
     current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
 
     async def main():

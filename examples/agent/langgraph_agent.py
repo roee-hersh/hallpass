@@ -5,7 +5,7 @@ them unchanged. ``create_agent`` (LangChain 1.x, built on LangGraph) gives a
 ready tool-calling loop, and ``tool_node`` is the same tools as a node for a
 hand-built graph. Set ``current_user`` for the session before invoking:
 
-    current_user.set("dana@example.com")
+    current_user.set(user.email)  # in the request handler, from your auth
     agent = create_agent("anthropic:claude-opus-5", tools=tools)
     agent.invoke({"messages": [("user", "Write 'hello' to thing 1.")]})
 
@@ -33,6 +33,8 @@ if __name__ == "__main__":
     import sys
 
     model = sys.argv[1] if len(sys.argv) > 1 else "anthropic:claude-opus-5"
+    # Demo only: the command line stands in for the user a real request was
+    # authenticated as (see docs/agents.md, "Where the user comes from").
     current_user.set(sys.argv[2] if len(sys.argv) > 2 else "dana@example.com")
     result = build_agent(model).invoke({"messages": [("user", "Write 'hello' to thing 1.")]})
     print(result["messages"][-1].content)
