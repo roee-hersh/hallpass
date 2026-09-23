@@ -68,6 +68,8 @@ func (t Template) Render(email string) string {
 // character, but it does admit the apostrophe (o'brien@example.com), so a
 // validated address still needs the escaping of whatever query syntax it
 // is placed in.
+// dots and hyphens. It admits no quote, backslash, space or control
+// character, so a validated address is safe inside a query filter.
 var emailRe = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+/=?^_{|}~.-]{1,64}@[A-Za-z0-9.-]{1,255}$`)
 
 // IsEmail reports whether s has the shape of an email address.
