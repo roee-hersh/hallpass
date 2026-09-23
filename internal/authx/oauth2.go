@@ -204,6 +204,9 @@ func ClassifyTokenError(err error) *integration.Error {
 		if te.IsCredentialError() {
 			return integration.Wrap(integration.CodeCredentialRejected, err, "the token endpoint rejected hallpass's credential (%s)", te.Code)
 		}
+		if te.Status == 429 {
+			return integration.Wrap(integration.CodeUpstreamRateLimit, err, "the token endpoint rate limited hallpass")
+		}
 		return integration.Wrap(integration.CodeUpstreamError, err, "the token endpoint failed (HTTP %d)", te.Status)
 	}
 	return httpx.Classify(err)
