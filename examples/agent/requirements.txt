@@ -1,0 +1,3 @@
+# hallpass_client.py needs nothing beyond the standard library.
+mcp>=2             # mcp_server.py
+langchain-core>=1  # langchain_tool.py
