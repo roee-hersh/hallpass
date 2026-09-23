@@ -6,6 +6,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integrations/argocd"
 	"github.com/roee-hersh/hallpass/internal/integrations/aws"
+	"github.com/roee-hersh/hallpass/internal/integrations/azure"
 	"github.com/roee-hersh/hallpass/internal/integrations/confluence"
 	"github.com/roee-hersh/hallpass/internal/integrations/fake"
 	"github.com/roee-hersh/hallpass/internal/integrations/github"
@@ -33,5 +34,6 @@ func Registry() *integration.Registry {
 	r.Register(salesforce.Integration{})
 	r.Register(microsoft365.Integration{})
 	r.Register(googleworkspace.Integration{})
+	r.Register(azure.Integration{})
 	return r
 }

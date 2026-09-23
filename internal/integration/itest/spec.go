@@ -197,10 +197,25 @@ func newTemplate(p string) pathTemplate {
 
 func (t pathTemplate) match(path string) bool {
 	segs := strings.Split(strings.Trim(path, "/"), "/")
-	if len(segs) != len(t.segments) {
+	if len(t.segments) > 0 && t.segments[0] == "{}" {
+		// A template that starts with a variable (Azure's /{scope}/...,
+		// /{roleAssignmentId}) takes a whole resource path there: the
+		// variable spans one or more segments.
+		for n := 1; n <= len(segs)-len(t.segments)+1; n++ {
+			if matchSegments(t.segments[1:], segs[n:]) {
+				return true
+			}
+		}
 		return false
 	}
-	for i, s := range t.segments {
+	return matchSegments(t.segments, segs)
+}
+
+func matchSegments(tpl, segs []string) bool {
+	if len(segs) != len(tpl) {
+		return false
+	}
+	for i, s := range tpl {
 		if s == "{}" {
 			if segs[i] == "" {
 				return false

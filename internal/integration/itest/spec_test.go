@@ -247,3 +247,28 @@ func TestServerPathWithVariables(t *testing.T) {
 		}
 	}
 }
+
+func TestLeadingVariableSpansSegments(t *testing.T) {
+	const arm = `{"swagger": "2.0", "paths": {
+	 "/{scope}/providers/Microsoft.Authorization/roleAssignments": {"get": {"parameters": [{"name": "$filter", "in": "query", "type": "string"}]}},
+	 "/{roleId}": {"get": {}},
+	 "/subscriptions/{subscriptionId}/providers/Microsoft.Authorization/roleAssignments": {"get": {}}
+	}}`
+	s, err := LoadSpec("arm", []byte(arm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []string{
+		"https://x/subscriptions/1/resourceGroups/rg/providers/Microsoft.Authorization/roleAssignments?$filter=atScope()",
+		"https://x/subscriptions/1/providers/Microsoft.Authorization/roleAssignments",
+		"https://x/providers/Microsoft.Management/managementGroups/mg/providers/Microsoft.Authorization/roleAssignments",
+		"https://x/subscriptions/1/providers/Microsoft.Authorization/roleDefinitions/abc",
+	} {
+		if err := s.Validate(req("GET", u, ""), nil); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+	if err := s.Validate(req("GET", "https://x/subscriptions/1/providers/Microsoft.Authorization/roleAssignments?bogus=1", ""), nil); err == nil {
+		t.Error("undeclared query accepted")
+	}
+}
