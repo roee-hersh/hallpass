@@ -247,3 +247,38 @@ func TestServerPathWithVariables(t *testing.T) {
 		}
 	}
 }
+
+func TestLeadingVariableSpansSegments(t *testing.T) {
+	const arm = `{"swagger": "2.0", "paths": {
+	 "/{scope}/providers/Microsoft.Authorization/roleAssignments": {"get": {"parameters": [{"name": "$filter", "in": "query", "type": "string"}]}},
+	 "/{roleId}": {"get": {}},
+	 "/subscriptions/{subscriptionId}/providers/Microsoft.Authorization/roleAssignments": {"get": {}}
+	}}`
+	s, err := LoadSpec("arm", []byte(arm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []string{
+		"https://x/subscriptions/1/resourceGroups/rg/providers/Microsoft.Authorization/roleAssignments?$filter=atScope()",
+		"https://x/subscriptions/1/providers/Microsoft.Authorization/roleAssignments",
+		"https://x/providers/Microsoft.Management/managementGroups/mg/providers/Microsoft.Authorization/roleAssignments",
+	} {
+		if err := s.Validate(req("GET", u, ""), nil); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+	if err := s.Validate(req("GET", "https://x/subscriptions/1/providers/Microsoft.Authorization/roleAssignments?bogus=1", ""), nil); err == nil {
+		t.Error("undeclared query accepted")
+	}
+	// A bare /{roleId} template matches one segment only, so a typo in a
+	// literal path is still caught.
+	if err := s.Validate(req("GET", "https://x/subscriptions/1/providers/Microsoft.Authorization/roleAssignmentz", ""), nil); err == nil {
+		t.Error("misspelled path accepted through /{roleId}")
+	}
+	if err := s.Validate(req("GET", "https://x/abc", ""), nil); err != nil {
+		t.Errorf("/{roleId}: %v", err)
+	}
+	if err := s.Validate(req("GET", "https://x//providers/Microsoft.Authorization/roleAssignments", ""), nil); err == nil {
+		t.Error("empty spanned segment accepted")
+	}
+}
