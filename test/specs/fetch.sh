@@ -28,6 +28,8 @@ fetch bitbucket-cloud   https://api.bitbucket.org/swagger.json
 fetch confluence-v1     https://developer.atlassian.com/cloud/confluence/swagger.v3.json
 fetch confluence-v2     https://developer.atlassian.com/cloud/confluence/openapi-v2.v3.json
 fetch slack             https://raw.githubusercontent.com/slackapi/slack-api-specs/master/web-api/slack_web_openapi_v2.json
+fetch datadog-v1        https://raw.githubusercontent.com/DataDog/datadog-api-client-go/master/.generator/schemas/v1/openapi.yaml
+fetch datadog-v2        https://raw.githubusercontent.com/DataDog/datadog-api-client-go/master/.generator/schemas/v2/openapi.yaml
 fetch pagerduty         https://raw.githubusercontent.com/PagerDuty/api-schema/main/reference/REST/openapiv3.json
 fetch aws-iam           https://raw.githubusercontent.com/boto/botocore/develop/botocore/data/iam/2010-05-08/service-2.json
 fetch aws-sts           https://raw.githubusercontent.com/boto/botocore/develop/botocore/data/sts/2011-06-15/service-2.json
