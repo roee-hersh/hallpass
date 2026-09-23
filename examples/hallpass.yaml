@@ -59,6 +59,16 @@ connections:
   #   user: HALLPASS
   #   role: SECURITYADMIN                                # or a custom role with MANAGE GRANTS
   #   credential: file:/secrets/snowflake-hallpass.p8    # the user's RSA private key (key-pair auth)
+  # - id: bitbucket-acme
+  #   integration: bitbucket
+  #   workspace: acme                                   # Cloud: the workspace slug
+  #   credential: env:BITBUCKET_TOKEN                   # workspace access token (read repository, project, account scopes)
+
+  # - id: bitbucket-dc
+  #   integration: bitbucket
+  #   edition: datacenter
+  #   url: https://bitbucket.acme.internal
+  #   credential: env:BITBUCKET_DC_TOKEN                # HTTP access token of an administrator
 
   # - id: jira-main
   #   integration: jira
