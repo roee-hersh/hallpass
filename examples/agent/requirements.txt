@@ -1,0 +1,8 @@
+# hallpass_client.py needs nothing beyond the standard library. The tests
+# reach into each framework's tool shapes, so the majors are pinned.
+mcp>=2,<3                  # mcp_server.py
+langchain-core>=1,<2       # langchain_tool.py
+langgraph>=1,<2            # langgraph_agent.py
+langchain>=1,<2            # langgraph_agent.py (create_agent)
+claude-agent-sdk>=0.2,<1   # claude_agent_sdk_tool.py
+strands-agents>=1,<2       # strands_tool.py

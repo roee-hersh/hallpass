@@ -1,0 +1,12 @@
+{{- if not .Values.existingConfigMap -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hallpass.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hallpass.labels" . | nindent 4 }}
+data:
+  hallpass.yaml: |
+    {{- toYaml .Values.config | nindent 4 }}
+{{- end }}
