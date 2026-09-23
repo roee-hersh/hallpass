@@ -21,6 +21,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/pagerduty"
 	"github.com/roee-hersh/hallpass/internal/integrations/salesforce"
 	"github.com/roee-hersh/hallpass/internal/integrations/slack"
+	"github.com/roee-hersh/hallpass/internal/integrations/zendesk"
 )
 
 // Registry returns a registry with every integration.
@@ -39,6 +40,7 @@ func Registry() *integration.Registry {
 	r.Register(salesforce.Integration{})
 	r.Register(microsoft365.Integration{})
 	r.Register(googleworkspace.Integration{})
+	r.Register(zendesk.Integration{})
 	r.Register(datadog.Integration{})
 	r.Register(pagerduty.Integration{})
 	r.Register(databricks.Integration{})
