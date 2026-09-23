@@ -1,0 +1,163 @@
+# Default values for the hallpass chart.
+#
+# Minimum for a try-out:
+#   helm install hallpass deploy/helm/hallpass --set apiKey.value=change-me
+#
+# For real use, put the API key and every connection credential in Secrets you
+# manage and point the chart at them (apiKey.existingSecret, extraEnv,
+# extraVolumes / extraVolumeMounts). The config file itself never holds a
+# secret: every credential in it is an `env:NAME` or `file:/path` reference.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/roee-hersh/hallpass
+  pullPolicy: IfNotPresent
+  # Defaults to the chart's appVersion.
+  tag: ""
+  # Pin by digest instead, e.g. "sha256:...". Takes precedence over tag.
+  digest: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# The API key callers send as `Authorization: Bearer ...`. It reaches the pod as
+# the HALLPASS_API_KEY environment variable, which the default config refers to
+# as `api_key: env:HALLPASS_API_KEY`. Set exactly one of the two.
+apiKey:
+  # Name of an existing Secret holding the key.
+  existingSecret: ""
+  # Key inside that Secret.
+  key: HALLPASS_API_KEY
+  # Inline value. The chart writes it into a Secret it owns. Convenient for a
+  # try-out; for anything else prefer existingSecret so the key never sits in
+  # a values file or in the release's stored values.
+  value: ""
+
+# The hallpass.yaml the pod runs with, mounted read-only from a ConfigMap at
+# /etc/hallpass/hallpass.yaml. Rendered as YAML exactly as given, so anything
+# the README documents under "Configuration" works here. `listen` is ignored:
+# the container always listens on containerPort.
+#
+# Replace the demo connection with your own. Credentials must be references:
+#   credential: env:JIRA_TOKEN            -> add the variable under extraEnv
+#   credential: file:/secrets/k8s-token   -> mount a Secret under extraVolumes
+config:
+  api_key: env:HALLPASS_API_KEY
+  connections:
+    # Smoke-test connection. Talks to nothing. Remove it once real connections work.
+    - id: demo
+      integration: fake
+      users: dana@example.com
+      admins: admin@example.com
+
+# Use a ConfigMap you manage instead of rendering `config`. It must hold the
+# file under the key `hallpass.yaml`.
+existingConfigMap: ""
+
+# Extra environment variables for the container, for `env:` references in the
+# config. Plain Kubernetes EnvVar objects.
+extraEnv: []
+  # - name: JIRA_TOKEN
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: hallpass-jira
+  #       key: token
+
+# Extra envFrom sources (whole Secrets or ConfigMaps as variables).
+extraEnvFrom: []
+  # - secretRef:
+  #     name: hallpass-credentials
+
+# Extra volumes and mounts, for `file:` references and `ca_file` bundles.
+extraVolumes: []
+  # - name: k8s-prod-eu
+  #   secret:
+  #     secretName: hallpass-k8s-prod-eu
+extraVolumeMounts: []
+  # - name: k8s-prod-eu
+  #   mountPath: /secrets/k8s-prod-eu
+  #   readOnly: true
+
+# Extra arguments appended to `hallpass serve -config ... -listen ...`,
+# for example ["-log-level", "debug"].
+extraArgs: []
+
+# Port the container listens on. The Service targets it and the probes hit
+# GET /healthz on it.
+containerPort: 8080
+
+serviceAccount:
+  create: true
+  annotations: {}
+  # Defaults to the release's full name.
+  name: ""
+  # Mount the ServiceAccount token into the pod. hallpass needs it only when a
+  # `kubernetes` connection points at the cluster it runs in (see rbac below).
+  automountToken: false
+
+# Let hallpass answer questions about the cluster it runs in. Creates a
+# ClusterRole that may only create SubjectAccessReviews and binds it to the
+# chart's ServiceAccount. Requires serviceAccount.automountToken: true (the
+# chart refuses to render otherwise) and a connection like:
+#
+#   - id: k8s-local
+#     integration: kubernetes
+#     url: https://kubernetes.default.svc
+#     ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+#     credential: file:/var/run/secrets/kubernetes.io/serviceaccount/token
+rbac:
+  subjectAccessReview:
+    create: false
+
+podAnnotations: {}
+podLabels: {}
+
+# The image runs as the distroless `nonroot` user (uid/gid 65532).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+# hallpass answers a question only when the third-party system does; there is
+# no local state, so several replicas are safe.
+resources: {}
+  # limits:
+  #   cpu: 500m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 50m
+  #   memory: 32Mi
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 10
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 5
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+topologySpreadConstraints: []

@@ -1,0 +1,31 @@
+# `helm test <release>` runs this pod: it asks the Service for GET /healthz.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "hallpass.fullname" . }}-test-healthz
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hallpass.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: healthz
+      image: curlimages/curl:8.10.1
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      args:
+        - -fsS
+        - {{ printf "http://%s:%d/healthz" (include "hallpass.fullname" .) (int .Values.service.port) | quote }}
