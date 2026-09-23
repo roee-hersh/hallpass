@@ -17,11 +17,13 @@ This directory shows the pattern in two flavours, with one shared client.
    answers `unknown` when it could not evaluate (upstream timeout, ambiguous
    user, resource it cannot see, bad request). The client's `Decision.allowed`
    is true only for `allow`.
-2. **No answer is a refusal too.** A connection error, a timeout, a non-JSON
-   body or an `allow` that arrives with a non-200 status all become an
-   `unknown` decision with the code `client_error`. The client never raises on
-   transport problems, so a guarded action cannot accidentally run through an
-   exception handler.
+2. **No answer is a refusal too.** A connection error, a timeout, a malformed
+   or non-JSON response, a redirect, or an `allow` that arrives with a non-200
+   status all become an `unknown` decision with the code `client_error`. The
+   client never raises on transport problems, so a guarded action cannot
+   accidentally run through an exception handler. Redirects are not followed
+   because following one would send the API key to whatever host the
+   `Location` header names.
 3. **The model does not choose the user.** The person the agent acts for is
    bound when the tools are built (`AGENT_USER` for the MCP server, the
    argument of `make_tools` for LangChain). A tool argument is text the model
@@ -113,7 +115,11 @@ answers `refused: ...` for anyone but an admin. With `AGENT_USER` set to
 `admin@example.com` the write goes through.
 
 `AGENT_GROUPS` (comma-separated) passes group memberships for systems that
-grant by group, such as Kubernetes.
+grant by group, such as Kubernetes. Both tools send the same user and groups,
+so `check_permission` and the guarded action always agree.
+
+The tests exercise the MCP and LangChain paths when their packages are
+installed and skip them otherwise; CI installs both.
 
 ## Adapting to a real system
 

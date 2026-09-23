@@ -14,6 +14,7 @@ import socket
 import sys
 import threading
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -32,6 +33,9 @@ ANSWERS = {
     "weird": (200, {"decision": "maybe", "reason": "allowed: ?"}),
     "proxyallow": (502, {"decision": "allow", "reason": "allowed: from a broken proxy"}),
     "boom": (500, b"internal error"),
+    "redirect": (302, {"decision": "allow", "reason": "allowed: from the redirect itself"}),
+    "badline": None,  # the fake writes a non-HTTP response
+    "short": None,  # the fake announces more bytes than it sends
 }
 
 
@@ -44,16 +48,52 @@ class FakeHallpass(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         FakeHallpass.seen.append({"headers": dict(self.headers), "body": body})
+        thing = body["resource"].split(":", 1)[1]
+        if thing == "badline":
+            self.wfile.write(b"garbage\r\n\r\n")
+            self.close_connection = True
+            return
+        if thing == "short":
+            self.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Length: 999\r\n\r\n{\"decision\":\"allow\"}")
+            self.close_connection = True
+            return
         if self.headers.get("Authorization") != "Bearer " + API_KEY:
             status, ans = 401, {"decision": "unknown", "reason": "unauthorized: missing or wrong API key"}
         else:
-            status, ans = ANSWERS[body["resource"].split(":", 1)[1]]
+            status, ans = ANSWERS[thing]
         raw = ans if isinstance(ans, bytes) else json.dumps(ans).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
+        if status == 302:
+            # An allow at the other end of a redirect must not count.
+            self.send_header("Location", "http://127.0.0.1:%d/check" % SINK.server_address[1])
         self.end_headers()
         self.wfile.write(raw)
+
+
+class Sink(http.server.BaseHTTPRequestHandler):
+    """Where the redirect points. Answers allow to anything and records the request."""
+
+    seen: list[dict] = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        self.do_POST()
+
+    def do_POST(self):
+        Sink.seen.append(dict(self.headers))
+        raw = b'{"decision":"allow","reason":"allowed: by the sink"}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+
+SINK = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Sink)
+threading.Thread(target=SINK.serve_forever, daemon=True).start()
 
 
 class ClientTest(unittest.TestCase):
@@ -102,11 +142,22 @@ class ClientTest(unittest.TestCase):
         self.assertFalse(d.allowed)
 
     def test_unusable_responses_are_unknown(self):
-        for thing in ("garbage", "weird", "proxyallow", "boom"):
+        for thing in ("garbage", "weird", "proxyallow", "boom", "badline", "short"):
             d = self.check(thing)
             self.assertEqual(d.decision, "unknown", thing)
             self.assertEqual(d.code, "client_error", thing)
             self.assertFalse(d.allowed, thing)
+
+    def test_redirect_is_not_followed(self):
+        Sink.seen.clear()
+        d = self.check("redirect")
+        self.assertEqual((d.decision, d.code, d.status), ("unknown", "client_error", 302))
+        self.assertFalse(d.allowed)
+        self.assertEqual(Sink.seen, [], "the API key must not be sent to the redirect target")
+
+    def test_bad_url_is_unknown(self):
+        d = Hallpass("localhost:1", API_KEY).check("u", "demo", "thing.read", "thing:1")
+        self.assertEqual((d.decision, d.code), ("unknown", "client_error"))
 
     def test_unreachable_is_unknown(self):
         with socket.socket() as s:  # a port nobody listens on
@@ -141,19 +192,20 @@ class ClientTest(unittest.TestCase):
     def test_guarded_runs_only_on_allow(self):
         ran = []
 
-        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}")
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", groups=["platform-team"])
         def write(*, user: str, thing_id: str) -> str:
             ran.append(thing_id)
             return "ok"
 
         self.assertEqual(write(user="u", thing_id="allowed"), "ok")
-        for thing in ("denied", "timeout", "garbage"):
+        for thing in ("denied", "timeout", "garbage", "badline"):
             with self.assertRaises(PermissionDenied):
                 write(user="u", thing_id=thing)
         self.assertEqual(ran, ["allowed"])
         with self.assertRaises(TypeError):
             write("u", "allowed")  # positional arguments could bypass the resource template
-        self.assertEqual(FakeHallpass.seen[0]["body"]["resource"], "thing:allowed")
+        first = FakeHallpass.seen[0]["body"]
+        self.assertEqual((first["resource"], first["groups"]), ("thing:allowed", ["platform-team"]))
 
     def test_missing_api_key(self):
         env = dict(os.environ)
@@ -173,21 +225,45 @@ except ImportError:
     HAVE_MCP = False
 
 
-@unittest.skipUnless(HAVE_MCP, "mcp package not installed")
+try:
+    import langchain_core  # noqa: F401
+    HAVE_LANGCHAIN = True
+except ImportError:
+    HAVE_LANGCHAIN = False
+
+# Set to 1 where the optional dependencies are expected (CI), so a missing
+# package fails instead of silently skipping.
+REQUIRE_DEPS = os.environ.get("HALLPASS_EXAMPLE_REQUIRE_DEPS") == "1"
+
+
+def optional(have: bool, what: str):
+    if have:
+        return lambda cls: cls
+    if REQUIRE_DEPS:
+        raise ImportError(what + " not installed but HALLPASS_EXAMPLE_REQUIRE_DEPS=1")
+    return unittest.skip(what + " not installed")
+
+
+@optional(HAVE_MCP, "mcp package")
 class MCPServerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeHallpass)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
-        os.environ["HALLPASS_URL"] = "http://127.0.0.1:%d" % cls.server.server_address[1]
-        os.environ["HALLPASS_API_KEY"] = API_KEY
-        os.environ["AGENT_USER"] = "dana@example.com"
+        cls.env = mock.patch.dict(os.environ, {
+            "HALLPASS_URL": "http://127.0.0.1:%d" % cls.server.server_address[1],
+            "HALLPASS_API_KEY": API_KEY,
+            "AGENT_USER": "dana@example.com",
+            "AGENT_GROUPS": "platform-team, sre",
+        })
+        cls.env.start()
         import mcp_server
 
         cls.mod = mcp_server
 
     @classmethod
     def tearDownClass(cls):
+        cls.env.stop()
         cls.server.shutdown()
 
     def call(self, name: str, **args):
@@ -208,14 +284,44 @@ class MCPServerTest(unittest.TestCase):
         self.assertFalse(res.is_error)
         self.assertEqual(res.structured_content["decision"], "unknown")
         self.assertFalse(res.structured_content["allowed"])
-        self.assertEqual(FakeHallpass.seen[-1]["body"]["user"], "dana@example.com")
+        body = FakeHallpass.seen[-1]["body"]
+        self.assertEqual((body["user"], body["groups"]), ("dana@example.com", ["platform-team", "sre"]))
 
     def test_write_thing(self):
         res = self.call("write_thing", thing_id="allowed", content="hi")
         self.assertIn("wrote 2 bytes", res.content[0].text)
-        for thing in ("denied", "timeout"):
+        self.assertEqual(FakeHallpass.seen[-1]["body"]["groups"], ["platform-team", "sre"])
+        for thing in ("denied", "timeout", "badline"):
             res = self.call("write_thing", thing_id=thing, content="hi")
+            self.assertFalse(res.is_error)
             self.assertTrue(res.content[0].text.startswith("refused:"), res.content[0].text)
+
+
+@optional(HAVE_LANGCHAIN, "langchain-core package")
+class LangChainToolTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeHallpass)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        from langchain_tool import make_tools
+
+        hp = Hallpass("http://127.0.0.1:%d" % cls.server.server_address[1], API_KEY, timeout=2)
+        cls.check, cls.write = make_tools("dana@example.com", groups=["platform-team"], hp=hp)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_tools(self):
+        self.assertEqual({self.check.name, self.write.name}, {"check_permission", "write_thing"})
+        out = self.check.invoke({"connection": "demo", "action": "thing.write", "resource": "thing:timeout"})
+        self.assertTrue(out.startswith("unknown: upstream_timeout"), out)
+        self.assertEqual(FakeHallpass.seen[-1]["body"]["groups"], ["platform-team"])
+        self.assertIn("wrote 2 bytes", self.write.invoke({"thing_id": "allowed", "content": "hi"}))
+        self.assertEqual(FakeHallpass.seen[-1]["body"]["groups"], ["platform-team"])
+        for thing in ("denied", "timeout"):
+            out = self.write.invoke({"thing_id": thing, "content": "hi"})
+            self.assertTrue(out.startswith("refused:"), out)
 
 
 if __name__ == "__main__":

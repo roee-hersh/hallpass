@@ -30,7 +30,7 @@ def make_tools(user: str, groups: list[str] | None = None, hp: Hallpass | None =
         d = hp.check(user, connection, action, resource, groups)
         return f"{d.decision}: {d.reason}"
 
-    @guarded(hp, "demo", "thing.write", "thing:{thing_id}")
+    @guarded(hp, "demo", "thing.write", "thing:{thing_id}", groups)
     def _write_thing(*, user: str, thing_id: str, content: str) -> str:
         # The real action goes here, run with the agent's own credential.
         return f"wrote {len(content)} bytes to thing:{thing_id} as {user}"

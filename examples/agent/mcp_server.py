@@ -26,12 +26,14 @@ from typing import TypedDict
 
 from mcp.server.mcpserver import MCPServer
 
-from hallpass_client import Hallpass, PermissionDenied
+from hallpass_client import Hallpass, PermissionDenied, guarded
 
 hp = Hallpass()
-AGENT_USER = os.environ["AGENT_USER"]
+AGENT_USER = os.environ.get("AGENT_USER", "")
+if not AGENT_USER:
+    raise ValueError("AGENT_USER missing: set it to the email of the user this server acts for")
 # Optional group memberships, for systems that grant by group (e.g. Kubernetes).
-AGENT_GROUPS = [g for g in os.environ.get("AGENT_GROUPS", "").split(",") if g]
+AGENT_GROUPS = [g.strip() for g in os.environ.get("AGENT_GROUPS", "").split(",") if g.strip()]
 
 class PermissionDecision(TypedDict):
     decision: str  # allow | deny | unknown
@@ -65,20 +67,22 @@ def check_permission(connection: str, action: str, resource: str) -> PermissionD
     return {"decision": d.decision, "reason": d.reason, "allowed": d.allowed}
 
 
+@guarded(hp, "demo", "thing.write", "thing:{thing_id}", AGENT_GROUPS)
+def _write_thing(*, user: str, thing_id: str, content: str) -> str:
+    # The action itself, with the agent's own credential. Replace with a real
+    # call (delete a Jira issue, scale a deployment, ...) and keep the shape:
+    # the decorator checks first, the body runs only on allow.
+    return f"wrote {len(content)} bytes to thing:{thing_id} as {user}"
+
+
 @mcp.tool()
 def write_thing(thing_id: str, content: str) -> str:
-    """Write content to a thing in the demo system. Requires thing.write.
-
-    Replace the body with a real action (delete a Jira issue, scale a
-    deployment, ...) and keep the shape: check first, act only on allow.
-    """
+    """Write content to a thing in the demo system. Requires thing.write."""
     try:
-        hp.require(AGENT_USER, "demo", "thing.write", f"thing:{thing_id}", AGENT_GROUPS)
+        return _write_thing(user=AGENT_USER, thing_id=thing_id, content=content)
     except PermissionDenied as e:
         # Tell the model why, so it can tell the user. Do not act.
         return f"refused: {e}"
-    # --- the action itself, with the agent's own credential ---
-    return f"wrote {len(content)} bytes to thing:{thing_id} as {AGENT_USER}"
 
 
 if __name__ == "__main__":
