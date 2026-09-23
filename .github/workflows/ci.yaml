@@ -139,6 +139,7 @@ jobs:
       - run: go test -run '^$' -fuzz='^FuzzGlob$' -fuzztime=60s ./internal/integrations/argocd/
       - run: go test -run '^$' -fuzz='^FuzzParseTarget$' -fuzztime=60s ./internal/integrations/gitlab/
       - run: go test -run '^$' -fuzz='^FuzzParseTarget$' -fuzztime=60s ./internal/integrations/github/
+      - run: go test -run '^$' -fuzz='^FuzzParseTarget$' -fuzztime=60s ./internal/integrations/bitbucket/
       - run: go test -run '^$' -fuzz='^FuzzParseResource$' -fuzztime=30s ./internal/integrations/jira/
       - run: go test -run '^$' -fuzz='^FuzzParseResource$' -fuzztime=30s ./internal/integrations/confluence/
       - run: go test -run '^$' -fuzz='^FuzzValidateResource$' -fuzztime=30s ./internal/integrations/slack/

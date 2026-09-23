@@ -6,6 +6,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integrations/argocd"
 	"github.com/roee-hersh/hallpass/internal/integrations/aws"
+	"github.com/roee-hersh/hallpass/internal/integrations/bitbucket"
 	"github.com/roee-hersh/hallpass/internal/integrations/confluence"
 	"github.com/roee-hersh/hallpass/internal/integrations/databricks"
 	"github.com/roee-hersh/hallpass/internal/integrations/datadog"
@@ -30,6 +31,7 @@ func Registry() *integration.Registry {
 	r.Register(aws.Integration{})
 	r.Register(github.Integration{})
 	r.Register(gitlab.Integration{})
+	r.Register(bitbucket.Integration{})
 	r.Register(jira.Integration{})
 	r.Register(confluence.Integration{})
 	r.Register(slack.Integration{})

@@ -58,6 +58,16 @@ connections:
   #   api_key: env:DATADOG_API_KEY
   #   credential: env:DATADOG_APP_KEY                   # application key scoped to user_access_read, teams_read, *_read
   #   # url: https://api.datadoghq.eu                   # EU site
+  # - id: bitbucket-acme
+  #   integration: bitbucket
+  #   workspace: acme                                   # Cloud: the workspace slug
+  #   credential: env:BITBUCKET_TOKEN                   # workspace access token (read repository, project, account scopes)
+
+  # - id: bitbucket-dc
+  #   integration: bitbucket
+  #   edition: datacenter
+  #   url: https://bitbucket.acme.internal
+  #   credential: env:BITBUCKET_DC_TOKEN                # HTTP access token of an administrator
 
   # - id: jira-main
   #   integration: jira
