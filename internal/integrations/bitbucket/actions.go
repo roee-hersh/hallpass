@@ -241,6 +241,14 @@ func refMatch(pattern, branch string, dataCenter bool) (matched, supported bool)
 		return false, false
 	}
 	segment := glob(pattern, branch, false)
+	// UNVERIFIED: whether a pattern without "/" also matches a branch of
+	// that name inside a folder (main against release/main). When the two
+	// readings differ, the match is unsupported.
+	if !strings.Contains(pattern, "/") && strings.Contains(branch, "/") {
+		if anyDir := glob("**/"+pattern, branch, false); anyDir != segment {
+			return false, false
+		}
+	}
 	if dataCenter {
 		return segment, true
 	}

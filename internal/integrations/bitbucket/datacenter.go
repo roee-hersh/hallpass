@@ -379,6 +379,7 @@ func dcDecide(g grantSet, need level, id integration.Identity, t target) integra
 
 // dcRestriction is one ref restriction of the branch-permissions plugin.
 type dcRestriction struct {
+	ID      int64  `json:"id"`
 	Type    string `json:"type"`
 	Matcher struct {
 		ID        string `json:"id"`
@@ -401,16 +402,20 @@ func (c *Connection) dcBranch(ctx context.Context, t target, id integration.Iden
 	}
 	var matching []dcRestriction
 	var unsupported []string
-	path := "/rest/branch-permissions/2.0/projects/" + httpx.PathEscape(t.project) + "/repos/" + httpx.PathEscape(t.repo) + "/restrictions"
-	err := c.dcList(ctx, path, nil, func(values []json.RawMessage) error {
+	seen := map[int64]bool{}
+	// Restrictions set on the project apply to every repository in it, so
+	// both levels are read; a restriction listed twice counts once.
+	project := "/rest/branch-permissions/2.0/projects/" + httpx.PathEscape(t.project)
+	collect := func(values []json.RawMessage) error {
 		for _, raw := range values {
 			var r dcRestriction
 			if err := json.Unmarshal(raw, &r); err != nil {
 				return integration.Wrap(integration.CodeUpstreamError, err, "Bitbucket returned an unreadable restriction")
 			}
-			if !blocking[r.Type] {
+			if !blocking[r.Type] || (r.ID != 0 && seen[r.ID]) {
 				continue
 			}
+			seen[r.ID] = true
 			switch r.Matcher.Type.ID {
 			case "ANY_REF":
 				matching = append(matching, r)
@@ -432,7 +437,11 @@ func (c *Connection) dcBranch(ctx context.Context, t target, id integration.Iden
 			}
 		}
 		return nil
-	})
+	}
+	err := c.dcList(ctx, project+"/repos/"+httpx.PathEscape(t.repo)+"/restrictions", nil, collect)
+	if err == nil {
+		err = c.dcList(ctx, project+"/restrictions", nil, collect)
+	}
 	if err != nil {
 		if httpx.Status(err) == 404 {
 			return integration.UnknownDecision(integration.CodeResourceNotVisible, "the branch permissions of %s are not visible to hallpass", t), nil

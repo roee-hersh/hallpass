@@ -71,6 +71,12 @@ func newDCFake(t *testing.T) *dcFake {
 				{"id": 2, "type": "pull-request-only", "matcher": map[string]any{"id": "release/*", "displayId": "release/*", "type": map[string]any{"id": "PATTERN", "name": "Pattern"}}, "users": []map[string]any{}, "groups": []string{"developers"}, "accessKeys": []any{}},
 				{"id": 3, "type": "no-deletes", "matcher": map[string]any{"id": "**", "displayId": "**", "type": map[string]any{"id": "PATTERN", "name": "Pattern"}}, "users": []map[string]any{}, "groups": []string{}},
 			},
+			// Project-level: inherited by every repository of APP.
+			"APP": {
+				{"id": 20, "type": "read-only", "matcher": map[string]any{"id": "refs/heads/develop", "displayId": "develop", "type": map[string]any{"id": "BRANCH", "name": "Branch"}}, "users": []map[string]any{{"name": "root"}}, "groups": []string{}},
+				// The same restriction Bitbucket may also list on the repository.
+				{"id": 1, "type": "read-only", "matcher": map[string]any{"id": "refs/heads/main", "displayId": "main", "type": map[string]any{"id": "BRANCH", "name": "Branch"}}, "users": []map[string]any{{"name": "root"}}, "groups": []string{}},
+			},
 		},
 	}
 }
@@ -212,16 +218,23 @@ func (f *dcFake) api(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(p, "/rest/branch-permissions/2.0/projects/"):
 		rest := strings.TrimPrefix(p, "/rest/branch-permissions/2.0/projects/")
 		parts := strings.Split(rest, "/")
-		if len(parts) != 4 || parts[1] != "repos" || parts[3] != "restrictions" {
+		switch {
+		case len(parts) == 2 && parts[1] == "restrictions":
+			if _, ok := f.projects[parts[0]]; !ok {
+				dcErr(w, 404, "no project")
+				return
+			}
+			f.page(w, r, f.restrictions[parts[0]])
+		case len(parts) == 4 && parts[1] == "repos" && parts[3] == "restrictions":
+			key := parts[0] + "/" + parts[2]
+			if _, ok := f.repos[key]; !ok {
+				dcErr(w, 404, "no repo")
+				return
+			}
+			f.page(w, r, f.restrictions[key])
+		default:
 			dcErr(w, 404, "no route")
-			return
 		}
-		key := parts[0] + "/" + parts[2]
-		if _, ok := f.repos[key]; !ok {
-			dcErr(w, 404, "no repo")
-			return
-		}
-		f.page(w, r, f.restrictions[key])
 	default:
 		f.t.Errorf("dc fake: no route for %s %s", r.Method, p)
 		dcErr(w, 404, "no route")
@@ -321,6 +334,18 @@ func TestDCBranches(t *testing.T) {
 	expect(t, check(t, c, root, "pr.merge", "repo:APP/api@release/2.0"), integration.CodeAllowed, "")
 	// no-deletes never stops a push.
 	expect(t, check(t, c, dana, "repo.push", "repo:APP/api@feature/x"), integration.CodeAllowed, "")
+	// A project-level restriction applies to the repository too.
+	expect(t, check(t, c, dana, "repo.push", "repo:APP/api@develop"), integration.CodeDenied, "read-only restriction on develop")
+	expect(t, check(t, c, root, "repo.push", "repo:APP/api@develop"), integration.CodeAllowed, "")
+	// A slash-less pattern against a nested branch is ambiguous.
+	f.mu.Lock()
+	f.restrictions["APP"] = append(f.restrictions["APP"], map[string]any{"id": 21, "type": "read-only", "matcher": map[string]any{"id": "hotfix", "displayId": "hotfix", "type": map[string]any{"id": "PATTERN", "name": "Pattern"}}, "users": []map[string]any{}, "groups": []string{}})
+	f.mu.Unlock()
+	expect(t, check(t, c, dana, "repo.push", "repo:APP/api@release/hotfix"), integration.CodeUnsupported, `pattern "hotfix"`)
+	expect(t, check(t, c, dana, "repo.push", "repo:APP/api@hotfix"), integration.CodeDenied, "")
+	f.mu.Lock()
+	f.restrictions["APP"] = f.restrictions["APP"][:2]
+	f.mu.Unlock()
 	// Without the user's groups a group exemption is unresolvable.
 	f.mu.Lock()
 	f.groupsDenied = true

@@ -561,12 +561,15 @@ func TestGlob(t *testing.T) {
 	}{
 		{"main", "main", true, true, true, true},
 		{"main", "main2", false, false, true, true},
+		// A slash-less pattern against a nested branch: ambiguous on both.
+		{"main", "release/main", false, false, false, false},
+		{"**/main", "release/main", true, true, true, true},
 		{"release/*", "release/1.2", true, true, true, true},
 		// "*" across "/": Data Center says no; Cloud is undocumented, so unknown.
 		{"release/*", "release/a/b", false, false, true, false},
 		{"release/*", "releases", false, false, true, true},
 		{"*", "main", true, true, true, true},
-		{"*", "a/b", false, false, true, false},
+		{"*", "a/b", false, false, false, false},
 		{"**", "anything/at/all", true, true, true, true},
 		{"**/hotfix", "a/b/hotfix", true, true, true, true},
 		{"**/hotfix", "hotfix", true, true, true, true},

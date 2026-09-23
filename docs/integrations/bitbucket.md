@@ -129,16 +129,18 @@ reaches a URL.
   (`.../permissions/PROJECT_READ|WRITE|ADMIN/all`), `public` on the repository or project (read),
   and the global permissions (`/rest/api/latest/admin/permissions/users|groups`, where `ADMIN` and
   `SYS_ADMIN` carry admin everywhere). Project levels carry to repositories.
-- Branch: `GET /rest/branch-permissions/2.0/projects/{key}/repos/{slug}/restrictions`. `read-only`
+- Branch: `GET /rest/branch-permissions/2.0/projects/{key}/repos/{slug}/restrictions` and the
+  project's own `.../projects/{key}/restrictions`, which every repository inherits. `read-only`
   stops pushes and merges, `pull-request-only` stops direct pushes; `ANY_REF` matchers match every
   branch, `BRANCH` matchers compare the name, `PATTERN` matchers are globs; the listed `users` and
   `groups` are exempt. Branching-model matchers are `unknown`.
 
 Globs are Ant-style: `*` and `?` stay within one path segment, `**` crosses segments, and
 `refs/heads/` is stripped from a pattern. Bitbucket Cloud does not document whether its `*` crosses
-`/`, so on Cloud a pattern whose two readings disagree for the branch asked about (`release/*`
-against `release/1/hotfix`) answers `unknown` rather than guessing. Character classes and
-alternations are `unknown` on both editions.
+`/`, and neither edition documents whether a pattern without `/` matches a branch of that name inside
+a folder (`main` against `release/main`), so a pattern whose readings disagree for the branch asked
+about answers `unknown` rather than guessing. Character classes and alternations are `unknown` on
+both editions.
 
 ## Decisions
 
@@ -179,8 +181,9 @@ Marked `// UNVERIFIED:` in the code:
 - Cloud: the filter grammar `q=user.account_id="..."` on the repository permissions list; the spec
   says the list "may be filtered by user" and documents only `permission>"read"`. A 400 falls back to
   reading the list whole, so a wrong grammar costs calls, not correctness.
-- Cloud: whether `*` in a branch restriction pattern matches across `/`. hallpass answers `unknown`
-  whenever the two readings differ for the branch asked about.
+- Cloud: whether `*` in a branch restriction pattern matches across `/`; both editions: whether a
+  pattern without `/` matches inside folders. hallpass answers `unknown` whenever the readings differ
+  for the branch asked about.
 - Data Center: repository creation in a project is taken to need `PROJECT_ADMIN`. If Bitbucket lets
   `PROJECT_WRITE` create repositories, users with write are denied `repo.create` although they could.
 
