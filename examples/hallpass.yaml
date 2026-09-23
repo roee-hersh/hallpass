@@ -53,6 +53,11 @@ connections:
   #   credential: file:/secrets/github-app.pem        # GitHub App private key
   #   identity_mode: saml
 
+  # - id: pagerduty-acme
+  #   integration: pagerduty
+  #   credential: env:PAGERDUTY_API_KEY                 # read-only General Access REST API key
+  #   # url: https://api.eu.pagerduty.com               # EU service region
+
   # - id: jira-main
   #   integration: jira
   #   url: https://acme.atlassian.net
