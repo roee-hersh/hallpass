@@ -8,19 +8,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-CLUSTER="${CLUSTER:-hallpass-e2e}"
-
-cleanup() {
-  if [ -z "${KEEP:-}" ]; then
-    kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
-  fi
-}
-trap cleanup EXIT
-
-if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
-  kind create cluster --name "$CLUSTER" --wait 120s
-fi
-kubectl config use-context "kind-$CLUSTER" >/dev/null
+. test/kind/cluster.sh
 
 kubectl apply -f test/kind/hallpass-rbac.yaml
 kubectl apply -f test/kind/fixtures.yaml

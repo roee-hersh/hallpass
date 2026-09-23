@@ -1,21 +1,23 @@
-"""LangChain tools that check with hallpass before they act.
+"""Strands Agents tools that check with hallpass before they act.
 
 The tools are defined once. The application sets ``current_user`` (and
 optionally ``current_groups``) for the session before it runs the agent, so
 the acting user is never chosen by the model:
 
     current_user.set(user.email)  # in the request handler, from your auth
-    agent = create_agent(llm, tools)          # any LangChain agent constructor
+    agent = Agent(tools=tools)
+    agent("Write 'hello' to thing 1.")
 
-Needs ``langchain-core`` (pip install -r requirements.txt). The tools do not
-depend on any particular LLM provider.
+See docs/agents.md, "Where the user comes from", for a web app example.
+
+Needs ``strands-agents`` (pip install -r requirements.txt).
 """
 
 from __future__ import annotations
 
 from contextvars import ContextVar
 
-from langchain_core.tools import tool
+from strands import tool
 
 from hallpass_client import Hallpass, current, guarded
 
@@ -27,23 +29,31 @@ current_groups: ContextVar[tuple[str, ...]] = ContextVar("current_groups", defau
 @tool
 def check_permission(connection: str, action: str, resource: str) -> str:
     """Ask whether the current user may perform an action in a system.
-    connection is a hallpass connection id (e.g. jira-main), action one
-    of its actions (e.g. DELETE_ISSUES), resource the target (e.g.
-    issue:PAY-123). Only 'allow' permits the action; 'unknown' is a deny."""
+
+    Only 'allow' permits the action; 'unknown' is a deny.
+
+    Args:
+        connection: a hallpass connection id, e.g. jira-main
+        action: one of that connection's actions, e.g. DELETE_ISSUES
+        resource: the target, e.g. issue:PAY-123
+    """
     d = hp.check(current(current_user), connection, action, resource, current(current_groups, "groups"))
     return f"{d.decision}: {d.reason}"
 
 
-# LangChain ends the run on an exception it does not know (handle_tool_error
-# covers only its own ToolException), so the refusal is returned as the
-# observation instead, and the model learns why. LangGraph's ToolNode runs
-# the same tool, so it gets the same behaviour.
+# Strands reports a raised PermissionDenied to the model as a tool error
+# carrying its text, so nothing more is needed on a refusal.
 @tool
-@guarded(hp, "demo", "thing.write", "thing:{thing_id}", user=current_user, groups=current_groups,
-         deny=lambda e: f"refused: {e}")
+@guarded(hp, "demo", "thing.write", "thing:{thing_id}", user=current_user, groups=current_groups)
 def write_thing(thing_id: str, content: str) -> str:
-    """Write content to a thing in the demo system. Refused unless the
-    current user holds thing.write on it."""
+    """Write content to a thing in the demo system.
+
+    Refused unless the current user holds thing.write on it.
+
+    Args:
+        thing_id: the thing to write to
+        content: what to write
+    """
     # The real action goes here, run with the agent's own credential.
     return f"wrote {len(content)} bytes to thing:{thing_id} as {current(current_user)}"
 
@@ -52,11 +62,12 @@ tools = [check_permission, write_thing]
 
 
 if __name__ == "__main__":
-    # Smoke test without an LLM: call the tools directly.
+    # Run one prompt through a Strands agent with its default model provider.
     import sys
+
+    from strands import Agent
 
     # Demo only: the command line stands in for the user a real request was
     # authenticated as (see docs/agents.md, "Where the user comes from").
     current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
-    print(check_permission.invoke({"connection": "demo", "action": "thing.write", "resource": "thing:1"}))
-    print(write_thing.invoke({"thing_id": "1", "content": "hello"}))
+    Agent(tools=tools)("Write 'hello' to thing 1.")
