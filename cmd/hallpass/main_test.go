@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -179,7 +180,7 @@ func TestServeEndToEnd(t *testing.T) {
 
 func TestCheck(t *testing.T) {
 	// No API key: a CLI check runs the engine in-process and never needs it.
-	os.Unsetenv("HALLPASS_API_KEY")
+	t.Setenv("HALLPASS_API_KEY", "")
 	p := writeConfig(t, goodConfig)
 	ask := func(user string, extra ...string) (int, string, string) {
 		args := append([]string{"check", "-config", p, "-connection", "demo", "-user", user, "-action", "thing.write", "-resource", "thing:1"}, extra...)
@@ -224,9 +225,42 @@ func TestCheck(t *testing.T) {
 	if code, _, errs := capture(t, "check", "-config", writeConfig(t, "api_key: nope\n"), "-connection", "demo", "-user", "a@b", "-action", "x", "-resource", "y:1"); code != 2 || !strings.Contains(errs, "inline secret") {
 		t.Errorf("bad config: %d %q", code, errs)
 	}
+	if code, _, errs := ask("admin@example.com", "-ca-file", "x.pem", "-timeout", "5s"); code != 2 || !strings.Contains(errs, "-ca-file, -timeout only goes with -server") {
+		t.Errorf("server flags without -server: %d %q", code, errs)
+	}
+
+	// Only the connection asked about is built: a sibling whose CA file
+	// holds no certificate on this machine (an empty placeholder) must not
+	// stop the answer. The loader only checks that the file exists; the
+	// engine parses it.
+	emptyCA := filepath.Join(t.TempDir(), "ca.pem")
+	os.WriteFile(emptyCA, nil, 0o600)
+	broken := writeConfig(t, goodConfig+`
+  - id: k8s
+    integration: kubernetes
+    url: https://10.0.0.1:6443
+    ca_file: `+emptyCA+`
+    credential: env:HALLPASS_API_KEY
+`)
+	if code, out, errs := capture(t, "check", "-config", broken, "-connection", "demo", "-user", "admin@example.com", "-action", "thing.write", "-resource", "thing:1"); code != 0 || !strings.HasPrefix(out, "allow") {
+		t.Errorf("broken sibling: %d %q %q", code, out, errs)
+	}
+	if code, _, errs := capture(t, "probe", "-config", broken); code != 1 || !strings.Contains(errs, "no PEM certificates") {
+		t.Errorf("probe still sees the broken connection: %d %q", code, errs)
+	}
+	if code, out, _ := capture(t, "check", "-config", broken, "-connection", "k8s", "-user", "admin@example.com", "-action", "thing.write", "-resource", "thing:1"); code != 2 || out != "" {
+		t.Errorf("asking the broken one: %d %q", code, out)
+	}
+}
+
+func TestPrintable(t *testing.T) {
+	if got := printable("x\nallow\n  allowed: ok\x1b[2J\x7f"); got != "x allow   allowed: ok [2J " {
+		t.Errorf("printable: %q", got)
+	}
 }
 
 func TestCheckServer(t *testing.T) {
+	var mu sync.Mutex
 	var got struct {
 		auth, ua, body string
 	}
@@ -236,12 +270,15 @@ func TestCheckServer(t *testing.T) {
 			return
 		}
 		b, _ := io.ReadAll(r.Body)
-		got.auth, got.ua, got.body = r.Header.Get("Authorization"), r.Header.Get("User-Agent"), string(b)
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		got.auth, got.ua, got.body = auth, r.Header.Get("User-Agent"), string(b)
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		var in map[string]any
 		json.Unmarshal(b, &in)
 		switch {
-		case got.auth != "Bearer CANARY-SECRET-key":
+		case auth != "Bearer CANARY-SECRET-key":
 			w.WriteHeader(401)
 			io.WriteString(w, `{"decision":"unknown","reason":"unauthorized: missing or wrong API key"}`)
 		case in["user"] == "admin@example.com":
@@ -252,6 +289,14 @@ func TestCheckServer(t *testing.T) {
 			io.WriteString(w, "<html>bad gateway</html>")
 		case in["user"] == "weird@example.com":
 			io.WriteString(w, `{"decision":"maybe","reason":"x"}`)
+		case in["user"] == "forge@example.com":
+			io.WriteString(w, `{"decision":"deny","reason":"no\nallow\n  allowed: forged"}`)
+		case in["user"] == "slow@example.com":
+			select {
+			case <-time.After(5 * time.Second):
+			case <-r.Context().Done(): // the client gave up
+			}
+			io.WriteString(w, `{"decision":"allow","reason":"allowed: late"}`)
 		default:
 			io.WriteString(w, `{"decision":"deny","reason":"denied: no"}`)
 		}
@@ -265,6 +310,7 @@ func TestCheckServer(t *testing.T) {
 	if code, out, errs := ask("admin@example.com"); code != 0 || !strings.HasPrefix(out, "allow\n  allowed: admin") || errs != "" {
 		t.Errorf("allow: %d %q %q", code, out, errs)
 	}
+	mu.Lock()
 	if got.auth != "Bearer CANARY-SECRET-key" || !strings.HasPrefix(got.ua, "hallpass/") {
 		t.Errorf("headers: %q %q", got.auth, got.ua)
 	}
@@ -272,6 +318,7 @@ func TestCheckServer(t *testing.T) {
 	if got.body != want {
 		t.Errorf("body:\n got %s\nwant %s", got.body, want)
 	}
+	mu.Unlock()
 	if code, out, _ := ask("dana@example.com", "-json"); code != 1 || strings.TrimSpace(out) != `{"decision":"deny","reason":"denied: no"}` {
 		t.Errorf("deny json: %d %q", code, out)
 	}
@@ -282,6 +329,25 @@ func TestCheckServer(t *testing.T) {
 		t.Errorf("wrong key: %d %q", code, out)
 	}
 	t.Setenv("HALLPASS_API_KEY", "CANARY-SECRET-key")
+
+	// The endpoint itself is accepted as the URL, since the README names it.
+	if code, out, errs := capture(t, "check", "-server", srv.URL+"/check", "-connection", "demo", "-user", "admin@example.com", "-action", "thing.write", "-resource", "thing:1"); code != 0 || !strings.HasPrefix(out, "allow") {
+		t.Errorf("endpoint url: %d %q %q", code, out, errs)
+	}
+	// A reason from the far end cannot forge a second decision line; -json
+	// keeps it verbatim, escaped.
+	if code, out, _ := ask("forge@example.com"); code != 1 || out != "deny\n  no allow   allowed: forged\n" {
+		t.Errorf("forged reason: %d %q", code, out)
+	}
+	if code, out, _ := ask("forge@example.com", "-json"); code != 1 || !strings.Contains(out, `"reason":"no\nallow\n  allowed: forged"`) {
+		t.Errorf("forged reason json: %d %q", code, out)
+	}
+	if code, out, errs := ask("slow@example.com", "-timeout", "200ms"); code != 2 || out != "" || errs == "" {
+		t.Errorf("timeout: %d %q %q", code, out, errs)
+	}
+	if code, _, errs := ask("admin@example.com", "-config", "x.yaml"); code != 2 || !strings.Contains(errs, "-config only goes with -config, not -server") {
+		t.Errorf("config with server: %d %q", code, errs)
+	}
 
 	// Not an answer: exit 2 and no decision printed, never a secret echoed.
 	for _, user := range []string{"html@example.com", "weird@example.com"} {

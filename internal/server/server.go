@@ -64,17 +64,18 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// checkBody is the wire request.
-type checkBody struct {
+// CheckBody is the wire request of POST /check. The command's -server mode
+// sends it, so the two never drift apart.
+type CheckBody struct {
 	User       string   `json:"user"`
-	Groups     []string `json:"groups"`
+	Groups     []string `json:"groups,omitempty"`
 	Connection string   `json:"connection"`
 	Action     string   `json:"action"`
 	Resource   string   `json:"resource"`
 }
 
-// checkResponse is the wire response.
-type checkResponse struct {
+// CheckResponse is the wire response of POST /check.
+type CheckResponse struct {
 	Decision integration.Outcome `json:"decision"`
 	Reason   string              `json:"reason"`
 }
@@ -114,7 +115,7 @@ func (s *Server) check(w http.ResponseWriter, r *http.Request) {
 		writeDecision(w, http.StatusRequestEntityTooLarge, integration.UnknownDecision(integration.CodeInvalidRequest, "body larger than %d bytes", MaxRequestBody))
 		return
 	}
-	var in checkBody
+	var in CheckBody
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
@@ -159,7 +160,7 @@ func jsonErr(err error) string {
 
 func writeDecision(w http.ResponseWriter, status int, d integration.Decision) {
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(checkResponse{Decision: d.Outcome, Reason: d.Reason()})
+	_ = json.NewEncoder(w).Encode(CheckResponse{Decision: d.Outcome, Reason: d.Reason()})
 }
 
 func (s *Server) authorized(r *http.Request) bool {
