@@ -82,10 +82,12 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		if t == "" {
 			return integration.Errorf(integration.CodeCredentialRejected, "the credential is empty")
 		}
-		if prefix != "" && strings.HasPrefix(t, prefix) {
-			prefix = ""
+		// A token stored with its own "Bearer " scheme is sent as is.
+		h := t
+		if prefix != "" && !(len(t) > len(prefix) && strings.EqualFold(t[:len(prefix)], prefix)) {
+			h = prefix + t
 		}
-		r.Header.Set("Authorization", prefix+t)
+		r.Header.Set("Authorization", h)
 		return nil
 	}}
 	return c, nil
@@ -380,6 +382,9 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 			}
 			return integration.Decision{}, err
 		}
+		if data.Issue.ID == "" {
+			return integration.UnknownDecision(integration.CodeResourceNotVisible, "%s does not exist or hallpass cannot see it", t), nil
+		}
 		if data.Issue.Team.ID == "" {
 			return integration.Decision{}, integration.Errorf(integration.CodeUpstreamError, "Linear returned %s without its team", t)
 		}
@@ -406,6 +411,9 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 				return integration.UnknownDecision(integration.CodeResourceNotVisible, "%s does not exist or hallpass cannot see it", t), nil
 			}
 			return integration.Decision{}, err
+		}
+		if data.Project.ID == "" {
+			return integration.UnknownDecision(integration.CodeResourceNotVisible, "%s does not exist or hallpass cannot see it", t), nil
 		}
 		if data.Project.Trashed != nil && *data.Project.Trashed {
 			return integration.Unsupported("%s is in the trash; hallpass does not model access to trashed projects", t), nil
@@ -513,6 +521,9 @@ func teamAccess(team gqlTeam, id integration.Identity) integration.Decision {
 func checkTeam(t target, team *gqlTeam, id integration.Identity) integration.Decision {
 	who := id.Display
 	member := contains(id.Groups, team.ID)
+	if team.ArchivedAt != nil && *team.ArchivedAt != "" {
+		return integration.Unsupported("team %s is archived; hallpass does not model access to archived teams", team.Key)
+	}
 	switch t.action.name {
 	case "team.view":
 		return teamAccess(*team, id)

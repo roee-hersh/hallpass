@@ -58,6 +58,8 @@ func TestGraphQL(t *testing.T) {
 		`{"query":"query { entity(id:\"1\") { __typename ... on User { email } ...T } } fragment T on Team { key }"}`,
 		`{"query":"query A { now } query B { viewer { id } }","operationName":"B"}`,
 		`{"query":"query($id:String!){ user(id:$id){ ...U } } fragment U on User { id admin }","variables":{"id":"x"}}`,
+		`{"query":"query($e:String!){ users(filter:{email:{in:$e}}){ id } }","variables":{"e":"a@b.c"}}`,
+		"{\"query\":\"\xEF\xBB\xBF{ viewer { id } }\"}",
 	}
 	for _, b := range ok {
 		if err := s.Validate(gql(b), []byte(b)); err != nil {
@@ -82,6 +84,9 @@ func TestGraphQL(t *testing.T) {
 		`{"query":"query A { now } query B { viewer { id } }"}`:                                        "no operationName",
 		`{"query":"{ viewer { id "}`:                                                                   "does not parse",
 		`{"query":"{ viewer { teams { nodes { visibility(x:1) } } } }"}`:                               "takes no argument",
+		`{"query":"{ viewer { id } } { viewer { emai } }"}`:                                            "two anonymous",
+		`{"query":"{ viewer { id } } query B { now }","operationName":"B"}`:                            "mixed with named",
+		`{"query":"query($e:[String!]){ user(id:$e){ id } }","variables":{"e":["a"]}}`:                 "argument wants String!",
 	}
 	for b, want := range bad {
 		err := s.Validate(gql(b), []byte(b))

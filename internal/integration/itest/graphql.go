@@ -81,11 +81,12 @@ type gqlTok struct {
 
 func gqlLex(src string) ([]gqlTok, error) {
 	var toks []gqlTok
+	src = strings.TrimPrefix(src, "\xEF\xBB\xBF")
 	i := 0
 	for i < len(src) {
 		c := src[i]
 		switch {
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',' || c == 0xEF || c == 0xBB || c == 0xBF:
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',':
 			i++
 		case c == '#':
 			for i < len(src) && src[i] != '\n' {
@@ -744,6 +745,9 @@ func (p *gqlParser) document() (map[string]*gqlOp, map[string]*gqlFragment, erro
 			if err != nil {
 				return nil, nil, err
 			}
+			if _, dup := ops[""]; dup {
+				return nil, nil, fmt.Errorf("two anonymous operations")
+			}
 			ops[""] = &gqlOp{kind: "query", vars: map[string]*gqlArg{}, sels: sels}
 			continue
 		}
@@ -820,6 +824,9 @@ func (p *gqlParser) document() (map[string]*gqlOp, map[string]*gqlFragment, erro
 			return nil, nil, fmt.Errorf("operation %q defined twice", opName)
 		}
 		ops[opName] = op
+	}
+	if _, anon := ops[""]; anon && len(ops) > 1 {
+		return nil, nil, fmt.Errorf("an anonymous operation mixed with named ones")
 	}
 	return ops, frags, nil
 }
@@ -977,7 +984,9 @@ func (v *gqlValidator) value(val gqlValue, ref gqlRef) error {
 		if decl == nil {
 			return fmt.Errorf("variable $%s is not declared", val.val)
 		}
-		if decl.typ.base() != ref.base() || (decl.typ.list != nil) != (ref.list != nil) {
+		// A single value coerces to a list of one; a list never
+		// coerces to a single value.
+		if decl.typ.base() != ref.base() || (decl.typ.list != nil && ref.list == nil) {
 			return fmt.Errorf("variable $%s is %s, argument wants %s", val.val, decl.typ, ref)
 		}
 		if ref.nonNull && !decl.typ.nonNull && !decl.hasDefault {

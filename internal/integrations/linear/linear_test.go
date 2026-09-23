@@ -150,7 +150,7 @@ func (f *fake) teamJSON(id string) map[string]any {
 func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if r.Header.Get("Authorization") != f.token && r.Header.Get("Authorization") != "Bearer "+f.token {
+	if h := r.Header.Get("Authorization"); h != f.token && !strings.EqualFold(h, "Bearer "+f.token) {
 		gqlErr(w, 401, "authentication error", itest.Canary)
 		return
 	}
@@ -351,6 +351,8 @@ func TestTeamVisibilityUnknowns(t *testing.T) {
 	expect(t, check(t, c, admin, "team.view", "team:SEC"), integration.CodeUnsupported, "administrator but not a member")
 	expect(t, check(t, c, bob, "team.view", "team:RST"), integration.CodeUnsupported, "restricted")
 	expect(t, check(t, c, bob, "team.view", "team:OLD"), integration.CodeUnsupported, "archived")
+	expect(t, check(t, c, admin, "team.admin", "team:OLD"), integration.CodeUnsupported, "archived")
+	expect(t, check(t, c, admin, "team.member", "team:OLD"), integration.CodeUnsupported, "archived")
 	expect(t, check(t, c, bob, "team.view", "team:NOPE"), integration.CodeResourceNotVisible, "team NOPE")
 	expect(t, check(t, c, app, "team.view", "team:ENG"), integration.CodeUnsupported, "app user")
 }
@@ -574,6 +576,45 @@ func TestOAuthMode(t *testing.T) {
 	if h := srv.LastCall().Header.Get("Authorization"); !strings.HasPrefix(h, "Bearer ") {
 		t.Errorf("authorization %q", h)
 	}
+	// A token stored with its scheme, in any case, is not prefixed twice.
+	for _, stored := range []string{"Bearer ", "bearer "} {
+		srv := itest.NewServer(t)
+		f := newFake(t)
+		srv.Handle("POST", "/graphql", f.api)
+		deps, _ := itest.Deps(t, srv)
+		s := itest.Settings("ln", "linear", map[string]string{"url": srv.URL + "/graphql", "auth_mode": authOAuth}, map[string]secret.Secret{"credential": secret.Literal(stored + f.token)})
+		c, err := (Integration{}).New(context.Background(), s, deps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expect(t, check(t, c, bob, "workspace.member", "workspace"), integration.CodeAllowed, "")
+		if h := srv.LastCall().Header.Get("Authorization"); h != stored+f.token {
+			t.Errorf("authorization %q", h)
+		}
+	}
+}
+
+func TestNullObjectIsNotVisible(t *testing.T) {
+	srv, _, c := setup(t)
+	srv.Reset()
+	srv.Handle("POST", "/graphql", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		switch {
+		case strings.Contains(body.Query, "users(filter"):
+			write(w, 200, map[string]any{"data": map[string]any{"users": map[string]any{"nodes": []map[string]any{{"id": uBob, "email": "bob@example.com", "active": true}}}}})
+		case strings.Contains(body.Query, "teamMemberships("):
+			write(w, 200, map[string]any{"data": map[string]any{"user": map[string]any{"teamMemberships": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}}}})
+		case strings.Contains(body.Query, "issue(id"):
+			write(w, 200, map[string]any{"data": map[string]any{"issue": nil}})
+		default:
+			write(w, 200, map[string]any{"data": map[string]any{"project": nil}})
+		}
+	})
+	expect(t, check(t, c, bob, "issue.view", "issue:ENG-1"), integration.CodeResourceNotVisible, "issue ENG-1")
+	expect(t, check(t, c, bob, "project.view", "project:x"), integration.CodeResourceNotVisible, "project x")
 }
 
 func TestNewValidation(t *testing.T) {
