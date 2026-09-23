@@ -59,6 +59,13 @@ connections:
   #   user: HALLPASS
   #   role: SECURITYADMIN                                # or a custom role with MANAGE GRANTS
   #   credential: file:/secrets/snowflake-hallpass.p8    # the user's RSA private key (key-pair auth)
+  # - id: vault-prod
+  #   integration: vault
+  #   url: https://vault.example.com:8200
+  #   alias_mount: oidc/                                # the auth method whose aliases are the users' emails
+  #   credential: env:VAULT_TOKEN                       # or auth_mode: approle with role_id and the secret_id as credential
+  #   # token_policies: developers                      # policies the oidc role attaches at login
+  #   # namespace: admin/
   # - id: azure-corp
   #   integration: azure
   #   tenant_id: 11111111-2222-3333-4444-555555555555
