@@ -56,6 +56,10 @@ connections:
   # - id: linear-acme
   #   integration: linear
   #   credential: env:LINEAR_API_KEY                   # personal API key of a workspace admin, or an OAuth token with auth_mode: oauth
+  # - id: pagerduty-acme
+  #   integration: pagerduty
+  #   credential: env:PAGERDUTY_API_KEY                 # read-only General Access REST API key
+  #   # url: https://api.eu.pagerduty.com               # EU service region
   # - id: bitbucket-acme
   #   integration: bitbucket
   #   workspace: acme                                   # Cloud: the workspace slug
