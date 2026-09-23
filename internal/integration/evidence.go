@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"slices"
 	"sync"
 )
 
@@ -24,9 +25,12 @@ type Evidence struct {
 type Call struct {
 	Method string `json:"method"`
 	// Path is the request path as sent. Never the query string, which may
-	// carry user data or a token, and never the host, which is the
-	// connection's own.
-	Path   string `json:"path"`
+	// carry user data or a token.
+	Path string `json:"path"`
+	// Host is set only when the call went to a host other than the
+	// connection's own base URL: some vendors spread an API over several
+	// hosts, and a path alone would not say which answered.
+	Host   string `json:"host,omitempty"`
 	Status int    `json:"status"`
 	// ETag is the response's ETag header, when it sent one.
 	ETag string `json:"etag,omitempty"`
@@ -34,13 +38,16 @@ type Call struct {
 	// ETag and the body was not empty.
 	SHA256 string `json:"sha256,omitempty"`
 	// Cached marks a call that was not made for this check: its result was
-	// served from a cache (the identity cache, or one an integration keeps),
-	// and this is the evidence recorded when the call was made.
+	// served from a stored cache entry (the identity cache, or one an
+	// integration keeps), and this is the evidence recorded when the call
+	// was made.
 	Cached bool `json:"cached,omitempty"`
 }
 
 // MaxEvidenceCalls bounds the calls one Recorder keeps, so a paginated
-// lookup cannot grow a log line without limit.
+// lookup cannot grow a log line without limit. Calls made for the check
+// take precedence: when the cap is reached, a live call replaces the
+// oldest replayed one.
 const MaxEvidenceCalls = 100
 
 // Recorder collects the evidence of one check. It is safe for concurrent
@@ -56,7 +63,9 @@ type Recorder struct {
 	truncated bool
 }
 
-// Record adds one call. A nil Recorder records nothing.
+// Record adds one call. A nil Recorder records nothing. Past the cap a
+// live call takes the place of the oldest cached one, so what the check
+// itself asked the upstream is never the part that goes missing.
 func (r *Recorder) Record(c Call) {
 	if r == nil {
 		return
@@ -65,7 +74,14 @@ func (r *Recorder) Record(c Call) {
 	defer r.mu.Unlock()
 	if len(r.calls) >= MaxEvidenceCalls {
 		r.truncated = true
-		return
+		if c.Cached {
+			return
+		}
+		i := slices.IndexFunc(r.calls, func(c Call) bool { return c.Cached })
+		if i < 0 {
+			return
+		}
+		r.calls = slices.Delete(r.calls, i, i+1)
 	}
 	r.calls = append(r.calls, c)
 }

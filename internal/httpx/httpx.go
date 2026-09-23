@@ -172,8 +172,9 @@ type Response struct {
 	Status int
 	Header http.Header
 	Body   []byte
-	// method and path describe the request, for the evidence record.
-	method, path string
+	// method, path and host describe the request, for the evidence
+	// record; host is empty for a call to the client's own base host.
+	method, path, host string
 }
 
 // JSON decodes the body into v.
@@ -378,7 +379,7 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 		return nil, ErrBodyTooLarge
 	}
 	c.logCall(req, res.StatusCode, start, nil)
-	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body, method: req.Method, path: req.URL.EscapedPath()}
+	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body, method: req.Method, path: req.URL.EscapedPath(), host: c.foreignHost(req.URL)}
 	if res.StatusCode >= 400 && !(r.Accept4xx && res.StatusCode < 500) {
 		return out, &StatusError{
 			Status:  res.StatusCode,
@@ -391,15 +392,29 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 	return out, nil
 }
 
+// foreignHost returns u's host when it is not the client's base host, for
+// the evidence record, and "" when it is (or the client has no base).
+func (c *Client) foreignHost(u *url.URL) string {
+	if c.Base == "" {
+		return u.Host
+	}
+	base, err := url.Parse(c.Base)
+	if err != nil || strings.EqualFold(base.Host, u.Host) {
+		return ""
+	}
+	return u.Host
+}
+
 // maxETag bounds the ETag kept as evidence; a longer one is not a version
 // tag but something to keep out of the log, and the body hash stands in.
 const maxETag = 128
 
 // evidenceOf describes one completed response for the decision log: method,
-// path (no query, no host), status, and the ETag or the body's SHA-256. The
-// body itself and every other header stay out.
+// path (no query), the host when it is not the client's own, status, and
+// the ETag or the body's SHA-256. The body itself and every other header
+// stay out.
 func evidenceOf(r *Response) integration.Call {
-	c := integration.Call{Method: r.method, Path: r.path, Status: r.Status}
+	c := integration.Call{Method: r.method, Path: r.path, Host: r.host, Status: r.Status}
 	if etag := strings.TrimSpace(r.Header.Get("ETag")); etag != "" && validETag(etag) {
 		c.ETag = etag
 	} else if len(r.Body) > 0 {

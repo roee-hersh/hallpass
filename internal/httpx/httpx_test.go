@@ -479,6 +479,22 @@ func TestEvidence(t *testing.T) {
 	if ev := frec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Status != 200 {
 		t.Fatalf("retried attempt recorded: %+v", ev)
 	}
+	// A call to a host other than the client's own names the host; one to
+	// the base host does not.
+	other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
+	defer other.Close()
+	oc := newTestClient(t, srv, &bytes.Buffer{})
+	oc.HTTP = other.Client()
+	octx, orec := integration.WithRecorder(context.Background())
+	if _, err := oc.Do(octx, &Request{Path: other.URL + "/elsewhere"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oc.Do(octx, &Request{Path: srv.URL + "/empty"}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := orec.Evidence(); len(ev.Upstream) != 2 || ev.Upstream[0].Host != strings.TrimPrefix(other.URL, "https://") || ev.Upstream[1].Host != "" {
+		t.Fatalf("host evidence: %+v", ev)
+	}
 	// A request that never got a response leaves no evidence.
 	srv.Close()
 	rec2ctx, rec2 := integration.WithRecorder(context.Background())

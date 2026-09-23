@@ -26,6 +26,9 @@ type TTL[K comparable, V any] struct {
 type entry[V any] struct {
 	v   V
 	exp time.Time
+	// set is when the entry was stored; a fill that began earlier does not
+	// replace it.
+	set time.Time
 	// ev is the evidence of the fill that produced v, replayed on hits.
 	ev *integration.Evidence
 }
@@ -34,6 +37,11 @@ type call[V any] struct {
 	done chan struct{}
 	v    V
 	err  error
+	// started is when the fill began, for the newer-entry check on store.
+	started time.Time
+	// fresh marks a fill started for a fresh check: an answer it may not
+	// store still removes the older entry, which it has just superseded.
+	fresh bool
 	// rec is the fill's own Recorder; its Evidence is final once done is
 	// closed.
 	rec *integration.Recorder
@@ -74,7 +82,29 @@ func (c *TTL[K, V]) Set(k K, v V, ttl time.Duration) {
 		return
 	}
 	c.evictLocked()
-	c.items[k] = entry[V]{v: v, exp: c.now().Add(ttl)}
+	now := c.now()
+	c.items[k] = entry[V]{v: v, exp: now.Add(ttl), set: now}
+}
+
+// dropOlderLocked removes k's entry unless a fill that began after started
+// stored it.
+func (c *TTL[K, V]) dropOlderLocked(k K, started time.Time) {
+	if e, ok := c.items[k]; ok && !e.set.After(started) {
+		delete(c.items, k)
+	}
+}
+
+// storeLocked stores the result of a fill that began at started, unless a
+// fill that began later already stored a newer entry: the later fill saw
+// the upstream more recently, and a fresh check's answer in particular
+// must not be replaced by an older read that finished after it.
+func (c *TTL[K, V]) storeLocked(k K, v V, ttl time.Duration, ev *integration.Evidence, started time.Time) {
+	if e, ok := c.items[k]; ok && e.set.After(started) {
+		return
+	}
+	c.evictLocked()
+	now := c.now()
+	c.items[k] = entry[V]{v: v, exp: now.Add(ttl), set: now, ev: ev}
 }
 
 // Delete removes one key.
@@ -142,15 +172,17 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // of 0 means "do not store". Errors are never stored.
 //
 // The upstream calls a fill makes are its evidence (see
-// integration.Recorder). The fill runs on its own Recorder; the caller
-// that ran it gets the calls on its context's Recorder as its own, a
-// caller that waited for another's fill or hit the cache gets them marked
-// cached. So a decision served from a cached lookup still shows what the
-// upstream said when the lookup was made.
+// integration.Recorder). The fill runs on its own Recorder; every caller
+// the fill answers, the one that started it and the ones that waited for
+// it, gets the calls on its context's Recorder as its own, and a later
+// hit on the stored entry gets them marked cached. So a decision served
+// from a cached lookup still shows what the upstream said when the lookup
+// was made.
 //
 // Under a fresh context (integration.WithFresh) Do neither reads the cache
-// nor joins a fill in flight: it runs fill itself, on ctx, and stores the
-// answer for the callers after it.
+// nor joins a fill that began before it: it starts its own fill, which
+// later callers may join, and its answer replaces the entry unless an even
+// later fill stored one first.
 //
 // The fill runs in its own goroutine on a context detached from the first
 // caller's cancellation (see Detach) rather than on ctx itself: otherwise
@@ -160,19 +192,22 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // *PanicError for everyone waiting on it.
 func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
 	rec := integration.RecorderFrom(ctx)
-	if integration.Fresh(ctx) {
-		return c.fresh(ctx, k, fill, rec)
-	}
-	if v, ev, ok := c.get(k); ok {
-		rec.Add(ev, true)
-		return v, nil
+	fresh := integration.Fresh(ctx)
+	if !fresh {
+		if v, ev, ok := c.get(k); ok {
+			rec.Add(ev, true)
+			return v, nil
+		}
 	}
 	c.mu.Lock()
 	cl, ok := c.inflight[k]
-	leader := !ok
-	if leader {
-		cl = &call[V]{done: make(chan struct{})}
-		c.inflight[k] = cl
+	if !ok || fresh {
+		// A fresh caller never waits on a fill that began before it; its
+		// own fill is the one later callers join when the key is free.
+		cl = &call[V]{done: make(chan struct{}), started: c.now(), fresh: fresh}
+		if !ok {
+			c.inflight[k] = cl
+		}
 		fctx, cancel := Detach(ctx, DefaultFillTimeout)
 		fctx, cl.rec = integration.WithRecorder(fctx)
 		go func() {
@@ -184,8 +219,9 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 	select {
 	case <-cl.done:
 		// cl is complete: the fill's goroutine closed done after its
-		// last write.
-		rec.Add(cl.rec.Evidence(), !leader)
+		// last write. The calls were made for this check, whether it
+		// started the fill or waited for it.
+		rec.Add(cl.rec.Evidence(), false)
 		return cl.v, cl.err
 	case <-ctx.Done():
 		var zero V
@@ -208,29 +244,6 @@ func (c *TTL[K, V]) get(k K) (V, *integration.Evidence, bool) {
 	return e.v, e.ev, true
 }
 
-// fresh runs fill for k now, on the caller's own context, and stores the
-// answer (with its evidence) in place of whatever the cache held. Nobody
-// waits on it, so a panic propagates to the caller like any other.
-func (c *TTL[K, V]) fresh(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error), rec *integration.Recorder) (V, error) {
-	fctx, own := integration.WithRecorder(ctx)
-	v, ttl, err := fill(fctx)
-	ev := own.Evidence()
-	rec.Add(ev, false)
-	if err != nil {
-		var zero V
-		return zero, err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if ttl <= 0 {
-		delete(c.items, k)
-		return v, nil
-	}
-	c.evictLocked()
-	c.items[k] = entry[V]{v: v, exp: c.now().Add(ttl), ev: ev}
-	return v, nil
-}
-
 // fill runs one fill for k, then always removes the inflight entry and
 // closes cl.done, whether fill returned, panicked or called runtime.Goexit.
 func (c *TTL[K, V]) fill(k K, cl *call[V], ctx context.Context, fill func(ctx context.Context) (V, time.Duration, error)) {
@@ -245,10 +258,15 @@ func (c *TTL[K, V]) fill(k K, cl *call[V], ctx context.Context, fill func(ctx co
 			cl.v, cl.err = zero, errors.New("fill exited without returning")
 		}
 		c.mu.Lock()
-		delete(c.inflight, k)
-		if cl.err == nil && ttl > 0 {
-			c.evictLocked()
-			c.items[k] = entry[V]{v: cl.v, exp: c.now().Add(ttl), ev: cl.rec.Evidence()}
+		if c.inflight[k] == cl {
+			delete(c.inflight, k)
+		}
+		if cl.err == nil {
+			if ttl > 0 {
+				c.storeLocked(k, cl.v, ttl, cl.rec.Evidence(), cl.started)
+			} else if cl.fresh {
+				c.dropOlderLocked(k, cl.started)
+			}
 		}
 		c.mu.Unlock()
 		close(cl.done)

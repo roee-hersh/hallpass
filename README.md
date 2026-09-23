@@ -207,15 +207,17 @@ Every answered check is one JSON line in `decision_log` (a path, `stderr`, `stdo
 
 `reason` says what the decision was based on; `evidence` ties it to the exact upstream state. Each
 entry under `upstream` is one call the decision was computed from: the method and path (never the
-query string, which may carry user data, and never a host beyond the connection's own), the HTTP
-status, and the response's `ETag` when the upstream sent one, else the SHA-256 of the response body.
+query string, which may carry user data), the host only when the call went to a host other than the
+connection's own base URL (some vendors spread an API over several hosts), the HTTP status, and the
+response's `ETag` when the upstream sent one, else the SHA-256 of the response body.
 Response bodies, other headers and credentials are never logged; the token exchange an integration
 makes to authenticate is not evidence and is left out. A call marked `cached` was not made for this
-check: its result was served from a cache (the identity cache, or a lookup the integration keeps
-such as a role definition or a policy), and the entry shows the evidence recorded when the call was
-made. A decision served from the decision cache has `cached: true` and carries the evidence of the
-check that produced it. `fresh: true` marks a check that skipped the caches on the caller's
-request. The list is capped at 100 calls; `truncated: true` says more were made.
+check: its result was served from a stored cache entry (the identity cache, or a lookup the
+integration keeps such as a role definition or a policy), and the entry shows the evidence recorded
+when the call was made. A decision served from the decision cache has `cached: true` and carries the
+evidence of the check that produced it, every call marked `cached`. `fresh: true` marks a check that skipped the caches on the caller's
+request. The list is capped at 100 calls, the check's own calls taking precedence over replayed
+ones; `truncated: true` says some were dropped.
 
 ## Configuration
 

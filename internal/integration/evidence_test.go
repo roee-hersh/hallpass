@@ -64,6 +64,27 @@ func TestRecorderCap(t *testing.T) {
 	if len(ev.Upstream) != MaxEvidenceCalls || !ev.Truncated {
 		t.Fatalf("len=%d truncated=%v", len(ev.Upstream), ev.Truncated)
 	}
+	// Replayed calls fill the cap first; the check's own calls then take
+	// the place of the oldest replayed ones, never the other way round.
+	rec = &Recorder{}
+	for i := 0; i < MaxEvidenceCalls; i++ {
+		rec.Record(Call{Method: "GET", Path: "/replayed", Status: 200, Cached: true})
+	}
+	rec.Record(Call{Method: "GET", Path: "/live-1", Status: 200})
+	rec.Record(Call{Method: "GET", Path: "/live-2", Status: 200})
+	rec.Record(Call{Method: "GET", Path: "/replayed-late", Status: 200, Cached: true})
+	ev = rec.Evidence()
+	if len(ev.Upstream) != MaxEvidenceCalls || !ev.Truncated {
+		t.Fatalf("len=%d truncated=%v", len(ev.Upstream), ev.Truncated)
+	}
+	if got := ev.Upstream[MaxEvidenceCalls-2:]; got[0].Path != "/live-1" || got[1].Path != "/live-2" {
+		t.Fatalf("live calls dropped: %+v", got)
+	}
+	for _, c := range ev.Upstream {
+		if c.Path == "/replayed-late" {
+			t.Fatal("a replayed call displaced a live one")
+		}
+	}
 	rec2 := &Recorder{}
 	rec2.Add(ev, false)
 	if !rec2.Evidence().Truncated {
