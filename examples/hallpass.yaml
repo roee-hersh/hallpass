@@ -56,6 +56,12 @@ connections:
   # - id: linear-acme
   #   integration: linear
   #   credential: env:LINEAR_API_KEY                   # personal API key of a workspace admin, or an OAuth token with auth_mode: oauth
+  # - id: zendesk-acme
+  #   integration: zendesk
+  #   url: https://acme.zendesk.com
+  #   username: hallpass-bot@acme.com                  # the administrator the API token acts as
+  #   credential: env:ZENDESK_API_TOKEN
+  #   # auth_mode: oauth                                # credential is then an OAuth access token
   # - id: datadog-acme
   #   integration: datadog
   #   api_key: env:DATADOG_API_KEY
