@@ -59,6 +59,16 @@ connections:
   #   client_id: 66666666-7777-8888-9999-000000000000
   #   credential: env:AZURE_CLIENT_SECRET                # app registration with Reader at the root management group
   #   # microsoft365_connection: m365-corp                # resolve users through the microsoft365 connection instead of Graph
+  # - id: bitbucket-acme
+  #   integration: bitbucket
+  #   workspace: acme                                   # Cloud: the workspace slug
+  #   credential: env:BITBUCKET_TOKEN                   # workspace access token (read repository, project, account scopes)
+
+  # - id: bitbucket-dc
+  #   integration: bitbucket
+  #   edition: datacenter
+  #   url: https://bitbucket.acme.internal
+  #   credential: env:BITBUCKET_DC_TOKEN                # HTTP access token of an administrator
 
   # - id: jira-main
   #   integration: jira
