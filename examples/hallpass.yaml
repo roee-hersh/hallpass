@@ -60,6 +60,16 @@ connections:
   #   credential: env:VAULT_TOKEN                       # or auth_mode: approle with role_id and the secret_id as credential
   #   # token_policies: developers                      # policies the oidc role attaches at login
   #   # namespace: admin/
+  # - id: bitbucket-acme
+  #   integration: bitbucket
+  #   workspace: acme                                   # Cloud: the workspace slug
+  #   credential: env:BITBUCKET_TOKEN                   # workspace access token (read repository, project, account scopes)
+
+  # - id: bitbucket-dc
+  #   integration: bitbucket
+  #   edition: datacenter
+  #   url: https://bitbucket.acme.internal
+  #   credential: env:BITBUCKET_DC_TOKEN                # HTTP access token of an administrator
 
   # - id: jira-main
   #   integration: jira
