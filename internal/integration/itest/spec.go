@@ -124,6 +124,9 @@ func noteOnce(t testing.TB, name, msg string) {
 
 // LoadSpec parses a description, detecting its format.
 func LoadSpec(name string, raw []byte) (Spec, error) {
+	if looksLikeSDL(raw) {
+		return newGraphQL(name, raw)
+	}
 	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		doc = map[string]any{}
