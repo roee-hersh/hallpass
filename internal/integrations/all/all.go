@@ -23,6 +23,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/pagerduty"
 	"github.com/roee-hersh/hallpass/internal/integrations/salesforce"
 	"github.com/roee-hersh/hallpass/internal/integrations/slack"
+	"github.com/roee-hersh/hallpass/internal/integrations/vault"
 	"github.com/roee-hersh/hallpass/internal/integrations/zendesk"
 )
 
@@ -42,6 +43,7 @@ func Registry() *integration.Registry {
 	r.Register(salesforce.Integration{})
 	r.Register(microsoft365.Integration{})
 	r.Register(googleworkspace.Integration{})
+	r.Register(vault.Integration{})
 	r.Register(azure.Integration{})
 	r.Register(linear.Integration{})
 	r.Register(zendesk.Integration{})
