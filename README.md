@@ -61,13 +61,16 @@ decides anything. The rules, and where each is enforced:
 - **Per resource, from the source of truth.** Each check names one resource (`issue:PAY-123`,
   `namespace:payments`) and is answered live by the system that owns it, with a read-only credential.
 - **Every decision is logged** as a JSON line: user, connection, action, resource, decision, reason,
-  and whether it came from the cache.
+  whether it came from the cache, and the evidence: the upstream calls the decision was based on,
+  each with its ETag or a hash of the response. See [Decision log](#decision-log).
 
 Not goals, on purpose:
 
 - **Human approval.** For destructive actions, add a confirmation step in the agent *after* an `allow`.
 - **Atomicity.** It is a check before the action, not a transaction; permissions can change in
-  between. Answers are cached for 30 seconds by default (`decision_cache_seconds: 0` disables it).
+  between. Answers are cached for 30 seconds by default (`decision_cache_seconds: 0` disables it);
+  a check with `"fresh": true` skips the caches and asks the upstream system now, which narrows
+  the window but does not close it.
 - **Proving who the user is.** hallpass answers "may *this* user…"; authenticating the user is your
   agent's job.
 
@@ -176,7 +179,41 @@ has it working and tested in each framework:
 `deny` means the third-party system positively said no. Anything hallpass could not evaluate is
 `unknown`. Callers should treat `unknown` as deny.
 
+The request also accepts `"fresh": true`. A fresh check skips the decision cache and the identity
+cache for that one request and asks the upstream system now; what it learns replaces the cached
+entries, so reads keep using the cache. Use it for destructive actions (delete, merge, scale),
+where a 30-second-old answer is not good enough. A fresh check narrows the window between the
+check and the action to the time between the two; it does not close it. Closing it needs a
+conditional write in the upstream system (for example `If-Match` with an ETag), which only some
+APIs support.
+
 `GET /healthz` returns `{"status":"ok"}` without authentication.
+
+## Decision log
+
+Every answered check is one JSON line in `decision_log` (a path, `stderr`, `stdout` or `none`):
+
+```json
+{"time":"2026-09-23T10:00:00Z","connection":"github-acme","user":"dana@example.com",
+ "action":"repo.create","resource":"org:acme","decision":"allow","code":"allowed",
+ "reason":"dana is a member of organization acme, whose members may create repositories",
+ "cached":false,"duration_ms":212,"status":200,"remote":"10.0.3.7",
+ "evidence":{"upstream":[
+   {"method":"GET","path":"/users/dana","status":200,"etag":"W/\"a1b2c3\"","cached":true},
+   {"method":"GET","path":"/orgs/acme/memberships/dana","status":200,"etag":"W/\"d4e5f6\""},
+   {"method":"GET","path":"/orgs/acme","status":200,"sha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}]}}
+```
+
+`reason` says what the decision was based on; `evidence` ties it to the exact upstream state. Each
+entry under `upstream` is one call the decision was computed from: the method and path (never the
+query string, which may carry user data, and never a host beyond the connection's own), the HTTP
+status, and the response's `ETag` when the upstream sent one, else the SHA-256 of the response body.
+Response bodies, other headers and credentials are never logged; the token exchange an integration
+makes to authenticate is not evidence and is left out. A call marked `cached` was not made for this
+check: its result was served from the identity cache, and the entry shows the evidence recorded when
+it was made. A decision served from the decision cache has `cached: true` and carries the evidence of
+the check that produced it. `fresh: true` marks a check that skipped the caches on the caller's
+request. The list is capped at 100 calls; `truncated: true` says more were made.
 
 ## Configuration
 
@@ -225,7 +262,7 @@ carries a commented example for every integration.
 | `hallpass validate -config FILE` | Check the file, credential references and certificates. No network |
 | `hallpass probe -config FILE [-connection ID]` | Call each system with its credential and report |
 | `hallpass check -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]` | Answer one question from the command line |
-| `hallpass check -server URL [-api-key REF] [-ca-file PEM] [-timeout D] ...` | Ask a running hallpass the same question |
+| `hallpass check -server URL [-api-key REF] [-ca-file PEM] [-timeout D] [-fresh] ...` | Ask a running hallpass the same question; `-fresh` skips its caches |
 | `hallpass catalog [INTEGRATION]` | List integrations, config keys and actions |
 
 At startup `serve` probes every connection and logs warnings. A broken connection never stops the
@@ -343,9 +380,11 @@ made only of validated pieces before it reaches a URL or query; CI runs them nig
 - hallpass's credential should be read-only wherever the product allows it. The per-integration
   docs say exactly what to grant and where a product forces a broader grant.
 - Request and response bodies of upstream calls are never logged. Secrets print as `[REDACTED]`.
-- The decision log is JSON lines, one per answered check.
+- The decision log is JSON lines, one per answered check, each with the evidence (path, status,
+  ETag or body hash) of the upstream calls the decision was computed from.
 - Allow and deny answers are cached for 30 seconds by default; unknown answers are never cached.
-  Both caches key on the connection, the user and the exact list of groups the caller sent.
+  Both caches key on the connection, the user and the exact list of groups the caller sent. A
+  request with `"fresh": true` bypasses both for itself and refreshes their entries.
 
 ## License
 

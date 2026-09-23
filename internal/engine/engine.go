@@ -3,6 +3,10 @@
 //	validate request -> find connection -> find action -> decision cache ->
 //	resolve identity (cached) -> Check under a timeout -> cache allow/deny ->
 //	decision log.
+//
+// A fresh request skips both cache lookups and stores what it learns as
+// usual. Every upstream call httpx completes during identity resolution and
+// Check is recorded as evidence on the decision and in the log.
 package engine
 
 import (
@@ -30,6 +34,11 @@ type Request struct {
 	Connection string
 	Action     string
 	Resource   string
+	// Fresh asks for an answer straight from the upstream system: the
+	// decision cache and the identity cache are not consulted, and what
+	// the request learns replaces their entries. For a caller about to do
+	// something destructive.
+	Fresh bool
 	// Remote is the caller's address, for the decision log only.
 	Remote string
 }
@@ -76,6 +85,9 @@ type Engine struct {
 type idEntry struct {
 	id  integration.Identity
 	err *integration.Error
+	// ev is the evidence of the lookup, replayed as cached on every check
+	// the entry serves.
+	ev *integration.Evidence
 }
 
 // Build constructs every connection in dependency order.
@@ -262,9 +274,11 @@ func (e *Engine) Check(ctx context.Context, req Request) Result {
 			Code:       string(d.Code),
 			Reason:     d.Text,
 			Cached:     res.Cached,
+			Fresh:      req.Fresh,
 			DurationMS: e.now().Sub(start).Milliseconds(),
 			Status:     res.Status,
 			Remote:     req.Remote,
+			Evidence:   d.Evidence,
 		})
 	}
 	return res
@@ -299,7 +313,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	groups := normalizeGroups(req.Groups)
 	user := integration.User{Email: req.User, Groups: groups}
 	decKey := strings.Join([]string{req.Connection, req.User, groupsKey(groups), req.Action, req.Resource}, "\x00")
-	if e.decTTL > 0 {
+	if e.decTTL > 0 && !req.Fresh {
 		if d, ok := e.decs.Get(decKey); ok {
 			return Result{Decision: d, Status: http.StatusOK, Cached: true}
 		}
@@ -307,10 +321,13 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 
 	ctx, cancel := context.WithTimeout(ctx, c.settings.EffectiveTimeout())
 	defer cancel()
+	ctx, rec := integration.WithRecorder(ctx)
 
-	identity, err := e.identity(ctx, c, user)
+	identity, err := e.identity(ctx, c, user, req.Fresh, rec)
 	if err != nil {
-		return Result{Decision: integration.ToDecision(err), Status: http.StatusOK}
+		d := integration.ToDecision(err)
+		d.Evidence = rec.Evidence()
+		return Result{Decision: d, Status: http.StatusOK}
 	}
 	d, err := c.c.Check(ctx, integration.CheckRequest{
 		User:       user,
@@ -327,6 +344,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 		d = integration.Unsupported("integration returned no reason code")
 	}
 	d.Outcome = integration.OutcomeOf(d.Code)
+	d.Evidence = rec.Evidence()
 	if e.decTTL > 0 && d.Outcome != integration.Unknown {
 		e.decs.Set(decKey, d, e.decTTL)
 	}
@@ -363,25 +381,53 @@ func identityKey(connID string, u integration.User) string {
 	return strings.Join(parts, "\x00")
 }
 
-func (e *Engine) identity(ctx context.Context, c *conn, u integration.User) (integration.Identity, error) {
+// identity resolves u through the identity cache. The lookup runs on its own
+// Recorder so that its evidence is kept with the cache entry; the calls are
+// then added to rec, marked cached unless this call made them. A fresh
+// request looks up without consulting the cache and replaces the entry.
+func (e *Engine) identity(ctx context.Context, c *conn, u integration.User, fresh bool, rec *integration.Recorder) (integration.Identity, error) {
 	key := identityKey(c.settings.ID, u)
+	// looked is set by the fill when it runs; a caller whose fill did not
+	// run got the entry from the cache or from another caller's lookup.
+	looked := false
 	fill := func(ctx context.Context) (idEntry, time.Duration, error) {
+		looked = true
+		ctx, lookup := integration.WithRecorder(ctx)
 		id, err := c.c.ResolveIdentity(ctx, u)
+		ev := lookup.Evidence()
 		if err == nil {
-			return idEntry{id: id}, e.idTTL, nil
+			return idEntry{id: id, ev: ev}, e.idTTL, nil
 		}
 		var ie *integration.Error
 		if errors.As(err, &ie) && (ie.Code == integration.CodeUserNotFound || ie.Code == integration.CodeUserAmbiguous) {
-			return idEntry{err: ie}, e.negTTL, nil
+			return idEntry{err: ie, ev: ev}, e.negTTL, nil
 		}
-		return idEntry{}, 0, err
+		return idEntry{ev: ev}, 0, err
 	}
 	var ent idEntry
 	var err error
-	if e.idTTL > 0 {
+	switch {
+	case e.idTTL > 0 && !fresh:
 		ent, err = e.idCache.Do(ctx, key, fill)
-	} else {
+	case e.idTTL > 0:
+		var ttl time.Duration
+		ent, ttl, err = fill(ctx)
+		if err == nil {
+			e.idCache.Set(key, ent, ttl)
+		}
+	default:
 		ent, _, err = fill(ctx)
+	}
+	// A caller whose ctx ended while a shared lookup was still running
+	// must not read looked or the entry: both are still being written.
+	if ctx.Err() == nil {
+		if looked {
+			for _, call := range evidenceCalls(ent.ev) {
+				rec.Record(call)
+			}
+		} else {
+			rec.AddCached(ent.ev)
+		}
 	}
 	if err != nil {
 		return integration.Identity{}, err
@@ -390,6 +436,14 @@ func (e *Engine) identity(ctx context.Context, c *conn, u integration.User) (int
 		return integration.Identity{}, ent.err
 	}
 	return ent.id, nil
+}
+
+// evidenceCalls returns ev's calls, or nothing for a nil ev.
+func evidenceCalls(ev *integration.Evidence) []integration.Call {
+	if ev == nil {
+		return nil
+	}
+	return ev.Upstream
 }
 
 // Flush empties both caches. Tests and future admin endpoints use it.

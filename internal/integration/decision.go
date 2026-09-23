@@ -56,6 +56,10 @@ type Decision struct {
 	Code    Code
 	// Text is a short human-readable explanation. It must not contain secrets.
 	Text string
+	// Evidence is what the upstream system said when the decision was
+	// computed. The engine fills it from the calls httpx recorded;
+	// integrations leave it nil.
+	Evidence *Evidence
 }
 
 // Reason renders "<code>: <text>", the wire form of the reason field.

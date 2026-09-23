@@ -5,8 +5,12 @@ only when hallpass answered ``allow``. ``deny`` and ``unknown`` both mean
 "do not act", and so does any failure to reach hallpass at all.
 
     hp = Hallpass()  # HALLPASS_URL and HALLPASS_API_KEY from the environment
-    hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
+    hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", fresh=True)
     jira.delete_issue("PAY-123")  # only reached when the answer was allow
+
+``fresh=True`` makes hallpass skip its caches and ask the upstream system
+now; use it for destructive actions (delete, merge, scale), where a
+30-second-old answer is not good enough.
 
 Or, for a tool an agent framework exposes to a model, ``guarded``:
 
@@ -115,11 +119,19 @@ class Hallpass:
         action: str,
         resource: str,
         groups: Iterable[str] | None = None,
+        fresh: bool = False,
     ) -> Decision:
-        """Ask hallpass. Never raises on transport: every failure becomes an ``unknown`` decision."""
+        """Ask hallpass. Never raises on transport: every failure becomes an ``unknown`` decision.
+
+        ``fresh=True`` asks for an answer straight from the upstream system,
+        skipping hallpass's caches. It narrows the window between the check
+        and the action to the time between the two; it does not close it.
+        """
         body: dict = {"user": user, "connection": connection, "action": action, "resource": resource}
         if groups is not None:
             body["groups"] = _group_list(groups)
+        if fresh:
+            body["fresh"] = True
         try:
             req = urllib.request.Request(
                 self.url + "/check",
@@ -146,13 +158,13 @@ class Hallpass:
             # malformed URL.
             return Decision(UNKNOWN, f"client_error: hallpass unreachable: {e}", 0)
 
-    def allowed(self, user: str, connection: str, action: str, resource: str, groups=None) -> bool:
+    def allowed(self, user: str, connection: str, action: str, resource: str, groups=None, fresh: bool = False) -> bool:
         """True only when hallpass said ``allow``."""
-        return self.check(user, connection, action, resource, groups).allowed
+        return self.check(user, connection, action, resource, groups, fresh).allowed
 
-    def require(self, user: str, connection: str, action: str, resource: str, groups=None) -> Decision:
+    def require(self, user: str, connection: str, action: str, resource: str, groups=None, fresh: bool = False) -> Decision:
         """Return the decision when it is ``allow``; raise ``PermissionDenied`` otherwise."""
-        d = self.check(user, connection, action, resource, groups)
+        d = self.check(user, connection, action, resource, groups, fresh)
         if not d.allowed:
             raise PermissionDenied(d, user, connection, action, resource)
         return d
@@ -260,6 +272,7 @@ def guarded(
     user: UserSource,
     groups: GroupsSource | None = None,
     deny: Callable[[PermissionDenied], Any] | None = None,
+    fresh: bool = False,
 ) -> Callable[[F], F]:
     """Decorate a function so it runs only after hallpass allowed it.
 
@@ -284,8 +297,11 @@ def guarded(
     raising; use that where the framework would hide the exception's text
     from the model (MCPServer does).
 
+    ``fresh=True`` makes every check skip hallpass's caches and ask the
+    upstream system now. Use it for destructive actions.
+
         @tool
-        @guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user)
+        @guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
         def delete_issue(key: str) -> str: ...
     """
 
@@ -321,7 +337,7 @@ def guarded(
             async def inner(*args, **kwargs):
                 who, grp, res, call = prepare(args, kwargs)
                 try:
-                    await asyncio.to_thread(hp.require, who, connection, action, res, grp)
+                    await asyncio.to_thread(hp.require, who, connection, action, res, grp, fresh)
                 except PermissionDenied as e:
                     return refused(e)
                 return await call()
@@ -332,7 +348,7 @@ def guarded(
             def inner(*args, **kwargs):
                 who, grp, res, call = prepare(args, kwargs)
                 try:
-                    hp.require(who, connection, action, res, grp)
+                    hp.require(who, connection, action, res, grp, fresh)
                 except PermissionDenied as e:
                     return refused(e)
                 return call()

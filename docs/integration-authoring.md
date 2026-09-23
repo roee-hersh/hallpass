@@ -74,6 +74,12 @@ redaction. Use `GetJSON`, `PostJSON`, `Do`, `Paginate` and `NextLink` (which ref
 another host, so the credential never travels there). Bodies are never logged. Use
 `httpx.Status(err)` to branch on 403/404, and `httpx.Classify(err)` for everything else.
 
+Every response `httpx` completes during `ResolveIdentity` and `Check` is recorded as evidence on the
+decision (method, path, status, and the `ETag` or the body's SHA-256) and written to the decision log
+by the engine; an integration does nothing for this. Calls made from the client's `Auth` func (a
+token exchange) are not recorded. A lookup an integration caches itself is evidence only for the
+check that made it.
+
 ## Auth (`internal/authx`)
 
 `authx.TokenSource` caches a token and refreshes it 5 minutes before expiry. `authx.SignJWT` signs

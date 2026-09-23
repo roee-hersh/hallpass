@@ -72,6 +72,9 @@ type CheckBody struct {
 	Connection string   `json:"connection"`
 	Action     string   `json:"action"`
 	Resource   string   `json:"resource"`
+	// Fresh asks for an answer straight from the upstream system instead
+	// of the caches. For a caller about to do something destructive.
+	Fresh bool `json:"fresh,omitempty"`
 }
 
 // CheckResponse is the wire response of POST /check.
@@ -132,6 +135,7 @@ func (s *Server) check(w http.ResponseWriter, r *http.Request) {
 		Connection: in.Connection,
 		Action:     in.Action,
 		Resource:   in.Resource,
+		Fresh:      in.Fresh,
 		Remote:     remoteIP(r),
 	})
 	writeDecision(w, res.Status, res.Decision)

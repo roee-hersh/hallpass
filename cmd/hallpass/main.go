@@ -4,7 +4,7 @@
 //	hallpass validate -config /etc/hallpass/hallpass.yaml
 //	hallpass probe    -config /etc/hallpass/hallpass.yaml [-connection id]
 //	hallpass check    -config /etc/hallpass/hallpass.yaml -connection id -user email -action name -resource res
-//	hallpass check    -server https://hallpass.internal -api-key env:HALLPASS_API_KEY -connection id -user email -action name -resource res
+//	hallpass check    -server https://hallpass.internal -api-key env:HALLPASS_API_KEY -connection id -user email -action name -resource res [-fresh]
 //	hallpass catalog  [integration]
 package main
 
@@ -52,7 +52,7 @@ Usage:
   hallpass validate -config FILE
   hallpass probe    -config FILE [-connection ID]
   hallpass check    -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]
-  hallpass check    -server URL [-api-key REF] [-ca-file PEM] [-timeout D] -connection ID -user EMAIL -action NAME -resource RES ...
+  hallpass check    -server URL [-api-key REF] [-ca-file PEM] [-timeout D] [-fresh] -connection ID -user EMAIL -action NAME -resource RES ...
   hallpass catalog  [INTEGRATION]
   hallpass version
 
@@ -305,6 +305,7 @@ func check(args []string, stdout, stderr *os.File) int {
 	action := fs.String("action", "", "action name (see hallpass catalog INTEGRATION)")
 	resource := fs.String("resource", "", "resource such as namespace:payments or issue:PAY-123")
 	asJSON := fs.Bool("json", false, "print the same JSON as POST /check")
+	fresh := fs.Bool("fresh", false, "skip the server's caches and ask the upstream system now (a -config check never caches)")
 	var groups []string
 	fs.Func("group", "group the user belongs to (repeatable)", func(g string) error {
 		groups = append(groups, g)
@@ -358,6 +359,7 @@ func check(args []string, stdout, stderr *os.File) int {
 		Connection: *connID,
 		Action:     *action,
 		Resource:   *resource,
+		Fresh:      *fresh,
 		Remote:     "cli",
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -505,6 +507,7 @@ func remoteCheck(ctx context.Context, o remoteOptions, req engine.Request) (inte
 		Connection: req.Connection,
 		Action:     req.Action,
 		Resource:   req.Resource,
+		Fresh:      req.Fresh,
 	})
 	if err != nil {
 		return "", "", err

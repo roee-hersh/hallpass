@@ -9,8 +9,10 @@ package httpx
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -271,7 +273,9 @@ func (c *Client) build(ctx context.Context, r *Request) (*http.Request, error) {
 	}
 	req.Header.Set("User-Agent", ua)
 	if c.Auth != nil {
-		if err := c.Auth(ctx, req); err != nil {
+		// A token exchange made from Auth is not evidence for the decision
+		// and its response carries the credential: never record it.
+		if err := c.Auth(integration.WithoutRecorder(ctx), req); err != nil {
 			return nil, err
 		}
 	}
@@ -358,6 +362,7 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 		return nil, ErrBodyTooLarge
 	}
 	c.logCall(req, res.StatusCode, start, nil)
+	integration.RecordCall(ctx, evidenceOf(req, res, body))
 	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body}
 	if res.StatusCode >= 400 && !(r.Accept4xx && res.StatusCode < 500) {
 		return out, &StatusError{
@@ -369,6 +374,38 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 		}
 	}
 	return out, nil
+}
+
+// maxETag bounds the ETag kept as evidence; a longer one is not a version
+// tag but something to keep out of the log, and the body hash stands in.
+const maxETag = 128
+
+// evidenceOf describes one completed response for the decision log: method,
+// path (no query, no host), status, and the ETag or the body's SHA-256. The
+// body itself and every other header stay out.
+func evidenceOf(req *http.Request, res *http.Response, body []byte) integration.Call {
+	c := integration.Call{Method: req.Method, Path: req.URL.EscapedPath(), Status: res.StatusCode}
+	if etag := strings.TrimSpace(res.Header.Get("ETag")); etag != "" && validETag(etag) {
+		c.ETag = etag
+	} else if len(body) > 0 {
+		sum := sha256.Sum256(body)
+		c.SHA256 = hex.EncodeToString(sum[:])
+	}
+	return c
+}
+
+// validETag accepts an entity tag of printable ASCII (RFC 9110 etagc plus
+// the W/ prefix and quotes) of a sane length.
+func validETag(s string) bool {
+	if len(s) > maxETag {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) logCall(req *http.Request, status int, start time.Time, err error) {

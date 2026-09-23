@@ -47,6 +47,22 @@ hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
 decision with the code `client_error`. Pass `groups=[...]` for systems that
 grant by group, such as Kubernetes.
 
+Pass `fresh=True` for an answer straight from the upstream system. hallpass
+caches allow and deny answers for 30 seconds by default; a fresh check
+skips its caches for that one request and asks now, then stores what it
+learned so reads keep using the cache. Make it the default for destructive
+actions (delete, merge, scale):
+
+```python
+hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", fresh=True)
+jira.delete_issue("PAY-123")
+```
+
+A fresh check narrows the window between the check and the action to the
+time between the two; it does not close it. Closing it needs a conditional
+write in the upstream system (for example `If-Match` with an ETag), which
+only some APIs support.
+
 ## The `guarded` decorator
 
 `guarded` wraps a function so that its body runs only after hallpass allowed
@@ -60,11 +76,14 @@ hp = Hallpass()
 current_user: ContextVar[str] = ContextVar("current_user")
 
 @tool  # LangChain, Strands, MCPServer, ...
-@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user)
+@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
 def delete_issue(key: str) -> str:
     jira.delete_issue(key)  # the agent's own credential
     return f"deleted {key}"
 ```
+
+`fresh=True` is right for a destructive tool like this one: the check asks
+the upstream system now instead of a cached answer.
 
 Your application sets `current_user` for the session before the agent runs:
 
@@ -80,6 +99,7 @@ current_user.set(request.user.email)
 | `user` | Where the acting user comes from: a string, a zero-argument callable, or a `ContextVar`. Resolved on every call. Never read from the arguments. |
 | `groups` | The user's groups, from the same kinds of source. Must yield a list. |
 | `deny` | Optional. Called with the `PermissionDenied`; its return value is returned instead of raising. For frameworks that hide an exception's text from the model. |
+| `fresh` | Optional. `True` makes every check skip hallpass's caches and ask the upstream system now. Use it for delete, merge and scale-type actions. |
 
 What the decorator guarantees:
 
