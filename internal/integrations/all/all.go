@@ -8,6 +8,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/aws"
 	"github.com/roee-hersh/hallpass/internal/integrations/azure"
 	"github.com/roee-hersh/hallpass/internal/integrations/confluence"
+	"github.com/roee-hersh/hallpass/internal/integrations/databricks"
 	"github.com/roee-hersh/hallpass/internal/integrations/fake"
 	"github.com/roee-hersh/hallpass/internal/integrations/github"
 	"github.com/roee-hersh/hallpass/internal/integrations/gitlab"
@@ -36,6 +37,7 @@ func Registry() *integration.Registry {
 	r.Register(microsoft365.Integration{})
 	r.Register(googleworkspace.Integration{})
 	r.Register(azure.Integration{})
+	r.Register(databricks.Integration{})
 	r.Register(googlecloud.Integration{})
 	return r
 }
