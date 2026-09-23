@@ -59,6 +59,11 @@ connections:
   #   client_id: 66666666-7777-8888-9999-000000000000
   #   credential: env:AZURE_CLIENT_SECRET                # app registration with Reader at the root management group
   #   # microsoft365_connection: m365-corp                # resolve users through the microsoft365 connection instead of Graph
+  # - id: datadog-acme
+  #   integration: datadog
+  #   api_key: env:DATADOG_API_KEY
+  #   credential: env:DATADOG_APP_KEY                   # application key scoped to user_access_read, teams_read, *_read
+  #   # url: https://api.datadoghq.eu                   # EU site
   # - id: pagerduty-acme
   #   integration: pagerduty
   #   credential: env:PAGERDUTY_API_KEY                 # read-only General Access REST API key
