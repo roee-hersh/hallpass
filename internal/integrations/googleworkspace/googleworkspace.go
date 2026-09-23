@@ -220,30 +220,18 @@ func (c *Connection) source(sub, scope string) *authx.TokenSource {
 }
 
 // saKey is the service-account key JSON.
-type saKey struct {
-	ClientEmail  string `json:"client_email"`
-	PrivateKey   string `json:"private_key"`
-	PrivateKeyID string `json:"private_key_id"`
-	TokenURI     string `json:"token_uri"`
-}
+type saKey = authx.GoogleServiceAccountKey
 
 func (c *Connection) loadKey() (saKey, *rsa.PrivateKey, error) {
 	raw, err := c.settings.Secret("credential").GetString()
 	if err != nil {
 		return saKey{}, nil, integration.Wrap(integration.CodeCredentialRejected, err, "the service-account key could not be read")
 	}
-	var k saKey
-	if err := json.Unmarshal([]byte(raw), &k); err != nil {
-		return saKey{}, nil, integration.Wrap(integration.CodeCredentialRejected, err, "credential is not a service-account key JSON")
-	}
-	if !emailRe.MatchString(k.ClientEmail) || k.PrivateKey == "" {
-		return saKey{}, nil, integration.Errorf(integration.CodeCredentialRejected, "the service-account key JSON lacks client_email or private_key")
-	}
-	key, err := authx.ParseRSAPrivateKey([]byte(k.PrivateKey))
+	k, err := authx.ParseGoogleServiceAccountKey(raw)
 	if err != nil {
-		return saKey{}, nil, integration.Wrap(integration.CodeCredentialRejected, err, "the service-account private_key is not a PEM RSA key")
+		return saKey{}, nil, err
 	}
-	return k, key, nil
+	return k, k.Key, nil
 }
 
 // claims of the JWT bearer assertion: exactly one scope, impersonating sub.
@@ -298,25 +286,7 @@ func (c *Connection) mint(ctx context.Context, sub, scope string) (authx.Token, 
 // fetchMetadataToken reads the attached service account's token from the
 // GCE metadata server.
 func (c *Connection) fetchMetadataToken(ctx context.Context) (authx.Token, error) {
-	var out struct {
-		AccessToken string          `json:"access_token"`
-		ExpiresIn   json.RawMessage `json:"expires_in"`
-	}
-	resp, err := c.plain.Do(ctx, &httpx.Request{Method: http.MethodGet,
-		Path:   c.metadataURL + "/computeMetadata/v1/instance/service-accounts/default/token",
-		Header: http.Header{"Metadata-Flavor": {"Google"}}})
-	if err != nil {
-		return authx.Token{}, integration.Wrap(integration.CodeCredentialRejected, err, "the metadata server gave no token; auth_mode keyless needs a GCE or GKE Workload Identity")
-	}
-	if err := resp.JSON(&out); err != nil || out.AccessToken == "" {
-		return authx.Token{}, integration.Errorf(integration.CodeCredentialRejected, "the metadata server returned no access_token")
-	}
-	t := authx.Token{Value: out.AccessToken}
-	var secs int64
-	if json.Unmarshal(out.ExpiresIn, &secs) == nil && secs > 0 {
-		t.Expiry = c.now().Add(time.Duration(secs) * time.Second)
-	}
-	return t, nil
+	return authx.GoogleMetadataToken(ctx, c.plain, c.metadataURL, c.now)
 }
 
 // signWithIAM signs the assertion with the IAM Credentials API.
@@ -376,20 +346,9 @@ func (c *Connection) tokenError(err error, sub string) *integration.Error {
 
 // --- API transport ----------------------------------------------------------
 
-var reasonRe = regexp.MustCompile(`"reason"\s*:\s*"([A-Za-z]+)"`)
-
 // reason extracts errors[].reason from a Google error body snippet. The
 // message is never used.
-func reason(err error) string {
-	var se *httpx.StatusError
-	if !errors.As(err, &se) {
-		return ""
-	}
-	if m := reasonRe.FindStringSubmatch(se.Snippet); m != nil {
-		return m[1]
-	}
-	return ""
-}
+func reason(err error) string { return authx.GoogleErrorReason(err) }
 
 // call performs one API request as sub with one scope. A 401 invalidates
 // the token and retries once. The returned error is the raw httpx error so

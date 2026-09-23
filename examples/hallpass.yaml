@@ -99,6 +99,12 @@ connections:
   #   credential: file:/secrets/google-sa.json          # service-account key with domain-wide delegation
   #   admin_email: hallpass-admin@acme.com              # custom admin role: Users > Read, Groups > Read
 
+  # - id: gcp-acme
+  #   integration: googlecloud
+  #   scope: organization:123456789012                  # where the service account has roles/iam.securityReviewer
+  #   credential: file:/secrets/gcp-hallpass.json       # service-account key; or auth_mode: keyless on GCE/GKE
+  #   googleworkspace_connection: google-acme           # optional: user_not_found and suspended accounts
+
   # - id: salesforce-prod                             # UNVERIFIED integration, see docs/integrations/salesforce.md
   #   integration: salesforce
   #   url: https://acme.my.salesforce.com

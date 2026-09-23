@@ -4,3 +4,4 @@
 *.test
 *.out
 .specs/
+__pycache__/
