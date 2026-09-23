@@ -1,13 +1,15 @@
-"""Tests for the example client against a fake hallpass. Standard library only.
+"""Tests for the agent examples against a fake hallpass.
 
     python3 -m unittest discover -s examples/agent -v
 
-The MCP, LangChain, Claude Agent SDK and Strands tests run only when their
-packages are installed.
+The client tests need only the standard library. Each framework's test runs
+when its package is installed and skips otherwise; with
+HALLPASS_EXAMPLE_REQUIRE_DEPS=1 (CI) a missing package fails instead.
 """
 
 from __future__ import annotations
 
+import asyncio
 import http.server
 import json
 import os
@@ -15,13 +17,14 @@ import socket
 import sys
 import threading
 import unittest
-from unittest import mock
+from contextvars import ContextVar
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from hallpass_client import Decision, Hallpass, PermissionDenied, guarded  # noqa: E402
 
 API_KEY = "test-key"
+DANA = "dana@example.com"
 
 # What the fake answers per resource id. (status, body)
 ANSWERS = {
@@ -93,27 +96,35 @@ class Sink(http.server.BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
 
-SINK = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Sink)
-threading.Thread(target=SINK.serve_forever, daemon=True).start()
+def serve(handler):
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+FAKE = serve(FakeHallpass)
+SINK = serve(Sink)
+FAKE_URL = "http://127.0.0.1:%d" % FAKE.server_address[1]
+
+# The example modules build their client from the environment at import.
+os.environ["HALLPASS_URL"] = FAKE_URL
+os.environ["HALLPASS_API_KEY"] = API_KEY
+os.environ["AGENT_USER"] = DANA
+os.environ["AGENT_GROUPS"] = "platform-team, sre"
+
+
+def last_request() -> dict:
+    return FakeHallpass.seen[-1]["body"]
 
 
 class ClientTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeHallpass)
-        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
-        cls.url = "http://127.0.0.1:%d" % cls.server.server_address[1]
-        cls.hp = Hallpass(cls.url, API_KEY, timeout=2)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
+    hp = Hallpass(FAKE_URL, API_KEY, timeout=2)
 
     def setUp(self):
         FakeHallpass.seen.clear()
 
     def check(self, thing: str, **kw) -> Decision:
-        return self.hp.check("dana@example.com", "demo", "thing.write", "thing:" + thing, **kw)
+        return self.hp.check(DANA, "demo", "thing.write", "thing:" + thing, **kw)
 
     def test_allow(self):
         d = self.check("allowed")
@@ -138,7 +149,7 @@ class ClientTest(unittest.TestCase):
         self.assertFalse(d.allowed)
 
     def test_wrong_api_key_is_unknown(self):
-        d = Hallpass(self.url, "wrong", timeout=2).check("dana@example.com", "demo", "thing.write", "thing:allowed")
+        d = Hallpass(FAKE_URL, "wrong", timeout=2).check(DANA, "demo", "thing.write", "thing:allowed")
         self.assertEqual((d.decision, d.code, d.status), ("unknown", "unauthorized", 401))
         self.assertFalse(d.allowed)
 
@@ -156,10 +167,6 @@ class ClientTest(unittest.TestCase):
         self.assertFalse(d.allowed)
         self.assertEqual(Sink.seen, [], "the API key must not be sent to the redirect target")
 
-    def test_bad_url_is_unknown(self):
-        d = Hallpass("localhost:1", API_KEY).check("u", "demo", "thing.read", "thing:1")
-        self.assertEqual((d.decision, d.code), ("unknown", "client_error"))
-
     def test_unreachable_is_unknown(self):
         with socket.socket() as s:  # a port nobody listens on
             s.bind(("127.0.0.1", 0))
@@ -168,6 +175,14 @@ class ClientTest(unittest.TestCase):
         self.assertEqual((d.decision, d.code, d.status), ("unknown", "client_error", 0))
         self.assertFalse(d.allowed)
 
+    def test_url_rules(self):
+        for ok in ("https://hallpass.internal", "http://localhost:8080/", "http://127.0.0.1:1", "http://[::1]:8080"):
+            Hallpass(ok, API_KEY)
+        for bad in ("http://hallpass.internal", "localhost:8080", "ftp://x", "http://10.0.0.5:8080"):
+            with self.assertRaises(ValueError, msg=bad):
+                Hallpass(bad, API_KEY)
+        self.assertEqual(Hallpass("http://localhost:8080/", API_KEY).url, "http://localhost:8080")
+
     def test_request_shape(self):
         self.check("allowed", groups=["platform-team"])
         req = FakeHallpass.seen[-1]
@@ -175,11 +190,13 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(req["headers"]["Content-Type"], "application/json")
         self.assertEqual(
             req["body"],
-            {"user": "dana@example.com", "groups": ["platform-team"], "connection": "demo",
+            {"user": DANA, "groups": ["platform-team"], "connection": "demo",
              "action": "thing.write", "resource": "thing:allowed"},
         )
         self.check("allowed")
-        self.assertNotIn("groups", FakeHallpass.seen[-1]["body"], "groups omitted when not given")
+        self.assertNotIn("groups", last_request(), "groups omitted when not given")
+        with self.assertRaises(TypeError):
+            self.check("allowed", groups="platform-team")  # a string is not a list of groups
 
     def test_require_and_allowed(self):
         self.assertTrue(self.hp.allowed("u", "demo", "thing.write", "thing:allowed"))
@@ -190,100 +207,168 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(cm.exception.decision.code, "upstream_timeout")
         self.assertIn("unknown", str(cm.exception))
 
-    def test_guarded_runs_only_on_allow(self):
-        ran = []
-
-        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", groups=["platform-team"])
-        def write(*, user: str, thing_id: str) -> str:
-            ran.append(thing_id)
-            return "ok"
-
-        self.assertEqual(write(user="u", thing_id="allowed"), "ok")
-        for thing in ("denied", "timeout", "garbage", "badline"):
-            with self.assertRaises(PermissionDenied):
-                write(user="u", thing_id=thing)
-        self.assertEqual(ran, ["allowed"])
-        with self.assertRaises(TypeError):
-            write("u", "allowed")  # positional arguments could bypass the resource template
-        first = FakeHallpass.seen[0]["body"]
-        self.assertEqual((first["resource"], first["groups"]), ("thing:allowed", ["platform-team"]))
-
     def test_missing_api_key(self):
         env = dict(os.environ)
         os.environ.pop("HALLPASS_API_KEY", None)
         try:
             with self.assertRaises(ValueError):
-                Hallpass(self.url)
+                Hallpass(FAKE_URL)
         finally:
             os.environ.clear()
             os.environ.update(env)
 
 
-try:
-    import mcp  # noqa: F401
-    HAVE_MCP = True
-except ImportError:
-    HAVE_MCP = False
+class GuardedTest(unittest.TestCase):
+    hp = Hallpass(FAKE_URL, API_KEY, timeout=2)
+
+    def setUp(self):
+        FakeHallpass.seen.clear()
+
+    def test_runs_only_on_allow(self):
+        ran = []
+
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA, groups=["platform-team"])
+        def write(thing_id: str) -> str:
+            ran.append(thing_id)
+            return "ok"
+
+        self.assertEqual(write(thing_id="allowed"), "ok")
+        for thing in ("denied", "timeout", "garbage", "badline"):
+            with self.assertRaises(PermissionDenied):
+                write(thing_id=thing)
+        self.assertEqual(ran, ["allowed"])
+        self.assertEqual(last_request(), {"user": DANA, "groups": ["platform-team"], "connection": "demo",
+                                          "action": "thing.write", "resource": "thing:badline"})
+
+    def test_user_is_never_an_argument(self):
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
+        def write(thing_id: str) -> str:
+            return "ok"
+
+        import inspect
+
+        self.assertEqual(list(inspect.signature(write).parameters), ["thing_id"])
+        with self.assertRaises(TypeError):
+            write(thing_id="allowed", user="admin@example.com")  # not a parameter
+        with self.assertRaises(TypeError):
+            write("allowed")  # positional arguments could bypass the resource template
+        self.assertEqual(FakeHallpass.seen, [])
+        # In the dict shape an extra "user" key is ignored, not honoured.
+        write({"thing_id": "allowed", "user": "admin@example.com"})
+        self.assertEqual(last_request()["user"], DANA)
+
+    def test_user_sources(self):
+        seen = []
+
+        def make(source, groups=None):
+            @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=source, groups=groups)
+            def write(thing_id: str) -> str:
+                return "ok"
+
+            return write
+
+        make("fixed@example.com")(thing_id="allowed")
+        seen.append(last_request())
+        make(lambda: "called@example.com", groups=lambda: ["g1"])(thing_id="allowed")
+        seen.append(last_request())
+        var: ContextVar[str] = ContextVar("u")
+        gvar: ContextVar[list] = ContextVar("g")
+        var.set("context@example.com")
+        gvar.set(["g2"])
+        make(var, groups=gvar)(thing_id="allowed")
+        seen.append(last_request())
+        self.assertEqual([(r["user"], r.get("groups")) for r in seen], [
+            ("fixed@example.com", None),
+            ("called@example.com", ["g1"]),
+            ("context@example.com", ["g2"]),
+        ])
+        # Nothing set for the session: fail before any request.
+        with self.assertRaises(RuntimeError):
+            make(ContextVar("unset"))(thing_id="allowed")
+        with self.assertRaises(RuntimeError):
+            make("")(thing_id="allowed")
+        with self.assertRaises(TypeError):
+            make(DANA, groups="platform-team")(thing_id="allowed")
+        self.assertEqual(len(FakeHallpass.seen), 3)
+
+    def test_dict_shape(self):
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
+        def write(args: dict) -> str:
+            return "wrote " + args["thing_id"]
+
+        self.assertEqual(write({"thing_id": "allowed", "content": "x"}), "wrote allowed")
+        self.assertEqual(last_request()["resource"], "thing:allowed")
+        with self.assertRaises(PermissionDenied):
+            write({"thing_id": "denied"})
+        with self.assertRaises(KeyError):
+            write({"content": "no thing_id"})  # cannot form the resource: no request, no action
+        self.assertEqual(len(FakeHallpass.seen), 2)
+
+    def test_async(self):
+        ran = []
+
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
+        async def write(thing_id: str) -> str:
+            await asyncio.sleep(0)
+            ran.append(thing_id)
+            return "ok"
+
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
+        async def write_dict(args: dict) -> str:
+            return "ok " + args["thing_id"]
+
+        self.assertEqual(asyncio.run(write(thing_id="allowed")), "ok")
+        self.assertEqual(asyncio.run(write_dict({"thing_id": "allowed"})), "ok allowed")
+        with self.assertRaises(PermissionDenied):
+            asyncio.run(write(thing_id="denied"))
+        self.assertEqual(ran, ["allowed"])
+        self.assertTrue(asyncio.iscoroutinefunction(write))
+
+    def test_deny_hook(self):
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA, deny=lambda e: f"refused: {e}")
+        def write(thing_id: str) -> str:
+            return "ok"
+
+        self.assertEqual(write(thing_id="allowed"), "ok")
+        out = write(thing_id="denied")
+        self.assertTrue(out.startswith("refused: dana@example.com may not thing.write on thing:denied"), out)
 
 
-try:
-    import langchain_core  # noqa: F401
-    HAVE_LANGCHAIN = True
-except ImportError:
-    HAVE_LANGCHAIN = False
-
-# Set to 1 where the optional dependencies are expected (CI), so a missing
+# Set to 1 where the optional packages are expected (CI), so a missing
 # package fails instead of silently skipping.
 REQUIRE_DEPS = os.environ.get("HALLPASS_EXAMPLE_REQUIRE_DEPS") == "1"
 
 
-def optional(have: bool, what: str, required: bool = True):
-    """Skip a test class when its package is absent. CI requires the packages
-    from requirements.txt; those in requirements-frameworks.txt stay optional."""
-    if have:
-        return lambda cls: cls
-    if REQUIRE_DEPS and required:
-        raise ImportError(what + " not installed but HALLPASS_EXAMPLE_REQUIRE_DEPS=1")
-    return unittest.skip(what + " not installed")
+def optional(module: str, what: str):
+    try:
+        __import__(module)
+    except ImportError:
+        if REQUIRE_DEPS:
+            raise
+        return unittest.skip(what + " not installed")
+    return lambda cls: cls
 
 
-def fake_server():
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeHallpass)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server, Hallpass("http://127.0.0.1:%d" % server.server_address[1], API_KEY, timeout=2)
-
-
-@optional(HAVE_MCP, "mcp package")
+@optional("mcp", "mcp package")
 class MCPServerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeHallpass)
-        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
-        cls.env = mock.patch.dict(os.environ, {
-            "HALLPASS_URL": "http://127.0.0.1:%d" % cls.server.server_address[1],
-            "HALLPASS_API_KEY": API_KEY,
-            "AGENT_USER": "dana@example.com",
-            "AGENT_GROUPS": "platform-team, sre",
-        })
-        cls.env.start()
         import mcp_server
 
         cls.mod = mcp_server
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.env.stop()
-        cls.server.shutdown()
+    def setUp(self):
+        FakeHallpass.seen.clear()
 
     def call(self, name: str, **args):
-        import asyncio
-
         from mcp import Client
 
         async def go():
             async with Client(self.mod.mcp) as client:
                 names = {t.name for t in (await client.list_tools()).tools}
                 self.assertEqual(names, {"check_permission", "write_thing"})
+                tool = next(t for t in (await client.list_tools()).tools if t.name == "write_thing")
+                self.assertEqual(set(tool.input_schema["properties"]), {"thing_id", "content"})
                 return await client.call_tool(name, args)
 
         return asyncio.run(go())
@@ -293,105 +378,173 @@ class MCPServerTest(unittest.TestCase):
         self.assertFalse(res.is_error)
         self.assertEqual(res.structured_content["decision"], "unknown")
         self.assertFalse(res.structured_content["allowed"])
-        body = FakeHallpass.seen[-1]["body"]
-        self.assertEqual((body["user"], body["groups"]), ("dana@example.com", ["platform-team", "sre"]))
+        self.assertEqual((last_request()["user"], last_request()["groups"]), (DANA, ["platform-team", "sre"]))
 
     def test_write_thing(self):
         res = self.call("write_thing", thing_id="allowed", content="hi")
         self.assertIn("wrote 2 bytes", res.content[0].text)
-        self.assertEqual(FakeHallpass.seen[-1]["body"]["groups"], ["platform-team", "sre"])
+        self.assertEqual(last_request()["groups"], ["platform-team", "sre"])
         for thing in ("denied", "timeout", "badline"):
             res = self.call("write_thing", thing_id=thing, content="hi")
             self.assertFalse(res.is_error)
-            self.assertTrue(res.content[0].text.startswith("refused:"), res.content[0].text)
+            self.assertTrue(res.content[0].text.startswith("refused: dana@example.com may not"), res.content[0].text)
 
 
-@optional(HAVE_LANGCHAIN, "langchain-core package")
+@optional("langchain_core", "langchain-core package")
 class LangChainToolTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeHallpass)
-        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
-        from langchain_tool import make_tools
+        import langchain_tool
 
-        hp = Hallpass("http://127.0.0.1:%d" % cls.server.server_address[1], API_KEY, timeout=2)
-        cls.check, cls.write = make_tools("dana@example.com", groups=["platform-team"], hp=hp)
+        cls.mod = langchain_tool
+        langchain_tool.current_user.set(DANA)
+        langchain_tool.current_groups.set(["platform-team"])
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
+    def setUp(self):
+        FakeHallpass.seen.clear()
 
     def test_tools(self):
-        self.assertEqual({self.check.name, self.write.name}, {"check_permission", "write_thing"})
-        out = self.check.invoke({"connection": "demo", "action": "thing.write", "resource": "thing:timeout"})
+        check, write = self.mod.tools
+        self.assertEqual((check.name, write.name), ("check_permission", "write_thing"))
+        self.assertEqual(set(write.args), {"thing_id", "content"})
+        out = check.invoke({"connection": "demo", "action": "thing.write", "resource": "thing:timeout"})
         self.assertTrue(out.startswith("unknown: upstream_timeout"), out)
-        self.assertEqual(FakeHallpass.seen[-1]["body"]["groups"], ["platform-team"])
-        self.assertIn("wrote 2 bytes", self.write.invoke({"thing_id": "allowed", "content": "hi"}))
-        self.assertEqual(FakeHallpass.seen[-1]["body"]["groups"], ["platform-team"])
+        self.assertEqual((last_request()["user"], last_request()["groups"]), (DANA, ["platform-team"]))
+        # A model-supplied user is dropped by the framework; the check is still for dana.
+        out = write.invoke({"thing_id": "allowed", "content": "hi", "user": "admin@example.com"})
+        self.assertIn("wrote 2 bytes to thing:allowed as " + DANA, out)
+        self.assertEqual(last_request()["user"], DANA)
         for thing in ("denied", "timeout"):
-            out = self.write.invoke({"thing_id": thing, "content": "hi"})
-            self.assertTrue(out.startswith("refused:"), out)
+            out = write.invoke({"thing_id": thing, "content": "hi"})
+            self.assertTrue(out.startswith("refused: dana@example.com may not thing.write on thing:" + thing), out)
 
 
-try:
-    import claude_agent_sdk  # noqa: F401
-    HAVE_CLAUDE_SDK = True
-except ImportError:
-    HAVE_CLAUDE_SDK = False
-
-try:
-    import strands  # noqa: F401
-    HAVE_STRANDS = True
-except ImportError:
-    HAVE_STRANDS = False
-
-
-@optional(HAVE_CLAUDE_SDK, "claude-agent-sdk package", required=False)
-class ClaudeAgentSDKToolTest(unittest.TestCase):
+@optional("langgraph", "langgraph package")
+class LangGraphTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server, hp = fake_server()
-        from claude_agent_sdk_tool import make_server, make_tools
+        from langchain_core.messages import AIMessage
+        from langgraph.graph import END, START, MessagesState, StateGraph
 
-        cls.check, cls.write = make_tools("dana@example.com", groups=["platform-team"], hp=hp)
-        cls.config = make_server("dana@example.com", groups=["platform-team"], hp=hp)
+        import langgraph_agent
 
+        langgraph_agent.current_user.set(DANA)
+        g = StateGraph(MessagesState)
+        g.add_node("tools", langgraph_agent.tool_node)
+        g.add_edge(START, "tools")
+        g.add_edge("tools", END)
+        cls.graph = g.compile()
+        cls.AIMessage = AIMessage
+
+    def setUp(self):
+        FakeHallpass.seen.clear()
+
+    def call(self, name: str, args: dict):
+        msg = self.AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": "c1", "type": "tool_call"}])
+        out = self.graph.invoke({"messages": [msg]})
+        return out["messages"][-1]
+
+    def test_tool_node(self):
+        m = self.call("write_thing", {"thing_id": "allowed", "content": "hi", "user": "admin@example.com"})
+        self.assertEqual(m.status, "success")
+        self.assertIn("wrote 2 bytes to thing:allowed as " + DANA, m.content)
+        self.assertEqual(last_request()["user"], DANA)
+        m = self.call("write_thing", {"thing_id": "denied", "content": "hi"})
+        self.assertTrue(m.content.startswith("refused: dana@example.com may not thing.write on thing:denied"), m.content)
+        m = self.call("check_permission", {"connection": "demo", "action": "thing.read", "resource": "thing:timeout"})
+        self.assertTrue(m.content.startswith("unknown: upstream_timeout"), m.content)
+
+
+@optional("strands", "strands-agents package")
+class StrandsTest(unittest.TestCase):
     @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
+    def setUpClass(cls):
+        import strands_tool
 
-    def test_handlers(self):
-        import asyncio
+        cls.mod = strands_tool
+        strands_tool.current_user.set(DANA)
+        strands_tool.current_groups.set(["platform-team"])
 
-        self.assertEqual((self.check.name, self.write.name), ("check_permission", "write_thing"))
-        out = asyncio.run(self.check.handler({"connection": "demo", "action": "thing.write", "resource": "thing:timeout"}))
-        self.assertTrue(out["content"][0]["text"].startswith("unknown: upstream_timeout"), out)
-        self.assertEqual(FakeHallpass.seen[-1]["body"]["groups"], ["platform-team"])
-        out = asyncio.run(self.write.handler({"thing_id": "allowed", "content": "hi"}))
+    def setUp(self):
+        FakeHallpass.seen.clear()
+
+    def stream(self, tool, args: dict):
+        """Invoke the way the Strands agent loop does."""
+
+        async def go():
+            last = None
+            async for event in tool.stream({"toolUseId": "t1", "name": tool.tool_name, "input": args}, {}):
+                last = event
+            return last["tool_result"]
+
+        return asyncio.run(go())
+
+    def test_tools(self):
+        check, write = self.mod.tools
+        self.assertEqual((check.tool_name, write.tool_name), ("check_permission", "write_thing"))
+        props = write.tool_spec["inputSchema"]["json"]["properties"]
+        self.assertEqual(set(props), {"thing_id", "content"}, "user must not be in the tool schema")
+        res = self.stream(check, {"connection": "demo", "action": "thing.write", "resource": "thing:timeout"})
+        self.assertEqual(res["status"], "success")
+        self.assertTrue(res["content"][0]["text"].startswith("unknown: upstream_timeout"), res)
+        self.assertEqual((last_request()["user"], last_request()["groups"]), (DANA, ["platform-team"]))
+        res = self.stream(write, {"thing_id": "allowed", "content": "hi", "user": "admin@example.com"})
+        self.assertEqual(res["status"], "success")
+        self.assertIn("wrote 2 bytes to thing:allowed as " + DANA, res["content"][0]["text"])
+        self.assertEqual(last_request()["user"], DANA)
+        for thing in ("denied", "timeout"):
+            res = self.stream(write, {"thing_id": thing, "content": "hi"})
+            self.assertEqual(res["status"], "error")
+            self.assertIn("may not thing.write on thing:" + thing, res["content"][0]["text"])
+
+
+@optional("claude_agent_sdk", "claude-agent-sdk package")
+class ClaudeAgentSDKTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import claude_agent_sdk_tool
+
+        cls.mod = claude_agent_sdk_tool
+        claude_agent_sdk_tool.current_user.set(DANA)
+        claude_agent_sdk_tool.current_groups.set(["platform-team"])
+
+    def setUp(self):
+        FakeHallpass.seen.clear()
+
+    def call(self, name: str, args: dict):
+        """Call through the in-process MCP server the SDK hands to Claude Code."""
+        from mcp import Client
+
+        async def go():
+            async with Client(self.mod.server["instance"]) as client:
+                tools = {t.name: t for t in (await client.list_tools()).tools}
+                self.assertEqual(set(tools), {"check_permission", "write_thing"})
+                self.assertEqual(set(tools["write_thing"].input_schema["properties"]), {"thing_id", "content"})
+                return await client.call_tool(name, args)
+
+        return asyncio.run(go())
+
+    def test_handlers_direct(self):
+        for t in (self.mod.check_permission, self.mod.write_thing):
+            self.assertTrue(asyncio.iscoroutinefunction(t.handler))
+        out = asyncio.run(self.mod.write_thing.handler({"thing_id": "allowed", "content": "hi"}))
         self.assertIn("wrote 2 bytes", out["content"][0]["text"])
-        self.assertNotIn("is_error", out)
+        with self.assertRaises(PermissionDenied):
+            asyncio.run(self.mod.write_thing.handler({"thing_id": "denied", "content": "hi"}))
+
+    def test_through_server(self):
+        res = self.call("check_permission", {"connection": "demo", "action": "thing.write", "resource": "thing:timeout"})
+        self.assertFalse(res.is_error)
+        self.assertTrue(res.content[0].text.startswith("unknown: upstream_timeout"), res)
+        self.assertEqual((last_request()["user"], last_request()["groups"]), (DANA, ["platform-team"]))
+        res = self.call("write_thing", {"thing_id": "allowed", "content": "hi", "user": "admin@example.com"})
+        self.assertFalse(res.is_error)
+        self.assertIn("wrote 2 bytes to thing:allowed as " + DANA, res.content[0].text)
+        self.assertEqual(last_request()["user"], DANA)
         for thing in ("denied", "timeout"):
-            out = asyncio.run(self.write.handler({"thing_id": thing, "content": "hi"}))
-            self.assertTrue(out["content"][0]["text"].startswith("refused:"), out)
-            self.assertTrue(out["is_error"])
-
-
-@optional(HAVE_STRANDS, "strands-agents package", required=False)
-class StrandsToolTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.server, cls.hp = fake_server()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
-
-    def test_tools_build(self):
-        from strands_tool import make_tools
-
-        check, write = make_tools("dana@example.com", groups=["platform-team"], hp=self.hp)
-        self.assertEqual(check.tool_name, "check_permission")
-        self.assertEqual(write.tool_name, "write_thing")
+            res = self.call("write_thing", {"thing_id": thing, "content": "hi"})
+            self.assertTrue(res.is_error)
+            self.assertIn("may not thing.write on thing:" + thing, res.content[0].text)
 
 
 if __name__ == "__main__":

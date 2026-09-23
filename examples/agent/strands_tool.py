@@ -1,60 +1,62 @@
 """Strands Agents tools that check with hallpass before they act.
 
-Build the tools once per user session so the acting user is bound in the
-closure and never chosen by the model:
+The tools are defined once. The application sets ``current_user`` (and
+optionally ``current_groups``) for the session before it runs the agent, so
+the acting user is never chosen by the model:
 
-    agent = Agent(tools=make_tools("dana@example.com"))
+    current_user.set("dana@example.com")
+    agent = Agent(tools=tools)
     agent("Write 'hello' to thing 1.")
 
-Needs ``strands-agents`` (pip install -r requirements-frameworks.txt).
+Needs ``strands-agents`` (pip install -r requirements.txt).
 """
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 from strands import tool
 
-from hallpass_client import Hallpass, PermissionDenied, guarded
+from hallpass_client import Hallpass, guarded
+
+hp = Hallpass()
+current_user: ContextVar[str] = ContextVar("current_user")
+current_groups: ContextVar[list[str]] = ContextVar("current_groups", default=[])
 
 
-def make_tools(user: str, groups: list[str] | None = None, hp: Hallpass | None = None) -> list:
-    hp = hp or Hallpass()
-    groups = groups or []
+@tool
+def check_permission(connection: str, action: str, resource: str) -> str:
+    """Ask whether the current user may perform an action in a system.
 
-    @tool
-    def check_permission(connection: str, action: str, resource: str) -> str:
-        """Ask whether the current user may perform an action in a system.
+    Only 'allow' permits the action; 'unknown' is a deny.
 
-        Only 'allow' permits the action; 'unknown' is a deny.
+    Args:
+        connection: a hallpass connection id, e.g. jira-main
+        action: one of that connection's actions, e.g. DELETE_ISSUES
+        resource: the target, e.g. issue:PAY-123
+    """
+    d = hp.check(current_user.get(), connection, action, resource, current_groups.get())
+    return f"{d.decision}: {d.reason}"
 
-        Args:
-            connection: a hallpass connection id, e.g. jira-main
-            action: one of that connection's actions, e.g. DELETE_ISSUES
-            resource: the target, e.g. issue:PAY-123
-        """
-        d = hp.check(user, connection, action, resource, groups)
-        return f"{d.decision}: {d.reason}"
 
-    @guarded(hp, "demo", "thing.write", "thing:{thing_id}", groups)
-    def _write_thing(*, user: str, thing_id: str, content: str) -> str:
-        # The real action goes here, run with the agent's own credential.
-        return f"wrote {len(content)} bytes to thing:{thing_id} as {user}"
+# Strands reports a raised PermissionDenied to the model as a tool error
+# carrying its text, so nothing more is needed on a refusal.
+@tool
+@guarded(hp, "demo", "thing.write", "thing:{thing_id}", user=current_user, groups=current_groups)
+def write_thing(thing_id: str, content: str) -> str:
+    """Write content to a thing in the demo system.
 
-    @tool
-    def write_thing(thing_id: str, content: str) -> str:
-        """Write content to a thing in the demo system.
+    Refused unless the current user holds thing.write on it.
 
-        Refused unless the current user holds thing.write on it.
+    Args:
+        thing_id: the thing to write to
+        content: what to write
+    """
+    # The real action goes here, run with the agent's own credential.
+    return f"wrote {len(content)} bytes to thing:{thing_id} as {current_user.get()}"
 
-        Args:
-            thing_id: the thing to write to
-            content: what to write
-        """
-        try:
-            return _write_thing(user=user, thing_id=thing_id, content=content)
-        except PermissionDenied as e:
-            return f"refused: {e}"
 
-    return [check_permission, write_thing]
+tools = [check_permission, write_thing]
 
 
 if __name__ == "__main__":
@@ -63,6 +65,5 @@ if __name__ == "__main__":
 
     from strands import Agent
 
-    who = sys.argv[1] if len(sys.argv) > 1 else "dana@example.com"
-    agent = Agent(tools=make_tools(who))
-    agent("Write 'hello' to thing 1.")
+    current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
+    Agent(tools=tools)("Write 'hello' to thing 1.")

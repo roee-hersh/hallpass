@@ -1,3 +1,7 @@
 # hallpass_client.py needs nothing beyond the standard library.
 mcp>=2             # mcp_server.py
 langchain-core>=1  # langchain_tool.py
+langgraph>=1       # langgraph_agent.py
+langchain>=1       # langgraph_agent.py (create_agent)
+claude-agent-sdk   # claude_agent_sdk_tool.py
+strands-agents     # strands_tool.py

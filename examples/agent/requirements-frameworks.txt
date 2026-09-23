@@ -1,3 +1,0 @@
-# Agent frameworks for the other two examples. Not installed by CI.
-claude-agent-sdk   # claude_agent_sdk_tool.py
-strands-agents     # strands_tool.py
