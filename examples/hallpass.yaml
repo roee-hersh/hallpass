@@ -53,6 +53,12 @@ connections:
   #   credential: file:/secrets/github-app.pem        # GitHub App private key
   #   identity_mode: saml
 
+  # - id: snowflake-prod
+  #   integration: snowflake
+  #   account: myorg-myaccount
+  #   user: HALLPASS
+  #   role: SECURITYADMIN                                # or a custom role with MANAGE GRANTS
+  #   credential: file:/secrets/snowflake-hallpass.p8    # the user's RSA private key (key-pair auth)
   # - id: vault-prod
   #   integration: vault
   #   url: https://vault.example.com:8200

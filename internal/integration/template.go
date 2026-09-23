@@ -64,6 +64,10 @@ func (t Template) Render(email string) string {
 
 // emailRe is the shape of an address hallpass accepts as a user: a local
 // part of the RFC 5322 atom characters and a domain of letters, digits,
+// dots and hyphens. It admits no double quote, backslash, space or control
+// character, but it does admit the apostrophe (o'brien@example.com), so a
+// validated address still needs the escaping of whatever query syntax it
+// is placed in.
 // dots and hyphens. It admits no quote, backslash, space or control
 // character, so a validated address is safe inside a query filter.
 var emailRe = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+/=?^_{|}~.-]{1,64}@[A-Za-z0-9.-]{1,255}$`)
