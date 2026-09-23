@@ -259,11 +259,32 @@ docker run -p 8080:8080 -e HALLPASS_API_KEY=change-me \
   -v $PWD/examples/hallpass.yaml:/etc/hallpass/hallpass.yaml:ro hallpass
 ```
 
+## Running on Kubernetes
+
+A Helm chart lives in [`deploy/helm/hallpass`](deploy/helm/hallpass). It runs the
+`ghcr.io/roee-hersh/hallpass` image as a non-root Deployment with liveness and readiness probes
+on `GET /healthz`, the config file in a ConfigMap and the API key in a Secret.
+
+```sh
+git clone https://github.com/roee-hersh/hallpass && cd hallpass
+helm install hallpass deploy/helm/hallpass --namespace hallpass --create-namespace \
+  --set apiKey.value=change-me
+helm test hallpass -n hallpass
+```
+
+Real connections go under `config.connections` in your values file, exactly as in `hallpass.yaml`.
+Credentials stay references: an `env:NAME` maps to a Secret through `extraEnv`, a `file:/path` to a
+Secret mounted with `extraVolumes` and `extraVolumeMounts`, and the API key comes from a Secret you
+own with `apiKey.existingSecret`. To let hallpass answer questions about the cluster it runs in, set
+`rbac.subjectAccessReview.create=true`, which grants its ServiceAccount the one permission it needs.
+The chart's [README](deploy/helm/hallpass/README.md) lists every value.
+
 ## Testing
 
 ```sh
 go test -race ./...                                   # unit tests against fake upstreams
 test/kind/run.sh                                      # kubernetes end to end on a kind cluster
+test/kind/helm.sh                                     # the Helm chart on a kind cluster
 go test -tags differential ./test/differential/      # Argo CD evaluator vs the argocd CLI
 HALLPASS_LIVE_CASES=$PWD/cases.yaml go test -tags live ./test/live/   # real systems, opt-in
 ```
