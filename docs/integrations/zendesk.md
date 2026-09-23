@@ -44,19 +44,20 @@ Use an administrator: an agent credential cannot read tickets outside its own ti
 ### Identity
 
 `GET /api/v2/users/search?query=email:<email>`. The search matches loosely, so only a record whose
-`email` equals the address (ignoring case) is the user; none is `user_not_found`, two are
-`user_ambiguous`. A deleted user (`active: false`) or a suspended one is denied every action. The
+`email` equals the address (ignoring case) is the user; when no primary email matches, each result's
+`GET /api/v2/users/{id}/identities` is read and a secondary `email` identity equal to the address
+counts. None is `user_not_found`, two are `user_ambiguous`. A deleted user (`active: false`) or a suspended one is denied every action. The
 identity carries the role, `role_type`, `custom_role_id`, `ticket_restriction`,
 `only_private_comments` and the default `organization_id`; for agents and administrators the
-identity's groups are the ids from `GET /api/v2/users/{id}/group_memberships`. Groups sent by the
-caller are ignored.
+identity's groups are the ids from `GET /api/v2/users/{id}/group_memberships` (agents only:
+administrators see every ticket). Groups sent by the caller are ignored.
 
 ### Grants
 
 | User | Source of the grants |
 |---|---|
-| `role: admin` | may do everything; closed tickets still cannot be edited |
-| `role: agent` with `custom_role_id` | the role's `configuration` from `GET /api/v2/custom_roles` (Enterprise; cached five minutes) |
+| `role: admin` | may do everything; closed tickets still take no comment, merge or property change |
+| `role: agent` with `custom_role_id` | the role's `configuration` from `GET /api/v2/custom_roles` (Enterprise; cached five minutes, refetched once when the id is unknown) |
 | `role: agent`, `role_type: 1` (light agent), no custom role | sees tickets per `ticket_restriction`, comments privately, edits only tickets they requested |
 | `role: agent`, no custom role | `ticket_restriction` on the profile (`null` all, `groups`, `organization`, `assigned`); `only_private_comments`; settings the plan does not expose answer `unsupported` |
 | `role: agent`, `role_type` 2 or 3 (chat agent, contributor), no custom role | `unsupported` |
@@ -66,7 +67,7 @@ caller are ignored.
 
 | Resource | Meaning |
 |---|---|
-| `ticket:<id>` | a ticket, by numeric id |
+| `ticket:<id>` | a ticket, by numeric id (plain decimal, no leading zero) |
 | `organization:<id>` | an organization |
 | `user:<id>` | a user profile |
 | `account` | the account, for settings that are not about one object |
@@ -76,10 +77,14 @@ caller are ignored.
 | Action | Resource | Decided by |
 |---|---|---|
 | `ticket.view` | `ticket:` | ticket access covers the ticket (below) |
-| `ticket.edit` | `ticket:` | ticket access, `status != closed` (or `modify_closed_tickets`), `ticket_editing`; light agents only as requester; end users never |
+| `ticket.edit` | `ticket:` | ticket access, `ticket_editing`; light agents only as requester; end users never |
 | `ticket.comment_public` | `ticket:` | ticket access, `ticket_comment_access: public` / `only_private_comments: false`; light agents never; end users on their own tickets |
 | `ticket.merge` | `ticket:` | ticket access and `ticket_merge` |
-| `ticket.delete` | `ticket:` | ticket access and `ticket_deletion` |
+| `ticket.delete` | `ticket:` | ticket access and `ticket_deletion`; closed tickets included |
+
+A **closed** ticket takes no comment, merge or property change from anyone, administrators
+included; Zendesk creates a follow-up instead. The one exception is `ticket.edit` for a custom role
+with `modify_closed_tickets`.
 | `organization.edit` | `organization:` | the organization exists and `organization_editing` |
 | `user.edit` | `user:` | administrators edit anyone; anyone edits their own profile; end-user profiles per `end_user_profile_access` (`full`/`edit`, `edit-within-org` compares default organizations, `readonly`); other team members only by administrators |
 | `macro.manage` | `account` | `macro_access: full` (shared macros; `manage-group` and `manage-personal` are denied) |
@@ -135,6 +140,8 @@ account. Marked `UNVERIFIED` in the code:
 - Whether a ticket outside hallpass's own user's ticket access answers 403 or 404 (both answer
   `resource_not_visible`).
 - Whether a light agent's `ticket_restriction` is `null` when the profile shows all tickets.
+- Whether administrators may change a closed ticket's properties without `modify_closed_tickets`
+  (denied here).
 
 ## Test
 

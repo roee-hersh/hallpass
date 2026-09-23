@@ -47,8 +47,9 @@ func (Integration) Actions() []catalog.Action {
 	return out
 }
 
-// idRe is a Zendesk numeric id.
-var idRe = regexp.MustCompile(`^[0-9]{1,20}$`)
+// idRe is a Zendesk numeric id: decimal digits without a leading zero, so
+// the id compares equal to the ids Zendesk returns.
+var idRe = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 
 func invalid(format string, args ...any) error {
 	return integration.Errorf(integration.CodeInvalidRequest, format, args...)
@@ -80,7 +81,7 @@ func parseTarget(actionName string, r catalog.Resource) (target, error) {
 	}
 	id := strings.TrimSpace(r.ID)
 	if !idRe.MatchString(id) {
-		return target{}, invalid("%s: id must be a numeric Zendesk id", r.Type)
+		return target{}, invalid("%s: id must be a positive Zendesk id in plain decimal", r.Type)
 	}
 	return target{action: a, id: id}, nil
 }

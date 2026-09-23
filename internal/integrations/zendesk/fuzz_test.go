@@ -1,6 +1,7 @@
 package zendesk
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/roee-hersh/hallpass/internal/catalog"
@@ -40,10 +41,9 @@ func FuzzParseTarget(f *testing.F) {
 		if !idRe.MatchString(tg.id) {
 			t.Fatalf("unvalidated id %q from %q", tg.id, resource)
 		}
-		for _, r := range tg.id {
-			if r < '0' || r > '9' {
-				t.Fatalf("non-digit in id %q", tg.id)
-			}
+		n, err := strconv.ParseInt(tg.id, 10, 64)
+		if err != nil || n <= 0 || strconv.FormatInt(n, 10) != tg.id {
+			t.Fatalf("id %q is not a canonical positive int64", tg.id)
 		}
 	})
 }

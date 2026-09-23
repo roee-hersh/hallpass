@@ -18,9 +18,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -78,9 +78,9 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		}
 		return strings.TrimSpace(t), nil
 	}
-	c := &Connection{now: d.Now}
-	if c.now == nil {
-		c.now = time.Now
+	c := &Connection{roles: cache.New[string, map[int64]customRole](1)}
+	if d.Now != nil {
+		c.roles.SetClock(d.Now)
 	}
 	client := &httpx.Client{HTTP: hc, Base: base, Logger: d.Logger}
 	switch s.Get("auth_mode") {
@@ -102,11 +102,8 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 // Connection is one Zendesk account.
 type Connection struct {
 	api *httpx.Client
-	now func() time.Time
-
-	mu           sync.Mutex
-	roles        map[int64]customRole
-	rolesFetched time.Time
+	// roles holds the account's custom roles under one key for rolesTTL.
+	roles *cache.TTL[string, map[int64]customRole]
 }
 
 // --- API transport ----------------------------------------------------------
@@ -175,10 +172,25 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	if err := c.getJSON(ctx, "/api/v2/users/search", url.Values{"query": {"email:" + email}}, &body); err != nil {
 		return integration.Identity{}, classify(err, "search users")
 	}
-	var matches []zdUser
+	var matches, loose []zdUser
 	for _, usr := range body.Users {
 		if strings.EqualFold(usr.Email, email) {
 			matches = append(matches, usr)
+		} else {
+			loose = append(loose, usr)
+		}
+	}
+	// The search also finds users whose secondary email identity is the
+	// address; their primary email differs, so their identities decide.
+	if len(matches) == 0 {
+		for _, usr := range loose {
+			ok, err := c.hasEmailIdentity(ctx, usr.ID, email)
+			if err != nil {
+				return integration.Identity{}, classify(err, "list a user's identities")
+			}
+			if ok {
+				matches = append(matches, usr)
+			}
 		}
 	}
 	switch len(matches) {
@@ -212,7 +224,8 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	if usr.OrganizationID != nil && *usr.OrganizationID != 0 {
 		id.Attrs["organization_id"] = strconv.FormatInt(*usr.OrganizationID, 10)
 	}
-	if usr.Role == roleAgent || usr.Role == roleAdmin {
+	// Administrators see every ticket, so only agents' groups matter.
+	if usr.Role == roleAgent {
 		groups, err := c.groupMemberships(ctx, usr.ID)
 		if err != nil {
 			return integration.Identity{}, classify(err, "list the agent's groups")
@@ -220,6 +233,45 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 		id.Groups = groups
 	}
 	return id, nil
+}
+
+// hasEmailIdentity reports whether one of the user's identities is the
+// email address, following next_page links that stay under the API base.
+func (c *Connection) hasEmailIdentity(ctx context.Context, userID int64, email string) (bool, error) {
+	found := false
+	req := &httpx.Request{Path: "/api/v2/users/" + strconv.FormatInt(userID, 10) + "/identities"}
+	err := c.api.Paginate(ctx, req, func(resp *httpx.Response) (*httpx.Request, error) {
+		var page struct {
+			Identities []struct {
+				Type  string `json:"type"`
+				Value string `json:"value"`
+			} `json:"identities"`
+			NextPage string `json:"next_page"`
+		}
+		if err := resp.JSON(&page); err != nil {
+			return nil, integration.Wrap(integration.CodeUpstreamError, err, "Zendesk returned an unreadable page")
+		}
+		for _, id := range page.Identities {
+			if id.Type == "email" && strings.EqualFold(id.Value, email) {
+				found = true
+				return nil, nil
+			}
+		}
+		return c.nextPage(page.NextPage)
+	})
+	return found, err
+}
+
+// nextPage turns a body-carried next_page link into the next request, or
+// refuses one that leaves the API (the credential would travel with it).
+func (c *Connection) nextPage(link string) (*httpx.Request, error) {
+	if link == "" {
+		return nil, nil
+	}
+	if !c.api.Within(link) {
+		return nil, integration.Errorf(integration.CodeUpstreamError, "Zendesk sent a next page outside its API")
+	}
+	return &httpx.Request{Path: link}, nil
 }
 
 func boolAttr(b *bool) string {
@@ -249,13 +301,7 @@ func (c *Connection) groupMemberships(ctx context.Context, userID int64) ([]stri
 				out = append(out, strconv.FormatInt(m.GroupID, 10))
 			}
 		}
-		if page.NextPage == "" {
-			return nil, nil
-		}
-		if !c.api.Within(page.NextPage) {
-			return nil, integration.Errorf(integration.CodeUpstreamError, "Zendesk sent a next page outside its API")
-		}
-		return &httpx.Request{Path: page.NextPage}, nil
+		return c.nextPage(page.NextPage)
 	})
 	return out, err
 }
@@ -283,30 +329,27 @@ type customRole struct {
 	} `json:"configuration"`
 }
 
-// customRoles lists the account's custom roles, cached for rolesTTL. The
-// list is readable by any agent; a single role is not.
-func (c *Connection) customRoles(ctx context.Context) (map[int64]customRole, error) {
-	c.mu.Lock()
-	if c.roles != nil && c.now().Sub(c.rolesFetched) < rolesTTL {
-		roles := c.roles
-		c.mu.Unlock()
-		return roles, nil
+// customRoles lists the account's custom roles, cached for rolesTTL with
+// concurrent first callers sharing one fetch. The list is readable by any
+// agent; a single role is not. With refresh the cache is bypassed, for a
+// role id created after the last fetch.
+func (c *Connection) customRoles(ctx context.Context, refresh bool) (map[int64]customRole, error) {
+	if refresh {
+		c.roles.Delete("roles")
 	}
-	c.mu.Unlock()
-	var body struct {
-		Roles []customRole `json:"custom_roles"`
-	}
-	if err := c.getJSON(ctx, "/api/v2/custom_roles", nil, &body); err != nil {
-		return nil, err
-	}
-	roles := map[int64]customRole{}
-	for _, r := range body.Roles {
-		roles[r.ID] = r
-	}
-	c.mu.Lock()
-	c.roles, c.rolesFetched = roles, c.now()
-	c.mu.Unlock()
-	return roles, nil
+	return c.roles.Do(ctx, "roles", func(ctx context.Context) (map[int64]customRole, time.Duration, error) {
+		var body struct {
+			Roles []customRole `json:"custom_roles"`
+		}
+		if err := c.getJSON(ctx, "/api/v2/custom_roles", nil, &body); err != nil {
+			return nil, 0, err
+		}
+		roles := make(map[int64]customRole, len(body.Roles))
+		for _, r := range body.Roles {
+			roles[r.ID] = r
+		}
+		return roles, rolesTTL, nil
+	})
 }
 
 // grants is what the user may do, from the role, the custom role or the
@@ -346,14 +389,20 @@ func (c *Connection) grantsFor(ctx context.Context, id integration.Identity) (gr
 		g.light = true
 	}
 	if crid := id.Attr("custom_role_id"); crid != "" {
-		roles, err := c.customRoles(ctx)
-		if err != nil {
-			return g, classify(err, "list the custom roles")
-		}
 		rid, _ := strconv.ParseInt(crid, 10, 64)
-		role, ok := roles[rid]
-		if !ok {
-			return g, integration.Errorf(integration.CodeResourceNotVisible, "custom role %s of %s is not among the account's custom roles", crid, id.Display)
+		var role customRole
+		for _, refresh := range []bool{false, true} {
+			roles, err := c.customRoles(ctx, refresh)
+			if err != nil {
+				return g, classify(err, "list the custom roles")
+			}
+			var ok bool
+			if role, ok = roles[rid]; ok {
+				break
+			}
+			if refresh {
+				return g, integration.Errorf(integration.CodeResourceNotVisible, "custom role %s of %s is not among the account's custom roles", crid, id.Display)
+			}
 		}
 		cfg := role.Configuration
 		g.roleName = "custom role " + role.Name
@@ -513,7 +562,7 @@ func (c *Connection) checkUser(ctx context.Context, t target, g grants, id integ
 		if t.id == id.ID {
 			return integration.Allowed("%s may edit their own profile", who), nil
 		}
-		return integration.Denied("%s is a %s and only administrators edit other team members", body.User.Role, who), nil
+		return integration.Denied("%s is a team member (%s) and only administrators edit other team members", t, body.User.Role), nil
 	}
 	if g.endUser {
 		if t.id == id.ID {
@@ -569,10 +618,22 @@ func (c *Connection) checkTicket(ctx context.Context, t target, g grants, id int
 		return readError(err, t)
 	}
 	tk := body.Ticket
-	if g.admin {
-		if t.action.name == "ticket.edit" && tk.Status == "closed" {
-			return integration.Denied("%s is closed; closed tickets cannot be edited", t), nil
+	// Closed tickets take no updates from anyone: no comment, no merge, no
+	// property change; a follow-up ticket is created instead. Deletion
+	// stays possible. Custom roles may carry modify_closed_tickets for
+	// property changes. UNVERIFIED: whether administrators may modify
+	// closed tickets without that setting; they are denied here.
+	if tk.Status == "closed" && t.action.name != "ticket.view" && t.action.name != "ticket.delete" {
+		if t.action.name == "ticket.edit" && g.modifyClosed != nil && *g.modifyClosed {
+			access, err := c.canSee(ctx, g, id, tk)
+			if err != nil || access.Code != integration.CodeAllowed {
+				return access, err
+			}
+			return integration.Allowed("%s (%s) may modify closed tickets and can see %s (%s)", who, g.roleName, t, access.Text), nil
 		}
+		return integration.Denied("%s is closed; closed tickets take no comments, merges or property changes", t), nil
+	}
+	if g.admin {
 		return integration.Allowed("%s is an administrator, who may %s", who, t.action.desc), nil
 	}
 	// Access to the ticket.
@@ -588,12 +649,6 @@ func (c *Connection) checkTicket(ctx context.Context, t target, g grants, id int
 	case "ticket.view":
 		return access, nil
 	case "ticket.edit":
-		if tk.Status == "closed" {
-			if g.modifyClosed != nil && *g.modifyClosed {
-				return integration.Allowed("%s (%s) may modify closed tickets", who, g.roleName), nil
-			}
-			return integration.Denied("%s is closed and %s (%s) may not modify closed tickets", t, who, g.roleName), nil
-		}
 		if g.endUser {
 			return integration.Denied("%s is an end user and cannot change ticket properties", who), nil
 		}
@@ -612,7 +667,7 @@ func (c *Connection) checkTicket(ctx context.Context, t target, g grants, id int
 		return integration.Denied("%s (%s) may not change ticket properties", who, g.roleName), nil
 	case "ticket.comment_public":
 		if g.endUser {
-			return integration.Allowed("%s requested %s and may comment on it", who, t), nil
+			return integration.Allowed("%s may comment on %s: %s", who, t, access.Text), nil
 		}
 		if g.light {
 			return integration.Denied("%s is a light agent, whose comments are private", who), nil

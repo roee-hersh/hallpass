@@ -63,6 +63,7 @@ type fakeUser struct {
 	onlyPrivateComments *bool
 	orgID               *int64
 	groups              []int64
+	identities          []string // secondary email identities
 }
 
 func ip(i int) *int       { return &i }
@@ -120,6 +121,8 @@ func newFake(t *testing.T) *fake {
 			{id: suspID, email: "susp@example.com", role: roleAgent, active: true, suspended: true},
 			// Matches an email: search loosely; must not count.
 			{id: 99, email: "dana@example.com.au", role: roleAdmin, active: true},
+			// Found through a secondary identity.
+			{id: 30, email: "alice@corp.example", role: roleAdmin, active: true, identities: []string{"alice@example.com"}},
 		},
 		roles: map[int64]map[string]any{
 			roleTier1:  cfg(map[string]any{"ticket_access": "within-groups", "ticket_merge": true, "macro_access": "manage-personal", "view_access": "full", "end_user_profile_access": "full"}),
@@ -222,6 +225,12 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 		for _, u := range f.users {
 			if strings.Contains(u.email, needle) {
 				users = append(users, f.userJSON(u))
+				continue
+			}
+			for _, alt := range u.identities {
+				if alt == needle {
+					users = append(users, f.userJSON(u))
+				}
 			}
 		}
 		if needle == "dup@example.com" {
@@ -231,6 +240,20 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 			users = []map[string]any{}
 		}
 		write(w, map[string]any{"users": users, "count": len(users), "next_page": nil, "previous_page": nil})
+	case strings.HasPrefix(p, "/api/v2/users/") && strings.HasSuffix(p, "/identities"):
+		id, _ := seg("/api/v2/users/")
+		ids := []map[string]any{}
+		for _, u := range f.users {
+			if u.id != id {
+				continue
+			}
+			ids = append(ids, map[string]any{"id": id * 100, "user_id": id, "type": "email", "value": u.email, "primary": true, "verified": true})
+			for i, alt := range u.identities {
+				ids = append(ids, map[string]any{"id": id*100 + int64(i) + 1, "user_id": id, "type": "email", "value": alt, "primary": false, "verified": true})
+			}
+			ids = append(ids, map[string]any{"id": id*100 + 50, "user_id": id, "type": "phone_number", "value": itest.Canary, "primary": false})
+		}
+		write(w, map[string]any{"identities": ids, "next_page": nil, "previous_page": nil, "count": len(ids)})
 	case strings.HasPrefix(p, "/api/v2/users/") && strings.HasSuffix(p, "/group_memberships"):
 		id, _ := seg("/api/v2/users/")
 		var all []map[string]any
@@ -407,7 +430,7 @@ func TestAction_ticket_edit_deny(t *testing.T) {
 	expect(t, check(t, c, bob, "ticket.edit", "ticket:2"), integration.CodeDenied, "may not change ticket properties")
 	// Closed tickets, even for administrators.
 	expect(t, check(t, c, admin, "ticket.edit", "ticket:3"), integration.CodeDenied, "closed")
-	expect(t, check(t, c, dana, "ticket.edit", "ticket:3"), integration.CodeDenied, "may not modify closed tickets")
+	expect(t, check(t, c, dana, "ticket.edit", "ticket:3"), integration.CodeDenied, "closed")
 	// Light agents unless requester; end users never.
 	expect(t, check(t, c, lite, "ticket.edit", "ticket:1"), integration.CodeDenied, "light agent")
 	expect(t, check(t, c, endUsr, "ticket.edit", "ticket:1"), integration.CodeDenied, "end user")
@@ -419,7 +442,24 @@ func TestModifyClosedTickets(t *testing.T) {
 	f.mu.Lock()
 	f.roles[roleTier1]["modify_closed_tickets"] = true
 	f.mu.Unlock()
-	expect(t, check(t, c, dana, "ticket.edit", "ticket:3"), integration.CodeAllowed, "closed tickets")
+	expect(t, check(t, c, dana, "ticket.edit", "ticket:3"), integration.CodeAllowed, "modify closed tickets")
+	// The setting covers property changes only, and only visible tickets.
+	expect(t, check(t, c, dana, "ticket.comment_public", "ticket:3"), integration.CodeDenied, "closed")
+	f.mu.Lock()
+	f.tickets[8] = fakeTicket{status: "closed", group: i64(groupB)}
+	f.mu.Unlock()
+	expect(t, check(t, c, dana, "ticket.edit", "ticket:8"), integration.CodeDenied, "groups only")
+}
+
+func TestClosedTicketsTakeNoUpdates(t *testing.T) {
+	_, _, c := setup(t)
+	for _, a := range []string{"ticket.edit", "ticket.comment_public", "ticket.merge"} {
+		expect(t, check(t, c, admin, a, "ticket:3"), integration.CodeDenied, "closed")
+		expect(t, check(t, c, dana, a, "ticket:3"), integration.CodeDenied, "closed")
+	}
+	expect(t, check(t, c, endUsr, "ticket.comment_public", "ticket:3"), integration.CodeDenied, "closed")
+	expect(t, check(t, c, admin, "ticket.view", "ticket:3"), integration.CodeAllowed, "")
+	expect(t, check(t, c, admin, "ticket.delete", "ticket:3"), integration.CodeAllowed, "")
 }
 func TestAction_ticket_comment_public_allow(t *testing.T) {
 	_, _, c := setup(t)
@@ -546,6 +586,18 @@ func TestIdentity(t *testing.T) {
 	expect(t, check(t, c, integration.User{Email: "susp@example.com"}, "ticket.view", "ticket:1"), integration.CodeDenied, "suspended")
 	// The loose match by suffix does not resolve to the admin.
 	expect(t, check(t, c, dana, "account.admin", "account"), integration.CodeDenied, "")
+	// A secondary email identity finds its user.
+	expect(t, check(t, c, integration.User{Email: "alice@example.com"}, "account.admin", "account"), integration.CodeAllowed, "alice@example.com is an administrator")
+}
+
+func TestAdminsSkipGroupListing(t *testing.T) {
+	srv, _, c := setup(t)
+	check(t, c, admin, "ticket.view", "ticket:1")
+	for _, call := range srv.Calls() {
+		if strings.HasSuffix(call.Path, "/group_memberships") {
+			t.Errorf("groups listed for an administrator: %s", call.Path)
+		}
+	}
 }
 
 func TestIdentityAttrs(t *testing.T) {
@@ -630,9 +682,18 @@ func TestRolesAreCached(t *testing.T) {
 	check(t, c, dana, "ticket.view", "ticket:1")
 	check(t, c, bob, "ticket.view", "ticket:2")
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.rolesGot != 1 {
 		t.Errorf("custom_roles fetched %d times, want 1", f.rolesGot)
+	}
+	// A role created after the fetch is found by one refetch.
+	f.roles[900] = map[string]any{"ticket_access": "all", "ticket_editing": true}
+	f.users = append(f.users, fakeUser{id: 70, email: "new@example.com", role: roleAgent, roleType: ip(0), customRole: i64(900), active: true})
+	f.mu.Unlock()
+	expect(t, check(t, c, integration.User{Email: "new@example.com"}, "ticket.edit", "ticket:1"), integration.CodeAllowed, "role-900")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rolesGot != 2 {
+		t.Errorf("custom_roles fetched %d times, want 2", f.rolesGot)
 	}
 }
 
@@ -650,7 +711,8 @@ func TestInvalidRequests(t *testing.T) {
 	for _, tc := range [][2]string{
 		{"ticket.view", "ticket:abc"}, {"ticket.view", "ticket:"}, {"ticket.view", "organization:1"},
 		{"ticket.view", "ticket:1?x=1"}, {"account.admin", "account:1"},
-		{"ticket.view", "ticket:1/2"}, {"ticket.view", "ticket:-1"},
+		{"ticket.view", "ticket:1/2"}, {"ticket.view", "ticket:-1"}, {"ticket.view", "ticket:012"}, {"ticket.view", "ticket:0"},
+		{"ticket.view", "ticket:99999999999999999999"},
 	} {
 		d := check(t, c, admin, tc[0], tc[1])
 		if d.Code != integration.CodeInvalidRequest {
