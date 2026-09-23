@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -62,7 +63,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		base = defaultURL
 	}
 	cred := s.Secret("credential")
-	c := &Connection{settings: s}
+	c := &Connection{}
 	c.api = &httpx.Client{HTTP: hc, Base: base, Logger: d.Logger, Auth: func(_ context.Context, r *http.Request) error {
 		t, err := cred.GetString()
 		if err != nil {
@@ -80,8 +81,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 
 // Connection is one PagerDuty account.
 type Connection struct {
-	settings *integration.Settings
-	api      *httpx.Client
+	api *httpx.Client
 }
 
 // --- API transport ----------------------------------------------------------
@@ -121,14 +121,8 @@ func codeOr(code, def string) string {
 }
 
 func (c *Connection) getJSON(ctx context.Context, path string, q url.Values, out any) error {
-	resp, err := c.api.Do(ctx, &httpx.Request{Method: http.MethodGet, Path: path, Query: q})
-	if err != nil {
-		return err
-	}
-	if err := resp.JSON(out); err != nil {
-		return integration.Wrap(integration.CodeUpstreamError, err, "PagerDuty returned an unreadable response")
-	}
-	return nil
+	_, err := c.api.GetJSON(ctx, path, q, out)
+	return err
 }
 
 // --- identity ---------------------------------------------------------------
@@ -216,20 +210,21 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		return integration.Unsupported("%s has base role %q, which hallpass does not know", r.Identity.Display, role), nil
 	}
 	who := r.Identity.Display
-	switch t.action.need {
-	case needAccountAdmin:
+	if t.action.need == needAccountAdmin {
 		if role == roleOwner || role == roleAdmin {
 			return integration.Allowed("%s is a %s", who, roleName(role)), nil
 		}
 		return integration.Denied("%s is a %s, not an account owner or global admin", who, roleName(role)), nil
-	case needTeamMember:
-		if err := c.exists(ctx, "/teams/"+httpx.PathEscape(t.id), t); err != nil {
-			return decisionFor(err, t)
-		}
-		for _, g := range r.Identity.Groups {
-			if g == t.id {
-				return integration.Allowed("%s is a member of %s", who, t), nil
-			}
+	}
+	// The object is read first, whatever the role: a deleted or invisible
+	// id is unknown, never an allow.
+	teams, err := c.objectTeams(ctx, t)
+	if err != nil {
+		return decisionFor(err, t)
+	}
+	if t.action.need == needTeamMember {
+		if slices.Contains(r.Identity.Groups, t.id) {
+			return integration.Allowed("%s is a member of %s", who, t), nil
 		}
 		return integration.Denied("%s is not a member of %s", who, t), nil
 	}
@@ -246,25 +241,37 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	case role == roleLimitedUser && t.action.need == needRespond:
 		return integration.Allowed("%s has the Responder base role, which may %s anywhere", who, t.action.desc), nil
 	}
-	// Everything else depends on a team role on the object's teams.
-	teams, err := c.objectTeams(ctx, t)
-	if err != nil {
-		return decisionFor(err, t)
-	}
-	if len(teams) == 0 {
-		if role == roleLimitedUser && t.action.need == needMaintenance {
-			return integration.Unsupported("%s has the Responder base role and %s belongs to no team; whether a Responder may set maintenance windows account-wide is not documented", who, t), nil
+	// Everything else depends on a team role on the object's teams. The
+	// user record lists the user's teams, so only those are read.
+	var mine []string
+	for _, team := range teams {
+		if slices.Contains(r.Identity.Groups, team) {
+			mine = append(mine, team)
 		}
-		return integration.Denied("%s has the %s base role and %s belongs to no team that could grant more", who, roleName(role), t), nil
+	}
+	if len(teams) == 0 || len(mine) == 0 {
+		if role == roleLimitedUser && t.action.need == needMaintenance {
+			return integration.Unsupported("%s has the Responder base role and no team role on %s; whether a Responder may set maintenance windows account-wide is not documented", who, t), nil
+		}
+		if len(teams) == 0 {
+			return integration.Denied("%s has the %s base role and %s belongs to no team that could grant more", who, roleName(role), t), nil
+		}
+		return integration.Denied("%s has the %s base role and is on none of the teams of %s", who, roleName(role), t), nil
 	}
 	best := ""
-	for _, team := range teams {
+	for _, team := range mine {
 		tr, err := c.teamRole(ctx, team, r.Identity.ID)
 		if err != nil {
-			return decisionFor(err, t)
+			if httpx.Status(err) == 404 {
+				return integration.UnknownDecision(integration.CodeResourceNotVisible, "team %s of %s does not exist or hallpass cannot see it", team, t), nil
+			}
+			return integration.Decision{}, classify(err, "read the members of team "+team)
 		}
 		if teamRoleRank(tr) > teamRoleRank(best) {
 			best = tr
+		}
+		if best == teamRoleManager {
+			break
 		}
 	}
 	switch t.action.need {
@@ -296,7 +303,7 @@ func decisionFor(err error, t target) (integration.Decision, error) {
 }
 
 // exists reads an object without keeping it.
-func (c *Connection) exists(ctx context.Context, path string, t target) error {
+func (c *Connection) exists(ctx context.Context, path string) error {
 	var out map[string]any
 	return c.getJSON(ctx, path, nil, &out)
 }
@@ -321,6 +328,7 @@ func (c *Connection) objectTeams(ctx context.Context, t target) ([]string, error
 				Teams   []reference `json:"teams"`
 				Service struct {
 					ID    string      `json:"id"`
+					Type  string      `json:"type"`
 					Teams []reference `json:"teams"`
 				} `json:"service"`
 			} `json:"incident"`
@@ -330,8 +338,8 @@ func (c *Connection) objectTeams(ctx context.Context, t target) ([]string, error
 		}
 		add(body.Incident.Teams)
 		add(body.Incident.Service.Teams)
-		if len(body.Incident.Service.Teams) == 0 && body.Incident.Service.ID != "" && len(body.Incident.Teams) == 0 {
-			// The service was not expanded; read it.
+		if body.Incident.Service.ID != "" && body.Incident.Service.Type != "service" {
+			// The service came as a reference, not expanded; read it.
 			var svc struct {
 				Service struct {
 					Teams []reference `json:"teams"`
@@ -373,7 +381,7 @@ func (c *Connection) objectTeams(ctx context.Context, t target) ([]string, error
 		}
 		add(body.Schedule.Teams)
 	case "team":
-		if err := c.exists(ctx, "/teams/"+httpx.PathEscape(t.id), t); err != nil {
+		if err := c.exists(ctx, "/teams/"+httpx.PathEscape(t.id)); err != nil {
 			return nil, err
 		}
 		out = []string{t.id}

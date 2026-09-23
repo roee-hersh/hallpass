@@ -74,9 +74,12 @@ The base role is read from the user record (API names, web UI names in brackets)
 | `observer`, `restricted_access` | only through a team role | only through a team role |
 | `read_only_user`, `read_only_limited_user` (Stakeholders) | never | never |
 
-When the base role does not settle it, the object's teams are read (`teams[]` of the service,
-escalation policy or schedule; for an incident its own `teams[]` and its service's, with
-`include[]=services`) and the user's role on each team from `GET /teams/{id}/members`, every page.
+The object is always read first, so a deleted or invisible id is `unknown` whatever the role. When
+the base role does not settle it, the object's teams (`teams[]` of the service, escalation policy or
+schedule; for an incident its own `teams[]` and its service's, with `include[]=services`, or a
+separate service read when it comes back as a reference) are intersected with the teams on the
+user's record, and the user's role on each of those is read from `GET /teams/{id}/members`, every
+page, stopping at the first manager role.
 A team `responder` or `manager` may act on the team's incidents, create overrides and set
 maintenance windows; a team `manager` may also change the team's configuration; a team `observer`
 may not act. An object with no team, or one whose teams give the user no role, is denied.
@@ -96,7 +99,7 @@ exists).
 | a base role hallpass does not know | unknown (`unsupported`) |
 | no user with the email | deny (`user_not_found`) |
 | several users | unknown (`user_ambiguous`) |
-| the object answers 404 (error 2100) | unknown (`resource_not_visible`) |
+| the object, or one of its teams, answers 404 (error 2100) | unknown (`resource_not_visible`) |
 | 401, 403 (error 2010) | unknown (`credential_rejected`) |
 | 402 (the account lacks an ability) | unknown (`unsupported`) |
 | 429, 5xx, timeout | unknown (`upstream_rate_limited` / `upstream_error` / `upstream_timeout`) |

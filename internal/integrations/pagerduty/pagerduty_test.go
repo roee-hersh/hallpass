@@ -42,6 +42,10 @@ type fake struct {
 	abilities []string
 	status    int
 	pageSize  int
+	// noExpand makes incidents return their service as a bare reference.
+	noExpand bool
+	// incidentTeams gives an incident teams of its own.
+	incidentTeams map[string][]string
 }
 
 func newFake(t *testing.T) *fake {
@@ -168,8 +172,8 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 			pdErr(w, 404, 2100)
 			return
 		}
-		inc := map[string]any{"id": id, "type": "incident", "status": "triggered", "title": itest.Canary, "teams": refs(nil, "team")}
-		if q.Get("include[]") == "services" {
+		inc := map[string]any{"id": id, "type": "incident", "status": "triggered", "title": itest.Canary, "teams": refs(f.incidentTeams[id], "team")}
+		if q.Get("include[]") == "services" && !f.noExpand {
 			inc["service"] = map[string]any{"id": svc, "type": "service", "teams": refs(f.objects["services/"+svc], "team")}
 		} else {
 			inc["service"] = map[string]any{"id": svc, "type": "service_reference"}
@@ -232,7 +236,7 @@ func TestAction_incident_acknowledge_allow(t *testing.T) {
 }
 func TestAction_incident_acknowledge_deny(t *testing.T) {
 	_, _, c := setup(t)
-	expect(t, check(t, c, nobody, "incident.acknowledge", "incident:PINC1"), integration.CodeDenied, "no team role")
+	expect(t, check(t, c, nobody, "incident.acknowledge", "incident:PINC1"), integration.CodeDenied, "on none of the teams")
 	expect(t, check(t, c, stake, "incident.acknowledge", "incident:PINC1"), integration.CodeDenied, "read-only role")
 	// A team observer may not respond.
 	expect(t, check(t, c, restrict, "incident.acknowledge", "incident:PINC1"), integration.CodeDenied, "team observer")
@@ -263,7 +267,7 @@ func TestAction_service_edit_allow(t *testing.T) {
 func TestAction_service_edit_deny(t *testing.T) {
 	_, _, c := setup(t)
 	// A Responder base role does not edit configuration.
-	expect(t, check(t, c, responder, "service.edit", "service:PSVC1"), integration.CodeDenied, "no team role")
+	expect(t, check(t, c, responder, "service.edit", "service:PSVC1"), integration.CodeDenied, "on none of the teams")
 	// A team responder does not either.
 	expect(t, check(t, c, observer, "service.edit", "service:PSVC2"), integration.CodeDenied, "team responder")
 }
@@ -345,6 +349,35 @@ func TestIncidentTeamsFromService(t *testing.T) {
 	}
 }
 
+func TestIncidentServiceAsReference(t *testing.T) {
+	srv, f, c := setup(t)
+	f.mu.Lock()
+	f.noExpand = true
+	f.incidentTeams = map[string][]string{"PINC2": {"PTEAM1"}}
+	f.mu.Unlock()
+	// The incident carries PTEAM1 itself and its service PSVC2 carries
+	// PTEAM2; the observer is a manager on PTEAM1 and a responder on PTEAM2.
+	// The service must still be read although the incident has teams.
+	expect(t, check(t, c, restrict, "incident.acknowledge", "incident:PINC2"), integration.CodeDenied, "team observer")
+	read := false
+	for _, call := range srv.Calls() {
+		if call.Path == "/services/PSVC2" {
+			read = true
+		}
+	}
+	if !read {
+		t.Error("the unexpanded service was not read")
+	}
+	// A user on none of the object's teams costs no member reads.
+	n := len(srv.Calls())
+	expect(t, check(t, c, nobody, "incident.acknowledge", "incident:PINC2"), integration.CodeDenied, "on none of the teams")
+	for _, call := range srv.Calls()[n:] {
+		if strings.HasSuffix(call.Path, "/members") {
+			t.Error("member list read for a user on none of the teams")
+		}
+	}
+}
+
 func TestPaging(t *testing.T) {
 	srv, f, c := setup(t)
 	f.mu.Lock()
@@ -393,8 +426,17 @@ func TestMissingObjectsAndErrors(t *testing.T) {
 	expect(t, check(t, c, observer, "incident.acknowledge", "incident:PNOPE"), integration.CodeResourceNotVisible, "does not exist or hallpass cannot see it")
 	expect(t, check(t, c, observer, "service.edit", "service:PNOPE"), integration.CodeResourceNotVisible, "")
 	expect(t, check(t, c, observer, "team.member", "team:PNOPE"), integration.CodeResourceNotVisible, "")
-	// Account-wide roles need no object read, but the object must exist.
-	expect(t, check(t, c, manager, "service.edit", "service:PNOPE"), integration.CodeAllowed, "")
+	// Even account-wide roles are not allowed on an object hallpass cannot see.
+	expect(t, check(t, c, manager, "service.edit", "service:PNOPE"), integration.CodeResourceNotVisible, "")
+	expect(t, check(t, c, owner, "team.member", "team:PNOPE"), integration.CodeResourceNotVisible, "")
+	// A team of the object that vanished is named.
+	f.mu.Lock()
+	f.objects["services/PSVC1"] = []string{"PTEAM1", "PGONE"}
+	f.mu.Unlock()
+	expect(t, check(t, c, observer, "service.edit", "service:PSVC1"), integration.CodeAllowed, "team manager") // manager found first, PGONE never read
+	f.mu.Lock()
+	f.objects["services/PSVC1"] = []string{"PTEAM1"}
+	f.mu.Unlock()
 	f.mu.Lock()
 	f.status = 403
 	f.mu.Unlock()
