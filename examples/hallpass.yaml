@@ -60,6 +60,11 @@ connections:
   #   credential: env:VAULT_TOKEN                       # or auth_mode: approle with role_id and the secret_id as credential
   #   # token_policies: developers                      # policies the oidc role attaches at login
   #   # namespace: admin/
+  # - id: datadog-acme
+  #   integration: datadog
+  #   api_key: env:DATADOG_API_KEY
+  #   credential: env:DATADOG_APP_KEY                   # application key scoped to user_access_read, teams_read, *_read
+  #   # url: https://api.datadoghq.eu                   # EU site
   # - id: pagerduty-acme
   #   integration: pagerduty
   #   credential: env:PAGERDUTY_API_KEY                 # read-only General Access REST API key
