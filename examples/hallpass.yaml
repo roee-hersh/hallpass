@@ -59,6 +59,10 @@ connections:
   #   client_id: 66666666-7777-8888-9999-000000000000
   #   credential: env:AZURE_CLIENT_SECRET                # app registration with Reader at the root management group
   #   # microsoft365_connection: m365-corp                # resolve users through the microsoft365 connection instead of Graph
+  # - id: pagerduty-acme
+  #   integration: pagerduty
+  #   credential: env:PAGERDUTY_API_KEY                 # read-only General Access REST API key
+  #   # url: https://api.eu.pagerduty.com               # EU service region
   # - id: bitbucket-acme
   #   integration: bitbucket
   #   workspace: acme                                   # Cloud: the workspace slug
