@@ -84,8 +84,38 @@ curl -X POST localhost:8080/check \
 {"decision":"deny","reason":"denied: dana@example.com is not an admin"}
 ```
 
-To call hallpass from an AI agent, see [`examples/agent`](examples/agent): an MCP server and a
-LangChain tool that check before they act and treat `unknown` as deny.
+## Use from an AI agent
+
+Wrap any tool that acts for a person so it runs only after hallpass said `allow`. The `guarded`
+decorator lives in [`examples/agent/hallpass_client.py`](examples/agent/hallpass_client.py), one
+standard-library file you can copy into your project, and a framework's `@tool` goes straight on top:
+
+```python
+from contextvars import ContextVar
+from hallpass_client import Hallpass, guarded
+
+hp = Hallpass()  # HALLPASS_URL and HALLPASS_API_KEY from the environment
+current_user: ContextVar[str] = ContextVar("current_user")  # your app sets it per session
+
+@tool  # LangChain, Strands, MCPServer, ...
+@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user)
+def delete_issue(key: str) -> str:
+    jira.delete_issue(key)  # the agent's own credential
+    return f"deleted {key}"
+```
+
+`deny`, `unknown`, an unreachable hallpass and a malformed answer all refuse before the body runs.
+The user comes from your application, never from the tool's arguments, so the model cannot pick who
+it acts as. [docs/agents.md](docs/agents.md) explains the pattern; [`examples/agent`](examples/agent)
+has it working and tested in each framework:
+
+| Framework | Example |
+|---|---|
+| LangChain | [`langchain_tool.py`](examples/agent/langchain_tool.py) |
+| LangGraph | [`langgraph_agent.py`](examples/agent/langgraph_agent.py) |
+| Strands Agents | [`strands_tool.py`](examples/agent/strands_tool.py) |
+| Claude Agent SDK | [`claude_agent_sdk_tool.py`](examples/agent/claude_agent_sdk_tool.py) |
+| MCP, for any host (Claude Code, Claude Desktop, Cursor, ...) | [`mcp_server.py`](examples/agent/mcp_server.py) |
 
 ## API
 
