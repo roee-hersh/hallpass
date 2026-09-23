@@ -39,8 +39,8 @@ you of the other scopes.
 
 `GET /api/v2/users?filter=<email>&filter[status]=Active,Pending,Disabled`, every page. The filter is
 a substring match on name, handle and email, so only the record whose `email` equals the address
-(ignoring case) is the user; none is `user_not_found`, two are `user_ambiguous`. A `disabled` user is
-denied every action. The identity carries the user's handle and the ids of the user's roles; each
+(ignoring case) is the user; none is `user_not_found`, two are `user_ambiguous`. A `disabled` user, or one
+whose `status` is still `Pending`, is denied every action. The identity carries the user's handle and the ids of the user's roles; each
 role's permissions come from `GET /api/v2/roles/{id}/permissions`, cached for five minutes. Groups
 sent by the caller are ignored.
 
@@ -68,7 +68,7 @@ sent by the caller are ignored.
 | `logs.read` | `logs_read_data` | | org |
 | `users.manage` | `user_access_manage` | | org |
 | `apikeys.manage` | `api_keys_write` | | org |
-| `raw:<permission>` | that permission | on an asset: editor when it is the type's write permission, viewer otherwise | any |
+| `raw:<permission>` | that permission | on an asset: editor when it is one of the type's write permissions (`monitors_write`, `monitors_downtime`, `dashboards_write`, `slos_write`, `notebooks_write`), viewer otherwise | any |
 
 ### Evaluation
 
@@ -78,8 +78,9 @@ sent by the caller are ignored.
 3. The restriction policy: `GET /api/v2/restriction_policy/{type}:{id}`. When it has bindings, the
    user must appear in a binding whose relation is the one needed or higher (`viewer` < `editor`;
    type-specific relations above editor count as editor) as `user:<id>`, `role:<one of the user's
-   roles>`, `team:<a team the user is a member of>` (`GET /api/v2/team/{id}/memberships`, every
-   page) or `org:<any>`.
+   roles>`, `team:<a team the user is a member of>` (`GET /api/v2/team/{id}/memberships`, filtered
+   by the user's email and compared by id) or `org:<any>`. A policy with no `viewer` binding
+   restricts editing only: reads fall back to the permission.
 4. Without a policy, the legacy fields: a monitor's or dashboard's `restricted_roles` must include
    one of the user's roles for an edit, except that a dashboard's author (`author_handle`) may always
    edit. Reads are not restricted by `restricted_roles`.
@@ -93,12 +94,12 @@ sent by the caller are ignored.
 | a role carries the permission and `restricted_roles` includes a role of the user, or the user authored the dashboard | allow |
 | no role carries the permission | deny |
 | the asset's restriction policy or `restricted_roles` name none of the user's principals | deny |
-| disabled user | deny |
+| disabled user, or a user whose invitation is still pending | deny |
 | no user with the email | deny (`user_not_found`) |
 | several users | unknown (`user_ambiguous`) |
 | user record without `disabled` | unknown (`unsupported`) |
 | the asset, a role of the user, or a team named by the policy answers 404 | unknown (`resource_not_visible`) |
-| 401, 403 (the application key lacks the scope) | unknown (`credential_rejected`) |
+| 401, 403 (Datadog answers 403 for an invalid key as well as for a missing scope) | unknown (`credential_rejected`) |
 | 429, 5xx, timeout | unknown (`upstream_rate_limited` / `upstream_error` / `upstream_timeout`) |
 
 Error bodies are never copied into a decision text.
@@ -119,6 +120,9 @@ Marked `// UNVERIFIED:` in the code:
 
 - Whether a monitor's creator keeps edit rights under `restricted_roles` the way a dashboard's
   author does. Datadog documents roles only for monitors, so the creator is not exempted.
+- That a restriction policy without a `viewer` binding leaves viewing to the permission. The UI
+  writes an explicit `viewer` binding for the org whenever it restricts an asset, which is why
+  hallpass reads a policy without one as restricting editing only.
 
 Assumed from Datadog's documentation rather than tested live: that the write permission is still
 required when a restriction policy grants `editor` ("the limitations are applied both in the UI and

@@ -34,14 +34,14 @@ func FuzzParseTarget(f *testing.F) {
 		if len(res.Query) > 0 {
 			t.Fatalf("query slipped through %+v", res)
 		}
-		if !permissionRe.MatchString(tg.permission) {
-			t.Fatalf("unvalidated permission %q from %q", tg.permission, action)
+		if !permissionRe.MatchString(tg.permission()) {
+			t.Fatalf("unvalidated permission %q from %q", tg.permission(), action)
 		}
-		if strings.HasPrefix(action, "raw:") && tg.permission != strings.TrimPrefix(action, "raw:") {
-			t.Fatalf("raw action %q became %q", action, tg.permission)
+		if strings.HasPrefix(action, "raw:") && tg.permission() != strings.TrimPrefix(action, "raw:") {
+			t.Fatalf("raw action %q became %q", action, tg.permission())
 		}
 		if tg.typ == "org" {
-			if tg.id != "" || tg.relation != "" {
+			if tg.id != "" || tg.relation() != "" {
 				t.Fatalf("org target with id or relation: %+v", tg)
 			}
 			return
@@ -49,7 +49,7 @@ func FuzzParseTarget(f *testing.F) {
 		if _, ok := assetTypes[tg.typ]; !ok || !idRe.MatchString(tg.id) || tg.id != res.ID {
 			t.Fatalf("unvalidated asset %+v from %q", tg, resource)
 		}
-		if tg.relation != "editor" && tg.relation != "viewer" {
+		if tg.relation() != "editor" && tg.relation() != "viewer" {
 			t.Fatalf("asset target without a relation: %+v", tg)
 		}
 	})

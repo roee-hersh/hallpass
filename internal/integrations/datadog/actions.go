@@ -2,6 +2,7 @@ package datadog
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/roee-hersh/hallpass/internal/catalog"
@@ -88,25 +89,27 @@ func invalid(format string, args ...any) error {
 }
 
 // assetTypes maps a resource type to the restriction policy resource type
-// and the permission that writes it.
+// and the permissions that change it, which a restriction governs as
+// editing.
 var assetTypes = map[string]struct {
-	policyType      string
-	writePermission string
+	policyType       string
+	writePermissions []string
 }{
-	"monitor":   {"monitor", "monitors_write"},
-	"dashboard": {"dashboard", "dashboards_write"},
-	"slo":       {"slo", "slos_write"},
-	"notebook":  {"notebook", "notebooks_write"},
+	"monitor":   {"monitor", []string{"monitors_write", "monitors_downtime"}},
+	"dashboard": {"dashboard", []string{"dashboards_write"}},
+	"slo":       {"slo", []string{"slos_write"}},
+	"notebook":  {"notebook", []string{"notebooks_write"}},
 }
 
-// target is a parsed question.
+// target is a parsed question: the action (whose permission and relation
+// apply) and the asset, empty for org questions.
 type target struct {
-	action     action
-	permission string
-	relation   string
-	// typ and id name the asset; empty for org questions.
+	action  action
 	typ, id string
 }
+
+func (t target) permission() string { return t.action.permission }
+func (t target) relation() string   { return t.action.relation }
 
 // parseTarget validates the resource for the action.
 func parseTarget(actionName string, r catalog.Resource) (target, error) {
@@ -132,14 +135,14 @@ func parseTarget(actionName string, r catalog.Resource) (target, error) {
 			return target{}, err
 		}
 		t.action = action{name: actionName, desc: "hold " + p, resource: r.Type, permission: p}
-		t.permission = p
 		if r.Type != "org" {
 			// On an asset a raw permission is checked against the asset's
-			// restrictions as a write when it is the type's write
-			// permission, as a read otherwise.
-			t.relation = "viewer"
-			if p == assetTypes[r.Type].writePermission {
-				t.relation = "editor"
+			// restrictions as a change when it is one of the type's write
+			// permissions, as a read otherwise, exactly as the named
+			// action carrying that permission would be.
+			t.action.relation = "viewer"
+			if slices.Contains(assetTypes[r.Type].writePermissions, p) {
+				t.action.relation = "editor"
 			}
 		}
 		return t, nil
@@ -151,7 +154,7 @@ func parseTarget(actionName string, r catalog.Resource) (target, error) {
 	if a.resource != r.Type {
 		return target{}, invalid("action %s takes a %s: resource, not %s:", a.name, a.resource, r.Type)
 	}
-	t.action, t.permission, t.relation = a, a.permission, a.relation
+	t.action = a
 	return t, nil
 }
 

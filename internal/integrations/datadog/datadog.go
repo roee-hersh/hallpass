@@ -110,7 +110,7 @@ func classify(err error, what string) *integration.Error {
 	case 401:
 		return integration.Wrap(integration.CodeCredentialRejected, err, "Datadog rejected hallpass's API or application key")
 	case 403:
-		return integration.Wrap(integration.CodeCredentialRejected, err, "Datadog refused to %s (HTTP 403): the application key lacks the scope", what)
+		return integration.Wrap(integration.CodeCredentialRejected, err, "Datadog refused to %s (HTTP 403): the API key or application key is invalid, or the application key lacks the scope", what)
 	case 400:
 		return integration.Wrap(integration.CodeInvalidRequest, err, "Datadog rejected the request to %s (HTTP 400)", what)
 	}
@@ -157,6 +157,11 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 		}
 		var page struct {
 			Data []ddUser `json:"data"`
+			Meta struct {
+				Page struct {
+					TotalFiltered *int64 `json:"total_filtered_count"`
+				} `json:"page"`
+			} `json:"meta"`
 		}
 		q := url.Values{"filter": {email}, "filter[status]": {"Active,Pending,Disabled"}, "page[size]": {strconv.Itoa(pageSize)}, "page[number]": {strconv.Itoa(pageNo)}}
 		if err := c.getJSON(ctx, "/api/v2/users", q, &page); err != nil {
@@ -167,8 +172,8 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 				matches = append(matches, usr)
 			}
 		}
-		// The server may page smaller than asked; only an empty page ends.
-		if len(page.Data) == 0 {
+		seen := int64(pageNo*pageSize + len(page.Data))
+		if len(page.Data) == 0 || (page.Meta.Page.TotalFiltered != nil && seen >= *page.Meta.Page.TotalFiltered) {
 			break
 		}
 	}
@@ -245,6 +250,9 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	default:
 		return integration.Unsupported("Datadog did not report whether %s is disabled", who), nil
 	}
+	if r.Identity.Attr("status") == "Pending" {
+		return integration.Denied("%s was invited to Datadog but has not accepted, so cannot act", who), nil
+	}
 	// The permission: any role of the user carrying it.
 	var grantedBy string
 	for _, role := range r.Identity.Groups {
@@ -255,16 +263,16 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 			}
 			return integration.Decision{}, classify(err, "read the permissions of role "+role)
 		}
-		if names[t.permission] {
+		if names[t.permission()] {
 			grantedBy = role
 			break
 		}
 	}
 	if t.typ == "org" {
 		if grantedBy != "" {
-			return integration.Allowed("a role of %s carries %s", who, t.permission), nil
+			return integration.Allowed("a role of %s carries %s", who, t.permission()), nil
 		}
-		return integration.Denied("no role of %s carries %s", who, t.permission), nil
+		return integration.Denied("no role of %s carries %s", who, t.permission()), nil
 	}
 	// The asset exists, and its legacy restrictions.
 	asset, err := c.readAsset(ctx, t)
@@ -275,7 +283,7 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		return integration.Decision{}, classify(err, "read "+t.String())
 	}
 	if grantedBy == "" {
-		return integration.Denied("no role of %s carries %s, which %s needs", who, t.permission, t.action.desc), nil
+		return integration.Denied("no role of %s carries %s, which %s needs", who, t.permission(), t.action.desc), nil
 	}
 	// The restriction policy, then the legacy fields.
 	policy, err := c.restrictionPolicy(ctx, t)
@@ -285,18 +293,18 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	if len(policy) > 0 {
 		return c.applyPolicy(ctx, t, r.Identity, policy)
 	}
-	if t.relation == "editor" && len(asset.restrictedRoles) > 0 {
+	if t.relation() == "editor" && len(asset.restrictedRoles) > 0 {
 		for _, role := range asset.restrictedRoles {
 			if slices.Contains(r.Identity.Groups, role) {
-				return integration.Allowed("a role of %s carries %s and %s is restricted to roles that include it", who, t.permission, t), nil
+				return integration.Allowed("a role of %s carries %s and %s is restricted to roles that include it", who, t.permission(), t), nil
 			}
 		}
 		if asset.author != "" && authorIs(asset.author, r.Identity) {
-			return integration.Allowed("a role of %s carries %s and %s is the author of %s, which its restricted roles cannot exclude", who, t.permission, who, t), nil
+			return integration.Allowed("a role of %s carries %s and %s is the author of %s, which its restricted roles cannot exclude", who, t.permission(), who, t), nil
 		}
 		return integration.Denied("%s is restricted to %d role(s) that %s does not hold", t, len(asset.restrictedRoles), who), nil
 	}
-	return integration.Allowed("a role of %s carries %s and %s carries no restriction", who, t.permission, t), nil
+	return integration.Allowed("a role of %s carries %s and %s carries no restriction", who, t.permission(), t), nil
 }
 
 // authorIs matches a dashboard's author_handle or a creator email against
@@ -342,21 +350,11 @@ func (c *Connection) readAsset(ctx context.Context, t target) (assetInfo, error)
 		}
 		info.restrictedRoles, info.author = body.RestrictedRoles, body.AuthorHandle
 	case "slo":
-		var body struct {
-			Data struct {
-				ID string `json:"id"`
-			} `json:"data"`
-		}
-		if err := c.getJSON(ctx, "/api/v1/slo/"+httpx.PathEscape(t.id), nil, &body); err != nil {
+		if err := c.getJSON(ctx, "/api/v1/slo/"+httpx.PathEscape(t.id), nil, nil); err != nil {
 			return info, err
 		}
 	case "notebook":
-		var body struct {
-			Data struct {
-				ID any `json:"id"`
-			} `json:"data"`
-		}
-		if err := c.getJSON(ctx, "/api/v1/notebooks/"+httpx.PathEscape(t.id), nil, &body); err != nil {
+		if err := c.getJSON(ctx, "/api/v1/notebooks/"+httpx.PathEscape(t.id), nil, nil); err != nil {
 			return info, err
 		}
 	}
@@ -409,7 +407,13 @@ func relationRank(rel string) int {
 // user's roles or teams, or the whole org must be bound to the relation
 // needed or a higher one.
 func (c *Connection) applyPolicy(ctx context.Context, t target, id integration.Identity, policy []binding) (integration.Decision, error) {
-	need := relationRank(t.relation)
+	need := relationRank(t.relation())
+	if need == relationRank("viewer") && !slices.ContainsFunc(policy, func(b binding) bool { return b.Relation == "viewer" }) {
+		// UNVERIFIED: a policy that only restricts editing is taken to
+		// leave viewing to the permission, as the UI writes an explicit
+		// viewer binding for the org when it restricts an asset.
+		return integration.Allowed("a role of %s carries %s and the restriction policy of %s restricts editing only", id.Display, t.permission(), t), nil
+	}
 	var teams []string
 	for _, b := range policy {
 		if relationRank(b.Relation) < need {
@@ -422,14 +426,14 @@ func (c *Connection) applyPolicy(ctx context.Context, t target, id integration.I
 			}
 			switch kind {
 			case "org":
-				return integration.Allowed("the restriction policy of %s grants %s to the whole org, and a role of %s carries %s", t, b.Relation, id.Display, t.permission), nil
+				return integration.Allowed("the restriction policy of %s grants %s to the whole org, and a role of %s carries %s", t, b.Relation, id.Display, t.permission()), nil
 			case "user":
 				if pid == id.ID {
-					return integration.Allowed("the restriction policy of %s grants %s to %s, whose role carries %s", t, b.Relation, id.Display, t.permission), nil
+					return integration.Allowed("the restriction policy of %s grants %s to %s, whose role carries %s", t, b.Relation, id.Display, t.permission()), nil
 				}
 			case "role":
 				if slices.Contains(id.Groups, pid) {
-					return integration.Allowed("the restriction policy of %s grants %s to a role of %s, which carries %s", t, b.Relation, id.Display, t.permission), nil
+					return integration.Allowed("the restriction policy of %s grants %s to a role of %s, which carries %s", t, b.Relation, id.Display, t.permission()), nil
 				}
 			case "team":
 				if uuidRe.MatchString(pid) && !slices.Contains(teams, pid) {
@@ -439,7 +443,7 @@ func (c *Connection) applyPolicy(ctx context.Context, t target, id integration.I
 		}
 	}
 	for _, team := range teams {
-		member, err := c.teamMember(ctx, team, id.ID)
+		member, err := c.teamMember(ctx, team, id.ID, id.Display)
 		if err != nil {
 			if httpx.Status(err) == 404 {
 				return integration.UnknownDecision(integration.CodeResourceNotVisible, "team %s named by the restriction policy of %s does not exist or hallpass cannot see it", team, t), nil
@@ -447,14 +451,14 @@ func (c *Connection) applyPolicy(ctx context.Context, t target, id integration.I
 			return integration.Decision{}, classify(err, "read the members of team "+team)
 		}
 		if member {
-			return integration.Allowed("the restriction policy of %s grants %s to team %s, of which %s is a member, and a role carries %s", t, t.relation, team, id.Display, t.permission), nil
+			return integration.Allowed("the restriction policy of %s grants %s to team %s, of which %s is a member, and a role carries %s", t, t.relation(), team, id.Display, t.permission()), nil
 		}
 	}
-	return integration.Denied("the restriction policy of %s grants %s to none of %s's roles, teams or user", t, t.relation, id.Display), nil
+	return integration.Denied("the restriction policy of %s grants %s to none of %s's roles, teams or user", t, t.relation(), id.Display), nil
 }
 
 // teamMember reports whether the user is a member of the team.
-func (c *Connection) teamMember(ctx context.Context, team, userID string) (bool, error) {
+func (c *Connection) teamMember(ctx context.Context, team, userID, keyword string) (bool, error) {
 	for pageNo := 0; pageNo < maxTeamPages; pageNo++ {
 		var page struct {
 			Data []struct {
@@ -467,7 +471,9 @@ func (c *Connection) teamMember(ctx context.Context, team, userID string) (bool,
 				} `json:"relationships"`
 			} `json:"data"`
 		}
-		q := url.Values{"page[size]": {strconv.Itoa(pageSize)}, "page[number]": {strconv.Itoa(pageNo)}}
+		// The keyword narrows the list to the user's email or name; the id
+		// is still compared exactly.
+		q := url.Values{"page[size]": {strconv.Itoa(pageSize)}, "page[number]": {strconv.Itoa(pageNo)}, "filter[keyword]": {keyword}}
 		if err := c.getJSON(ctx, "/api/v2/team/"+httpx.PathEscape(team)+"/memberships", q, &page); err != nil {
 			return false, err
 		}

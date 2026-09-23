@@ -170,7 +170,7 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 		if q.Get("filter") == "dup@example.com" {
 			values = append(values, f.userJSON(ddFakeUser{"dup1", "dup@example.com", "d1", "Active", ptr(false), nil}), f.userJSON(ddFakeUser{"dup2", "DUP@example.com", "d2", "Active", ptr(false), nil}))
 		}
-		write(w, map[string]any{"data": page(values)})
+		write(w, map[string]any{"data": page(values), "meta": map[string]any{"page": map[string]any{"total_count": len(f.users), "total_filtered_count": len(values)}}})
 	case strings.HasPrefix(p, "/api/v2/roles/") && strings.HasSuffix(p, "/permissions"):
 		role := strings.TrimSuffix(strings.TrimPrefix(p, "/api/v2/roles/"), "/permissions")
 		perms, ok := f.rolePerms[role]
@@ -198,8 +198,22 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 			ddErr(w, 404)
 			return
 		}
+		if q.Get("filter[keyword]") == "" {
+			f.t.Error("membership listing without filter[keyword]")
+		}
 		var values []map[string]any
 		for i, uid := range members {
+			// The keyword narrows by email or name: a member whose email
+			// does not contain it is not listed.
+			var match bool
+			for _, u := range f.users {
+				if u.id == uid && strings.Contains(u.email, q.Get("filter[keyword]")) {
+					match = true
+				}
+			}
+			if !match {
+				continue
+			}
 			values = append(values, map[string]any{"id": fmt.Sprintf("TeamMembership-%s-%d", team, i), "type": "team_memberships", "attributes": map[string]any{"role": nil}, "relationships": map[string]any{"user": map[string]any{"data": map[string]any{"id": uid, "type": "users"}}}})
 		}
 		write(w, map[string]any{"data": page(values)})
@@ -303,6 +317,38 @@ func TestAction_monitor_read_allow(t *testing.T) {
 	// restricted_roles restrict editing only.
 	expect(t, check(t, c, bob, "monitor.read", "monitor:2"), integration.CodeAllowed, "")
 }
+func TestEditorOnlyPolicyLeavesViewingOpen(t *testing.T) {
+	_, _, c := setup(t)
+	// monitor 4's policy names an editor only.
+	expect(t, check(t, c, bob, "monitor.read", "monitor:4"), integration.CodeAllowed, "restricts editing only")
+	expect(t, check(t, c, bob, "monitor.edit", "monitor:4"), integration.CodeDenied, "")
+	// A viewer binding restricts viewing.
+	expect(t, check(t, c, dana, "raw:notebooks_read", "notebook:100"), integration.CodeDenied, "grants viewer to none")
+	expect(t, check(t, c, bob, "raw:notebooks_read", "notebook:100"), integration.CodeAllowed, "grants viewer to bob@example.com")
+}
+
+func TestPendingUser(t *testing.T) {
+	_, f, c := setup(t)
+	f.mu.Lock()
+	f.users = append(f.users, ddFakeUser{"aaaaaaaa-0000-0000-0000-000000000008", "pending@example.com", "pending", "Pending", ptr(false), []string{roleAdmin}})
+	f.mu.Unlock()
+	expect(t, check(t, c, integration.User{Email: "pending@example.com"}, "users.manage", "org"), integration.CodeDenied, "has not accepted")
+}
+
+func TestIdentityLookupIsOneCall(t *testing.T) {
+	srv, _, c := setup(t)
+	expect(t, check(t, c, dana, "logs.read", "org"), integration.CodeAllowed, "")
+	n := 0
+	for _, call := range srv.Calls() {
+		if call.Path == "/api/v2/users" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("user lookup took %d calls, want 1", n)
+	}
+}
+
 func TestAction_monitor_read_deny(t *testing.T) {
 	_, f, c := setup(t)
 	f.mu.Lock()
@@ -390,8 +436,10 @@ func TestRawActions(t *testing.T) {
 	expect(t, check(t, c, bob, "raw:api_keys_read", "org"), integration.CodeDenied, "")
 	// The asset's write permission is checked against its restrictions.
 	expect(t, check(t, c, dana, "raw:monitors_write", "monitor:2"), integration.CodeDenied, "restricted")
-	// Another permission on an asset is a read as far as restrictions go.
-	expect(t, check(t, c, dana, "raw:monitors_downtime", "monitor:3"), integration.CodeAllowed, "whole org")
+	// monitors_downtime changes a monitor: the same answer as monitor.mute.
+	expect(t, check(t, c, dana, "raw:monitors_downtime", "monitor:3"), integration.CodeDenied, "grants editor to none")
+	// A read permission on an asset is a read as far as restrictions go.
+	expect(t, check(t, c, dana, "raw:monitors_read", "monitor:3"), integration.CodeAllowed, "whole org")
 	n := len(srv.Calls())
 	for _, bad := range []string{"raw:", "raw:Monitors_Write", "raw:a", "raw:monitors write", "monitors_write"} {
 		if _, ok := (Integration{}).MatchAction(bad); ok {
@@ -419,17 +467,21 @@ func TestTeamMembershipPaged(t *testing.T) {
 	srv, f, c := setup(t)
 	f.mu.Lock()
 	f.pageSize = 1
-	f.teams[teamT1] = []string{bobID, rootID}
+	// A second member whose email also contains "root@example.com".
+	f.users = append(f.users, ddFakeUser{"f00tf00t-0000-0000-0000-000000000007", "notroot@example.com", "nr", "Active", ptr(false), nil})
+	f.teams[teamT1] = []string{"f00tf00t-0000-0000-0000-000000000007", rootID}
 	f.mu.Unlock()
 	expect(t, check(t, c, root, "monitor.edit", "monitor:3"), integration.CodeAllowed, "team")
 	pages := 0
 	for _, call := range srv.Calls() {
 		if strings.HasSuffix(call.Path, "/memberships") {
 			pages++
+			if call.Query.Get("filter[keyword]") != "root@example.com" {
+				t.Errorf("membership keyword %q", call.Query.Get("filter[keyword]"))
+			}
 		}
 	}
-	// Two one-member pages, then the empty page that ends the scan is not
-	// needed because root is on page two.
+	// Two one-member pages; root is on the second.
 	if pages != 2 {
 		t.Errorf("read %d membership pages, want 2", pages)
 	}
@@ -476,7 +528,7 @@ func TestMissingAssetsAndErrors(t *testing.T) {
 	f.users[0].roles = []string{roleStd}
 	f.status = 403
 	f.mu.Unlock()
-	expect(t, check(t, c, dana, "logs.read", "org"), integration.CodeCredentialRejected, "lacks the scope")
+	expect(t, check(t, c, dana, "logs.read", "org"), integration.CodeCredentialRejected, "invalid, or the application key lacks the scope")
 }
 
 func TestRejectsBadResources(t *testing.T) {
