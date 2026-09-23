@@ -59,6 +59,11 @@ connections:
   #   user: HALLPASS
   #   role: SECURITYADMIN                                # or a custom role with MANAGE GRANTS
   #   credential: file:/secrets/snowflake-hallpass.p8    # the user's RSA private key (key-pair auth)
+  # - id: datadog-acme
+  #   integration: datadog
+  #   api_key: env:DATADOG_API_KEY
+  #   credential: env:DATADOG_APP_KEY                   # application key scoped to user_access_read, teams_read, *_read
+  #   # url: https://api.datadoghq.eu                   # EU site
   # - id: pagerduty-acme
   #   integration: pagerduty
   #   credential: env:PAGERDUTY_API_KEY                 # read-only General Access REST API key
