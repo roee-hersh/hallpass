@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,5 +223,93 @@ func TestCheck(t *testing.T) {
 	}
 	if code, _, errs := capture(t, "check", "-config", writeConfig(t, "api_key: nope\n"), "-connection", "demo", "-user", "a@b", "-action", "x", "-resource", "y:1"); code != 2 || !strings.Contains(errs, "inline secret") {
 		t.Errorf("bad config: %d %q", code, errs)
+	}
+}
+
+func TestCheckServer(t *testing.T) {
+	var got struct {
+		auth, ua, body string
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/check" || r.Method != http.MethodPost {
+			http.Error(w, "wrong endpoint", 404)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		got.auth, got.ua, got.body = r.Header.Get("Authorization"), r.Header.Get("User-Agent"), string(b)
+		w.Header().Set("Content-Type", "application/json")
+		var in map[string]any
+		json.Unmarshal(b, &in)
+		switch {
+		case got.auth != "Bearer CANARY-SECRET-key":
+			w.WriteHeader(401)
+			io.WriteString(w, `{"decision":"unknown","reason":"unauthorized: missing or wrong API key"}`)
+		case in["user"] == "admin@example.com":
+			io.WriteString(w, `{"decision":"allow","reason":"allowed: admin"}`)
+		case in["user"] == "html@example.com":
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(502)
+			io.WriteString(w, "<html>bad gateway</html>")
+		case in["user"] == "weird@example.com":
+			io.WriteString(w, `{"decision":"maybe","reason":"x"}`)
+		default:
+			io.WriteString(w, `{"decision":"deny","reason":"denied: no"}`)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("HALLPASS_API_KEY", "CANARY-SECRET-key")
+	ask := func(user string, extra ...string) (int, string, string) {
+		args := append([]string{"check", "-server", srv.URL + "/", "-connection", "demo", "-user", user, "-action", "thing.write", "-resource", "thing:1", "-group", "b", "-group", "a"}, extra...)
+		return capture(t, args...)
+	}
+	if code, out, errs := ask("admin@example.com"); code != 0 || !strings.HasPrefix(out, "allow\n  allowed: admin") || errs != "" {
+		t.Errorf("allow: %d %q %q", code, out, errs)
+	}
+	if got.auth != "Bearer CANARY-SECRET-key" || !strings.HasPrefix(got.ua, "hallpass/") {
+		t.Errorf("headers: %q %q", got.auth, got.ua)
+	}
+	want := `{"user":"admin@example.com","groups":["b","a"],"connection":"demo","action":"thing.write","resource":"thing:1"}`
+	if got.body != want {
+		t.Errorf("body:\n got %s\nwant %s", got.body, want)
+	}
+	if code, out, _ := ask("dana@example.com", "-json"); code != 1 || strings.TrimSpace(out) != `{"decision":"deny","reason":"denied: no"}` {
+		t.Errorf("deny json: %d %q", code, out)
+	}
+
+	// A wrong key is an unknown decision from the server, not a CLI error.
+	t.Setenv("HALLPASS_API_KEY", "wrong")
+	if code, out, _ := ask("admin@example.com"); code != 3 || !strings.Contains(out, "unauthorized") {
+		t.Errorf("wrong key: %d %q", code, out)
+	}
+	t.Setenv("HALLPASS_API_KEY", "CANARY-SECRET-key")
+
+	// Not an answer: exit 2 and no decision printed, never a secret echoed.
+	for _, user := range []string{"html@example.com", "weird@example.com"} {
+		code, out, errs := ask(user)
+		if code != 2 || out != "" || !strings.Contains(errs, "is it hallpass?") || strings.Contains(errs, "CANARY") {
+			t.Errorf("%s: %d %q %q", user, code, out, errs)
+		}
+	}
+
+	// Key must be a reference; the value never goes on the command line.
+	if code, _, errs := ask("admin@example.com", "-api-key", "CANARY-SECRET-key"); code != 2 || !strings.Contains(errs, "-api-key:") || strings.Contains(errs, "CANARY") {
+		t.Errorf("inline key: %d %q", code, errs)
+	}
+	if code, _, errs := ask("admin@example.com", "-api-key", "env:HALLPASS_NOPE"); code != 2 || !strings.Contains(errs, "HALLPASS_NOPE is not set") {
+		t.Errorf("unset key: %d %q", code, errs)
+	}
+	keyFile := filepath.Join(t.TempDir(), "key")
+	os.WriteFile(keyFile, []byte("CANARY-SECRET-key\n"), 0o600)
+	if code, out, _ := ask("admin@example.com", "-api-key", "file:"+keyFile); code != 0 || !strings.HasPrefix(out, "allow") {
+		t.Errorf("file key: %d %q", code, out)
+	}
+
+	// Plain http is only for loopback; the key would travel in clear text.
+	if code, _, errs := capture(t, "check", "-server", "http://hallpass.example.com", "-connection", "demo", "-user", "a@b", "-action", "x", "-resource", "y:1"); code != 2 || !strings.Contains(errs, "must start with https://") {
+		t.Errorf("http url: %d %q", code, errs)
+	}
+	// Unreachable server: exit 2, no decision.
+	if code, out, errs := capture(t, "check", "-server", "http://127.0.0.1:1", "-connection", "demo", "-user", "a@b", "-action", "x", "-resource", "y:1"); code != 2 || out != "" || errs == "" {
+		t.Errorf("unreachable: %d %q %q", code, out, errs)
 	}
 }

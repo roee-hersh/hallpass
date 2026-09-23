@@ -4,15 +4,18 @@
 //	hallpass validate -config /etc/hallpass/hallpass.yaml
 //	hallpass probe    -config /etc/hallpass/hallpass.yaml [-connection id]
 //	hallpass check    -config /etc/hallpass/hallpass.yaml -connection id -user email -action name -resource res
+//	hallpass check    -server https://hallpass.internal -api-key env:HALLPASS_API_KEY -connection id -user email -action name -resource res
 //	hallpass catalog  [integration]
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -28,6 +31,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integrations/all"
+	"github.com/roee-hersh/hallpass/internal/secret"
 	"github.com/roee-hersh/hallpass/internal/server"
 )
 
@@ -48,6 +52,7 @@ Usage:
   hallpass validate -config FILE
   hallpass probe    -config FILE [-connection ID]
   hallpass check    -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]
+  hallpass check    -server URL [-api-key REF] [-ca-file PEM] -connection ID -user EMAIL -action NAME -resource RES ...
   hallpass catalog  [INTEGRATION]
   hallpass version
 
@@ -280,10 +285,18 @@ const (
 // connection's credential, not a running server or the API key. Caches and
 // the decision log are off; a check from the CLI is an operator asking, not
 // an agent acting.
+//
+// With -server it instead sends the question to a running hallpass, so it
+// can be asked from a machine that holds the API key but no upstream
+// credential. The key is an env:NAME or file:/path reference, never a value
+// on the command line.
 func check(args []string, stdout, stderr *os.File) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	cfgPath := fs.String("config", defaultConfig, "config file")
+	cfgPath := fs.String("config", defaultConfig, "config file (ignored with -server)")
+	serverURL := fs.String("server", "", "ask a running hallpass at this URL instead of the config file")
+	apiKey := fs.String("api-key", "env:HALLPASS_API_KEY", "API key for -server, as env:NAME or file:/path")
+	caFile := fs.String("ca-file", "", "PEM file that replaces the system roots for -server")
 	connID := fs.String("connection", "", "connection id from the config")
 	user := fs.String("user", "", "email of the user asking")
 	action := fs.String("action", "", "action name (see hallpass catalog INTEGRATION)")
@@ -313,37 +326,52 @@ func check(args []string, stdout, stderr *os.File) int {
 		fs.Usage()
 		return exitUsage
 	}
-	cfg, _, ok := load(*cfgPath, stderr)
-	if !ok {
-		return exitUsage
-	}
-	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	eng, err := engine.Build(ctx, cfg, engine.Options{Logger: logger})
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitUsage
-	}
-	res := eng.Check(ctx, engine.Request{
+	req := engine.Request{
 		User:       *user,
 		Groups:     groups,
 		Connection: *connID,
 		Action:     *action,
 		Resource:   *resource,
 		Remote:     "cli",
-	})
-	d := res.Decision
-	if *asJSON {
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if *serverURL != "" {
+		outcome, reason, err := remoteCheck(ctx, *serverURL, *apiKey, *caFile, req)
+		if err != nil {
+			fmt.Fprintf(stderr, "check: %v\n", err)
+			return exitUsage
+		}
+		return printDecision(stdout, outcome, reason, *asJSON)
+	}
+
+	cfg, _, ok := load(*cfgPath, stderr)
+	if !ok {
+		return exitUsage
+	}
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	eng, err := engine.Build(ctx, cfg, engine.Options{Logger: logger})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	d := eng.Check(ctx, req).Decision
+	return printDecision(stdout, d.Outcome, d.Reason(), *asJSON)
+}
+
+// printDecision writes the answer and maps it to an exit code.
+func printDecision(stdout *os.File, outcome integration.Outcome, reason string, asJSON bool) int {
+	if asJSON {
 		// Same shape as the HTTP response body.
 		_ = json.NewEncoder(stdout).Encode(struct {
 			Decision integration.Outcome `json:"decision"`
 			Reason   string              `json:"reason"`
-		}{d.Outcome, d.Reason()})
+		}{outcome, reason})
 	} else {
-		fmt.Fprintf(stdout, "%s\n  %s\n", d.Outcome, d.Reason())
+		fmt.Fprintf(stdout, "%s\n  %s\n", outcome, reason)
 	}
-	switch d.Outcome {
+	switch outcome {
 	case integration.Allow:
 		return exitAllow
 	case integration.Deny:
@@ -351,6 +379,74 @@ func check(args []string, stdout, stderr *os.File) int {
 	default:
 		return exitUnknown
 	}
+}
+
+// maxRemoteBody bounds a /check response; a real one is under 1 KiB.
+const maxRemoteBody = 64 << 10
+
+// remoteCheck sends req to POST {base}/check on a running hallpass and
+// returns the decision it answered. Any HTTP status with a well-formed body
+// is an answer (400 and 401 carry an unknown decision like the API
+// documents); anything else is an error and no decision.
+func remoteCheck(ctx context.Context, base, keyRef, caFile string, req engine.Request) (integration.Outcome, string, error) {
+	if err := integration.ValidateHTTPSURL(base); err != nil {
+		return "", "", fmt.Errorf("-server: %v", err)
+	}
+	key, err := secret.Parse(keyRef)
+	if err != nil {
+		return "", "", fmt.Errorf("-api-key: %v", err)
+	}
+	token, err := key.GetString()
+	if err != nil {
+		return "", "", fmt.Errorf("-api-key: %v", err)
+	}
+	client, err := httpx.NewHTTPClient(httpx.Options{CAFile: caFile})
+	if err != nil {
+		return "", "", fmt.Errorf("-ca-file: %v", err)
+	}
+	body, err := json.Marshal(struct {
+		User       string   `json:"user"`
+		Groups     []string `json:"groups,omitempty"`
+		Connection string   `json:"connection"`
+		Action     string   `json:"action"`
+		Resource   string   `json:"resource"`
+	}{req.User, req.Groups, req.Connection, req.Action, req.Resource})
+	if err != nil {
+		return "", "", err
+	}
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/check", bytes.NewReader(body))
+	if err != nil {
+		return "", "", err
+	}
+	hreq.Header.Set("Authorization", "Bearer "+token)
+	hreq.Header.Set("Content-Type", "application/json")
+	hreq.Header.Set("Accept", "application/json")
+	hreq.Header.Set("User-Agent", "hallpass/"+version)
+	resp, err := client.Do(hreq)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxRemoteBody+1))
+	if err != nil {
+		return "", "", fmt.Errorf("%s: reading response: %v", base, err)
+	}
+	if len(raw) > maxRemoteBody {
+		return "", "", fmt.Errorf("%s: response larger than %d bytes", base, maxRemoteBody)
+	}
+	var out struct {
+		Decision integration.Outcome `json:"decision"`
+		Reason   string              `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", "", fmt.Errorf("%s answered HTTP %d without a decision; is it hallpass?", base, resp.StatusCode)
+	}
+	switch out.Decision {
+	case integration.Allow, integration.Deny, integration.Unknown:
+	default:
+		return "", "", fmt.Errorf("%s answered HTTP %d with decision %q; is it hallpass?", base, resp.StatusCode, out.Decision)
+	}
+	return out.Decision, out.Reason, nil
 }
 
 func catalog(args []string, stdout, stderr *os.File) int {

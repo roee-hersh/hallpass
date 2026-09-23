@@ -166,6 +166,7 @@ carries a commented example for every integration.
 | `hallpass validate -config FILE` | Check the file, credential references and certificates. No network |
 | `hallpass probe -config FILE [-connection ID]` | Call each system with its credential and report |
 | `hallpass check -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]` | Answer one question from the command line |
+| `hallpass check -server URL [-api-key REF] [-ca-file PEM] ...` | Ask a running hallpass the same question |
 | `hallpass catalog [INTEGRATION]` | List integrations, config keys and actions |
 
 At startup `serve` probes every connection and logs warnings. A broken connection never stops the
@@ -181,6 +182,18 @@ $ hallpass check -config hallpass.yaml -connection jira-main \
     -user dana@example.com -action DELETE_ISSUES -resource issue:PAY-123
 deny
   denied: Dana Levi does not hold DELETE_ISSUES on issue PAY-123
+```
+
+With `-server URL` the same question goes to a running hallpass over `POST /check`, so it can be
+asked from a machine that holds the API key but none of the upstream credentials. `-api-key` is an
+`env:NAME` or `file:/path` reference (default `env:HALLPASS_API_KEY`); a key value on the command
+line is rejected. The URL must be `https://` unless it is `localhost` or a loopback address.
+Output and exit codes are the same; a reply that is not a decision (wrong host, proxy error page)
+exits 2.
+
+```sh
+hallpass check -server https://hallpass.internal -connection jira-main \
+    -user dana@example.com -action DELETE_ISSUES -resource issue:PAY-123
 ```
 
 ## Integrations
