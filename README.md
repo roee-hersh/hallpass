@@ -69,6 +69,8 @@ Or from source:
 ```sh
 export HALLPASS_API_KEY=change-me
 go run ./cmd/hallpass validate -config examples/hallpass.yaml
+go run ./cmd/hallpass check    -config examples/hallpass.yaml -connection demo \
+    -user dana@example.com -action thing.write -resource thing:1
 go run ./cmd/hallpass serve    -config examples/hallpass.yaml
 ```
 
@@ -163,10 +165,23 @@ carries a commented example for every integration.
 | `hallpass serve -config FILE` | Run the service |
 | `hallpass validate -config FILE` | Check the file, credential references and certificates. No network |
 | `hallpass probe -config FILE [-connection ID]` | Call each system with its credential and report |
+| `hallpass check -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]` | Answer one question from the command line |
 | `hallpass catalog [INTEGRATION]` | List integrations, config keys and actions |
 
 At startup `serve` probes every connection and logs warnings. A broken connection never stops the
 service from starting.
+
+`check` runs the same code path as `POST /check` in-process, so it needs the config file and the
+connection's credential but no running server and no API key. It prints the decision and reason
+(`-json` prints the HTTP response body) and exits 0 for `allow`, 1 for `deny`, 3 for `unknown` and
+2 when it could not run at all, so `if hallpass check ...` treats `unknown` as deny.
+
+```sh
+$ hallpass check -config hallpass.yaml -connection jira-main \
+    -user dana@example.com -action DELETE_ISSUES -resource issue:PAY-123
+deny
+  denied: Dana Levi does not hold DELETE_ISSUES on issue PAY-123
+```
 
 ## Integrations
 

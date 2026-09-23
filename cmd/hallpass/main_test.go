@@ -175,3 +175,52 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	_ = context.Background()
 }
+
+func TestCheck(t *testing.T) {
+	// No API key: a CLI check runs the engine in-process and never needs it.
+	os.Unsetenv("HALLPASS_API_KEY")
+	p := writeConfig(t, goodConfig)
+	ask := func(user string, extra ...string) (int, string, string) {
+		args := append([]string{"check", "-config", p, "-connection", "demo", "-user", user, "-action", "thing.write", "-resource", "thing:1"}, extra...)
+		return capture(t, args...)
+	}
+	if code, out, errs := ask("admin@example.com"); code != 0 || !strings.HasPrefix(out, "allow\n") || !strings.Contains(out, "allowed: admin@example.com is an admin") || errs != "" {
+		t.Errorf("allow: %d %q %q", code, out, errs)
+	}
+	if code, out, _ := ask("dana@example.com"); code != 1 || !strings.HasPrefix(out, "deny\n") || !strings.Contains(out, "denied:") {
+		t.Errorf("deny: %d %q", code, out)
+	}
+	if code, out, _ := ask("nobody@example.com"); code != 1 || !strings.Contains(out, "user_not_found") {
+		t.Errorf("not found: %d %q", code, out)
+	}
+	if code, out, _ := ask("ambiguous@example.com"); code != 3 || !strings.HasPrefix(out, "unknown\n") || !strings.Contains(out, "user_ambiguous") {
+		t.Errorf("unknown: %d %q", code, out)
+	}
+	if code, out, _ := ask("not-an-email"); code != 3 || !strings.Contains(out, "invalid_request") {
+		t.Errorf("invalid: %d %q", code, out)
+	}
+	if code, out, _ := capture(t, "check", "-config", p, "-connection", "nope", "-user", "admin@example.com", "-action", "thing.write", "-resource", "thing:1", "-group", "a", "-group", "b"); code != 3 || !strings.Contains(out, "unknown_connection") {
+		t.Errorf("unknown connection: %d %q", code, out)
+	}
+
+	// -json prints exactly the HTTP response body.
+	code, out, _ := ask("admin@example.com", "-json")
+	var body map[string]string
+	if err := json.Unmarshal([]byte(out), &body); err != nil || code != 0 {
+		t.Fatalf("json: %d %q %v", code, out, err)
+	}
+	if body["decision"] != "allow" || !strings.HasPrefix(body["reason"], "allowed: ") || len(body) != 2 {
+		t.Errorf("json body: %v", body)
+	}
+
+	// Usage errors are 2, never mistaken for a decision.
+	if code, _, errs := capture(t, "check", "-config", p, "-user", "admin@example.com"); code != 2 || !strings.Contains(errs, "missing -connection, -action, -resource") {
+		t.Errorf("missing flags: %d %q", code, errs)
+	}
+	if code, _, errs := ask("admin@example.com", "extra"); code != 2 || !strings.Contains(errs, `unexpected argument "extra"`) {
+		t.Errorf("positional: %d %q", code, errs)
+	}
+	if code, _, errs := capture(t, "check", "-config", writeConfig(t, "api_key: nope\n"), "-connection", "demo", "-user", "a@b", "-action", "x", "-resource", "y:1"); code != 2 || !strings.Contains(errs, "inline secret") {
+		t.Errorf("bad config: %d %q", code, errs)
+	}
+}

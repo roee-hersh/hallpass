@@ -3,11 +3,13 @@
 //	hallpass serve    -config /etc/hallpass/hallpass.yaml
 //	hallpass validate -config /etc/hallpass/hallpass.yaml
 //	hallpass probe    -config /etc/hallpass/hallpass.yaml [-connection id]
+//	hallpass check    -config /etc/hallpass/hallpass.yaml -connection id -user email -action name -resource res
 //	hallpass catalog  [integration]
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -45,6 +47,7 @@ Usage:
   hallpass serve    -config FILE [-listen ADDR] [-log-level LEVEL]
   hallpass validate -config FILE
   hallpass probe    -config FILE [-connection ID]
+  hallpass check    -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]
   hallpass catalog  [INTEGRATION]
   hallpass version
 
@@ -65,6 +68,8 @@ func run(args []string, stdout, stderr *os.File) int {
 		return validate(args[1:], stdout, stderr)
 	case "probe":
 		return probe(args[1:], stdout, stderr)
+	case "check":
+		return check(args[1:], stdout, stderr)
 	case "catalog":
 		return catalog(args[1:], stdout, stderr)
 	case "version":
@@ -258,6 +263,94 @@ func probe(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 	return 0
+}
+
+// Exit codes of check. 2 (usage or config error) is shared with the other
+// commands; 1 and 3 mirror the decision so that `if hallpass check ...`
+// treats unknown as deny, as the API asks callers to.
+const (
+	exitAllow   = 0
+	exitDeny    = 1
+	exitUsage   = 2
+	exitUnknown = 3
+)
+
+// check answers one question from the command line, running the same code
+// path as POST /check but in-process: it needs the config file and the
+// connection's credential, not a running server or the API key. Caches and
+// the decision log are off; a check from the CLI is an operator asking, not
+// an agent acting.
+func check(args []string, stdout, stderr *os.File) int {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfgPath := fs.String("config", defaultConfig, "config file")
+	connID := fs.String("connection", "", "connection id from the config")
+	user := fs.String("user", "", "email of the user asking")
+	action := fs.String("action", "", "action name (see hallpass catalog INTEGRATION)")
+	resource := fs.String("resource", "", "resource such as namespace:payments or issue:PAY-123")
+	asJSON := fs.Bool("json", false, "print the same JSON as POST /check")
+	var groups []string
+	fs.Func("group", "group the user belongs to (repeatable)", func(g string) error {
+		groups = append(groups, g)
+		return nil
+	})
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "check takes flags only, unexpected argument %q\n", fs.Arg(0))
+		fs.Usage()
+		return exitUsage
+	}
+	var missing []string
+	for _, f := range []struct{ name, val string }{{"connection", *connID}, {"user", *user}, {"action", *action}, {"resource", *resource}} {
+		if f.val == "" {
+			missing = append(missing, "-"+f.name)
+		}
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(stderr, "check: missing %s\n", strings.Join(missing, ", "))
+		fs.Usage()
+		return exitUsage
+	}
+	cfg, _, ok := load(*cfgPath, stderr)
+	if !ok {
+		return exitUsage
+	}
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	eng, err := engine.Build(ctx, cfg, engine.Options{Logger: logger})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	res := eng.Check(ctx, engine.Request{
+		User:       *user,
+		Groups:     groups,
+		Connection: *connID,
+		Action:     *action,
+		Resource:   *resource,
+		Remote:     "cli",
+	})
+	d := res.Decision
+	if *asJSON {
+		// Same shape as the HTTP response body.
+		_ = json.NewEncoder(stdout).Encode(struct {
+			Decision integration.Outcome `json:"decision"`
+			Reason   string              `json:"reason"`
+		}{d.Outcome, d.Reason()})
+	} else {
+		fmt.Fprintf(stdout, "%s\n  %s\n", d.Outcome, d.Reason())
+	}
+	switch d.Outcome {
+	case integration.Allow:
+		return exitAllow
+	case integration.Deny:
+		return exitDeny
+	default:
+		return exitUnknown
+	}
 }
 
 func catalog(args []string, stdout, stderr *os.File) int {
