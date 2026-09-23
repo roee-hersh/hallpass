@@ -5,3 +5,4 @@
 *.out
 .specs/
 __pycache__/
+node_modules/

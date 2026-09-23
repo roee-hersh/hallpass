@@ -132,8 +132,8 @@ def delete_issue(key: str) -> str:
 
 `deny`, `unknown`, an unreachable hallpass and a malformed answer all refuse before the body runs.
 The user comes from your application, never from the tool's arguments, so the model cannot pick who
-it acts as. [docs/agents.md](docs/agents.md) explains the pattern; [`examples/agent`](examples/agent)
-has it working and tested in each framework:
+it acts as. [docs/agents.md](docs/agents.md) explains the pattern; [`examples/agent`](examples/agent) and
+[`examples/agent-ts`](examples/agent-ts) have it working and tested in each framework:
 
 | Framework | Example |
 |---|---|
@@ -142,6 +142,8 @@ has it working and tested in each framework:
 | Strands Agents | [`strands_tool.py`](examples/agent/strands_tool.py) |
 | Claude Agent SDK | [`claude_agent_sdk_tool.py`](examples/agent/claude_agent_sdk_tool.py) |
 | MCP, for any host (Claude Code, Claude Desktop, Cursor, ...) | [`mcp_server.py`](examples/agent/mcp_server.py) |
+| Vercel AI SDK (TypeScript) | [`ai_sdk_tool.ts`](examples/agent-ts/ai_sdk_tool.ts) |
+| MCP TypeScript SDK | [`mcp_server.ts`](examples/agent-ts/mcp_server.ts) |
 
 ## API
 

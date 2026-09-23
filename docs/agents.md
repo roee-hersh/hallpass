@@ -3,8 +3,10 @@
 An agent holds one powerful bot credential. Before it uses that credential on
 behalf of a person, it asks hallpass whether that person may do the thing.
 This guide shows the pattern and how to wire it into LangChain, LangGraph,
-Strands Agents, the Claude Agent SDK and any MCP host. Runnable versions of
-every snippet live in [`examples/agent`](../examples/agent).
+Strands Agents, the Claude Agent SDK and any MCP host, and in TypeScript into
+the Vercel AI SDK and the MCP TypeScript SDK. Runnable versions of every
+snippet live in [`examples/agent`](../examples/agent) and
+[`examples/agent-ts`](../examples/agent-ts).
 
 ## The rules
 
@@ -320,6 +322,111 @@ Or in any host that takes an `mcpServers` JSON block:
 
 `AGENT_GROUPS` (comma-separated) passes group memberships.
 
+## TypeScript
+
+[`examples/agent-ts/hallpass_client.ts`](../examples/agent-ts/hallpass_client.ts)
+is the same client for Node, on the built-in `fetch` with no dependencies.
+Copy it into your project. It follows the rules above to the letter: a
+transport failure, a redirect, a non-JSON body or an `allow` with a non-200
+status is an `unknown` decision with the code `client_error` (a 400 or 401
+keeps hallpass's own reason), and `guarded` never reads the user from the
+arguments.
+
+```ts
+import { Hallpass, current, guarded } from "./hallpass_client.ts";
+
+const hp = new Hallpass(); // HALLPASS_URL and HALLPASS_API_KEY from the environment
+
+const d = await hp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123");
+d.decision; // "allow", "deny" or "unknown"
+d.allowed;  // true only for allow
+
+await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123");
+// rejects with PermissionDenied unless the answer is allow
+```
+
+Every Node agent framework calls a tool with one object of arguments, so
+`guarded` wraps a function of that shape and returns one with the same
+signature. The user comes from a string, a zero-argument function, or an
+`AsyncLocalStorage` your request handler enters, the Node counterpart of
+the `ContextVar` above. `resource` is the same `"issue:{key}"` template.
+
+```ts
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const session = new AsyncLocalStorage<{ user: string; groups?: string[] }>();
+const user = () => current(session).user;
+const groups = () => current(session).groups ?? [];
+
+const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user })(
+  async ({ key }: { key: string }) => {
+    await jira.deleteIssue(key); // the agent's own credential
+    return `deleted ${key}`;
+  },
+);
+
+// In the request handler, from the identity your auth verified:
+app.post("/chat", auth, (req, res) =>
+  session.run({ user: req.user.email, groups: req.user.groups }, () => runAgent(req, res)));
+```
+
+A `user` key the model puts in the arguments is ignored; a call whose
+arguments cannot fill the template makes no request and runs nothing.
+
+### Vercel AI SDK
+
+[`ai_sdk_tool.ts`](../examples/agent-ts/ai_sdk_tool.ts)
+
+```ts
+import { generateText, tool } from "ai";
+import { z } from "zod";
+
+const writeThing = tool({
+  description: "Write content to a thing in the demo system.",
+  inputSchema: z.object({ thing_id: z.string(), content: z.string() }),
+  execute: guarded(hp, "demo", "thing.write", "thing:{thing_id}", { user, groups, deny: (e) => `refused: ${e.message}` })(
+    async ({ thing_id, content }: { thing_id: string; content: string }) => { ... },
+  ),
+});
+
+const tools = { check_permission: checkPermission, write_thing: writeThing };
+session.run({ user: req.user.email }, () => generateText({ model, tools, prompt }));
+```
+
+The schema the model sees has only `thing_id` and `content`; a `user` the
+model sends anyway is stripped by the schema before `execute` runs. The
+refusal is returned as the tool's output rather than thrown, so the model
+reads hallpass's reason whatever the SDK does with a thrown error.
+Anything that takes AI SDK tools (`streamText`, `ToolLoopAgent`, Mastra)
+works the same way.
+
+### MCP server in TypeScript, for any host
+
+[`mcp_server.ts`](../examples/agent-ts/mcp_server.ts) is the TypeScript
+version of the server above. The host launches one process per user session
+and names the user in `AGENT_USER`; the tools never take a user argument. A
+thrown `PermissionDenied` becomes an `isError` result carrying its message,
+so the model learns why.
+
+```ts
+server.registerTool(
+  "write_thing",
+  { description: "Write content to a thing in the demo system.", inputSchema: { thing_id: z.string(), content: z.string() } },
+  guarded(hp, "demo", "thing.write", "thing:{thing_id}", { user: AGENT_USER, groups: AGENT_GROUPS })(
+    async ({ thing_id, content }: { thing_id: string; content: string }) => ({ content: [{ type: "text", text: `wrote to thing:${thing_id}` }] }),
+  ),
+);
+```
+
+```sh
+claude mcp add hallpass \
+  -e HALLPASS_URL=http://localhost:8080 -e HALLPASS_API_KEY=change-me \
+  -e AGENT_USER=dana@example.com \
+  -- node /path/to/hallpass/examples/agent-ts/mcp_server.ts
+```
+
+Node 22.18 or later runs the `.ts` file directly.
+
 ## Running the examples
 
 Start hallpass with the example config:
@@ -338,7 +445,14 @@ pip install -r examples/agent/requirements.txt
 python3 -m unittest discover -s examples/agent -v
 ```
 
-Without the frameworks installed the client tests still run and the rest
+The TypeScript examples have their own tests, through `generateText` with a
+mock model and through an MCP client over an in-memory transport:
+
+```sh
+cd examples/agent-ts && npm ci && npm test
+```
+
+Without the Python frameworks installed the client tests still run and the rest
 skip. Each example also runs as a script against the live server; the
 LangGraph, Strands and Claude Agent SDK ones need a model provider
 configured, the others need none:
@@ -347,6 +461,7 @@ configured, the others need none:
 export HALLPASS_URL=http://localhost:8080 HALLPASS_API_KEY=change-me
 python examples/agent/langchain_tool.py dana@example.com    # tools called directly, no LLM
 python examples/agent/langchain_tool.py admin@example.com
+node examples/agent-ts/ai_sdk_tool.ts dana@example.com     # same, in TypeScript
 ```
 
 The tests assert, for each framework, that the tool schema has no `user`
