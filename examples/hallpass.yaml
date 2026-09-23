@@ -60,6 +60,12 @@ connections:
   #   credential: env:VAULT_TOKEN                       # or auth_mode: approle with role_id and the secret_id as credential
   #   # token_policies: developers                      # policies the oidc role attaches at login
   #   # namespace: admin/
+  # - id: azure-corp
+  #   integration: azure
+  #   tenant_id: 11111111-2222-3333-4444-555555555555
+  #   client_id: 66666666-7777-8888-9999-000000000000
+  #   credential: env:AZURE_CLIENT_SECRET                # app registration with Reader at the root management group
+  #   # microsoft365_connection: m365-corp                # resolve users through the microsoft365 connection instead of Graph
   # - id: linear-acme
   #   integration: linear
   #   credential: env:LINEAR_API_KEY                   # personal API key of a workspace admin, or an OAuth token with auth_mode: oauth

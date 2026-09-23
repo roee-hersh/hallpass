@@ -6,6 +6,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integrations/argocd"
 	"github.com/roee-hersh/hallpass/internal/integrations/aws"
+	"github.com/roee-hersh/hallpass/internal/integrations/azure"
 	"github.com/roee-hersh/hallpass/internal/integrations/bitbucket"
 	"github.com/roee-hersh/hallpass/internal/integrations/confluence"
 	"github.com/roee-hersh/hallpass/internal/integrations/databricks"
@@ -43,6 +44,7 @@ func Registry() *integration.Registry {
 	r.Register(microsoft365.Integration{})
 	r.Register(googleworkspace.Integration{})
 	r.Register(vault.Integration{})
+	r.Register(azure.Integration{})
 	r.Register(linear.Integration{})
 	r.Register(zendesk.Integration{})
 	r.Register(datadog.Integration{})

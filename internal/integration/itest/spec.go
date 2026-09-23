@@ -204,10 +204,31 @@ func newTemplate(p string) pathTemplate {
 
 func (t pathTemplate) match(path string) bool {
 	segs := strings.Split(strings.Trim(path, "/"), "/")
-	if len(segs) != len(t.segments) {
+	if len(t.segments) > 1 && t.segments[0] == "{}" && t.literals > 0 {
+		// A template that starts with a variable and continues with
+		// literals (Azure's /{scope}/providers/...) takes a whole resource
+		// path there: the variable spans one or more non-empty segments. A
+		// bare /{id} template keeps matching one segment, or it would match
+		// every path.
+		n := len(segs) - len(t.segments) + 1
+		if n < 1 {
+			return false
+		}
+		for _, seg := range segs[:n] {
+			if seg == "" {
+				return false
+			}
+		}
+		return matchSegments(t.segments[1:], segs[n:])
+	}
+	return matchSegments(t.segments, segs)
+}
+
+func matchSegments(tpl, segs []string) bool {
+	if len(segs) != len(tpl) {
 		return false
 	}
-	for i, s := range t.segments {
+	for i, s := range tpl {
 		if s == "{}" {
 			if segs[i] == "" {
 				return false
