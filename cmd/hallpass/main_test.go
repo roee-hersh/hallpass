@@ -26,6 +26,10 @@ func capture(t *testing.T, args ...string) (int, string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Close before the temp dir is removed: Windows will not delete a
+	// file that is still open.
+	defer out.Close()
+	defer errf.Close()
 	code := run(args, out, errf)
 	out.Seek(0, 0)
 	errf.Seek(0, 0)
