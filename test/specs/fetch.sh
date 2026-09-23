@@ -24,6 +24,7 @@ fetch() {
 fetch github            https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json
 fetch gitlab            https://raw.githubusercontent.com/gitlabhq/gitlabhq/master/doc/api/openapi/openapi_v2.yaml
 fetch jira              https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json
+fetch bitbucket-cloud   https://api.bitbucket.org/swagger.json
 fetch confluence-v1     https://developer.atlassian.com/cloud/confluence/swagger.v3.json
 fetch confluence-v2     https://developer.atlassian.com/cloud/confluence/openapi-v2.v3.json
 fetch slack             https://raw.githubusercontent.com/slackapi/slack-api-specs/master/web-api/slack_web_openapi_v2.json

@@ -59,6 +59,16 @@ connections:
   #   username: hallpass-bot@acme.com                  # the administrator the API token acts as
   #   credential: env:ZENDESK_API_TOKEN
   #   # auth_mode: oauth                                # credential is then an OAuth access token
+  # - id: bitbucket-acme
+  #   integration: bitbucket
+  #   workspace: acme                                   # Cloud: the workspace slug
+  #   credential: env:BITBUCKET_TOKEN                   # workspace access token (read repository, project, account scopes)
+
+  # - id: bitbucket-dc
+  #   integration: bitbucket
+  #   edition: datacenter
+  #   url: https://bitbucket.acme.internal
+  #   credential: env:BITBUCKET_DC_TOKEN                # HTTP access token of an administrator
 
   # - id: jira-main
   #   integration: jira
