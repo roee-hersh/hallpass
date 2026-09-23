@@ -24,7 +24,7 @@ Jira issue or scale a deployment, the bot can, even when Dana could not. Copying
 permission model into your own policy engine drifts out of date the day you write it.
 
 hallpass asks the source of truth instead: Kubernetes `SubjectAccessReview`, Jira's permission API,
-GitHub collaborator roles, AWS IAM policy simulation, and so on. One API, twelve systems, no
+GitHub collaborator roles, AWS IAM policy simulation, and so on. One API, thirteen systems, no
 synced copy of anyone's permissions.
 
 ```mermaid
@@ -44,6 +44,32 @@ sequenceDiagram
 - **Read-only.** It only checks and never performs the action.
 - **Fails closed.** Anything it cannot evaluate is `unknown`, not `allow`.
 - **Single static binary.** One YAML file and one dependency (`yaml.v3`). No database.
+
+## Security model
+
+hallpass treats the agent as an **untrusted deputy**: what the agent's own credential can do never
+decides anything. The rules, and where each is enforced:
+
+- **The user comes from your session, never from the model.** The caller of `/check` is your agent's
+  tool layer, and it passes the user it authenticated (the Slack user, the SSO session). Bind it when
+  the tools are built, as the [agent examples](examples/agent/) do; never let the model supply it as a
+  tool argument.
+- **Checked at the tool gateway.** The check runs in the tool wrapper before the call. The action runs
+  only after an `allow`.
+- **Fails closed.** `deny`, `unknown`, and any failure to reach hallpass all mean the tool does not
+  run. hallpass answers `unknown` whenever it cannot evaluate, and never guesses.
+- **Per resource, from the source of truth.** Each check names one resource (`issue:PAY-123`,
+  `namespace:payments`) and is answered live by the system that owns it, with a read-only credential.
+- **Every decision is logged** as a JSON line: user, connection, action, resource, decision, reason,
+  and whether it came from the cache.
+
+Not goals, on purpose:
+
+- **Human approval.** For destructive actions, add a confirmation step in the agent *after* an `allow`.
+- **Atomicity.** It is a check before the action, not a transaction; permissions can change in
+  between. Answers are cached for 30 seconds by default (`decision_cache_seconds: 0` disables it).
+- **Proving who the user is.** hallpass answers "may *this* user…"; authenticating the user is your
+  agent's job.
 
 ## Install
 
@@ -69,6 +95,8 @@ Or from source:
 ```sh
 export HALLPASS_API_KEY=change-me
 go run ./cmd/hallpass validate -config examples/hallpass.yaml
+go run ./cmd/hallpass check    -config examples/hallpass.yaml -connection demo \
+    -user dana@example.com -action thing.write -resource thing:1
 go run ./cmd/hallpass serve    -config examples/hallpass.yaml
 ```
 
@@ -81,6 +109,39 @@ curl -X POST localhost:8080/check \
 ```json
 {"decision":"deny","reason":"denied: dana@example.com is not an admin"}
 ```
+
+## Use from an AI agent
+
+Wrap any tool that acts for a person so it runs only after hallpass said `allow`. The `guarded`
+decorator lives in [`examples/agent/hallpass_client.py`](examples/agent/hallpass_client.py), one
+standard-library file you can copy into your project, and a framework's `@tool` goes straight on top:
+
+```python
+from contextvars import ContextVar
+from hallpass_client import Hallpass, guarded
+
+hp = Hallpass()  # HALLPASS_URL and HALLPASS_API_KEY from the environment
+current_user: ContextVar[str] = ContextVar("current_user")  # your app sets it per session
+
+@tool  # LangChain, Strands, MCPServer, ...
+@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user)
+def delete_issue(key: str) -> str:
+    jira.delete_issue(key)  # the agent's own credential
+    return f"deleted {key}"
+```
+
+`deny`, `unknown`, an unreachable hallpass and a malformed answer all refuse before the body runs.
+The user comes from your application, never from the tool's arguments, so the model cannot pick who
+it acts as. [docs/agents.md](docs/agents.md) explains the pattern; [`examples/agent`](examples/agent)
+has it working and tested in each framework:
+
+| Framework | Example |
+|---|---|
+| LangChain | [`langchain_tool.py`](examples/agent/langchain_tool.py) |
+| LangGraph | [`langgraph_agent.py`](examples/agent/langgraph_agent.py) |
+| Strands Agents | [`strands_tool.py`](examples/agent/strands_tool.py) |
+| Claude Agent SDK | [`claude_agent_sdk_tool.py`](examples/agent/claude_agent_sdk_tool.py) |
+| MCP, for any host (Claude Code, Claude Desktop, Cursor, ...) | [`mcp_server.py`](examples/agent/mcp_server.py) |
 
 ## API
 
@@ -163,10 +224,38 @@ carries a commented example for every integration.
 | `hallpass serve -config FILE` | Run the service |
 | `hallpass validate -config FILE` | Check the file, credential references and certificates. No network |
 | `hallpass probe -config FILE [-connection ID]` | Call each system with its credential and report |
+| `hallpass check -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]` | Answer one question from the command line |
+| `hallpass check -server URL [-api-key REF] [-ca-file PEM] [-timeout D] ...` | Ask a running hallpass the same question |
 | `hallpass catalog [INTEGRATION]` | List integrations, config keys and actions |
 
 At startup `serve` probes every connection and logs warnings. A broken connection never stops the
 service from starting.
+
+`check` runs the same code path as `POST /check` in-process, so it needs the config file and the
+connection's credential but no running server and no API key. It prints the decision and reason
+(`-json` prints the HTTP response body) and exits 0 for `allow`, 1 for `deny`, 3 for `unknown` and
+2 when no decision was reached (bad flags, a config that does not load, an interrupted run), so
+`if hallpass check ...` treats `unknown` as deny. Only the connection asked about is built, so a
+sibling whose credential is missing on this machine does not get in the way.
+
+```sh
+$ hallpass check -config hallpass.yaml -connection jira-main \
+    -user dana@example.com -action DELETE_ISSUES -resource issue:PAY-123
+deny
+  denied: Dana Levi does not hold DELETE_ISSUES on issue PAY-123
+```
+
+With `-server URL` the same question goes to a running hallpass over `POST /check`, so it can be
+asked from a machine that holds the API key but none of the upstream credentials. `-api-key` is an
+`env:NAME` or `file:/path` reference (default `env:HALLPASS_API_KEY`); a key value on the command
+line is rejected. The URL must be `https://` unless it is `localhost` or a loopback address.
+Output and exit codes are the same; a reply that is not a decision (wrong host, proxy error page)
+or none within `-timeout` (default `1m`) exits 2.
+
+```sh
+hallpass check -server https://hallpass.internal -connection jira-main \
+    -user dana@example.com -action DELETE_ISSUES -resource issue:PAY-123
+```
 
 ## Integrations
 
@@ -182,6 +271,7 @@ service from starting.
 | datadog | ready |
 | aws | ready |
 | googleworkspace | ready |
+| googlecloud | ready |
 | microsoft365 | ready |
 | salesforce | ready (UNVERIFIED, see docs) |
 | fake | for smoke tests |
@@ -197,11 +287,32 @@ docker run -p 8080:8080 -e HALLPASS_API_KEY=change-me \
   -v $PWD/examples/hallpass.yaml:/etc/hallpass/hallpass.yaml:ro hallpass
 ```
 
+## Running on Kubernetes
+
+A Helm chart lives in [`deploy/helm/hallpass`](deploy/helm/hallpass). It runs the
+`ghcr.io/roee-hersh/hallpass` image as a non-root Deployment with liveness and readiness probes
+on `GET /healthz`, the config file in a ConfigMap and the API key in a Secret.
+
+```sh
+git clone https://github.com/roee-hersh/hallpass && cd hallpass
+helm install hallpass deploy/helm/hallpass --namespace hallpass --create-namespace \
+  --set apiKey.value=change-me
+helm test hallpass -n hallpass
+```
+
+Real connections go under `config.connections` in your values file, exactly as in `hallpass.yaml`.
+Credentials stay references: an `env:NAME` maps to a Secret through `extraEnv`, a `file:/path` to a
+Secret mounted with `extraVolumes` and `extraVolumeMounts`, and the API key comes from a Secret you
+own with `apiKey.existingSecret`. To let hallpass answer questions about the cluster it runs in, set
+`rbac.subjectAccessReview.create=true`, which grants its ServiceAccount the one permission it needs.
+The chart's [README](deploy/helm/hallpass/README.md) lists every value.
+
 ## Testing
 
 ```sh
 go test -race ./...                                   # unit tests against fake upstreams
 test/kind/run.sh                                      # kubernetes end to end on a kind cluster
+test/kind/helm.sh                                     # the Helm chart on a kind cluster
 go test -tags differential ./test/differential/      # Argo CD evaluator vs the argocd CLI
 HALLPASS_LIVE_CASES=$PWD/cases.yaml go test -tags live ./test/live/   # real systems, opt-in
 ```

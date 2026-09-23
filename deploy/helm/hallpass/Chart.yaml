@@ -1,0 +1,16 @@
+apiVersion: v2
+name: hallpass
+description: Permission checks for AI agents and bots, answered live by the system they act in.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/roee-hersh/hallpass
+sources:
+  - https://github.com/roee-hersh/hallpass
+keywords:
+  - authorization
+  - permissions
+  - ai-agents
+maintainers:
+  - name: roee-hersh
+    url: https://github.com/roee-hersh

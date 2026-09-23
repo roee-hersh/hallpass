@@ -1,0 +1,64 @@
+name: daily-release
+
+# Once a day, release main as the next patch version when it has changed since
+# the last release and CI passed on it. Bigger bumps stay manual: run the
+# release workflow with a version, or this one with `bump: minor`.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC, 06:00 in Israel in summer
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to increase
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: read
+  actions: write # to start the release workflow
+
+concurrency:
+  group: daily-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump || 'patch' }}
+        run: |
+          set -eu
+          head=$(git rev-parse HEAD)
+          last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -Ev -- '-' | head -n1 || true)
+          last=${last:-v0.0.0}
+          if [ "$last" != v0.0.0 ] && [ "$(git rev-list -n1 "$last")" = "$head" ]; then
+            echo "main is already released as $last; nothing to do"
+            exit 0
+          fi
+
+          # CI must have passed on this exact commit (the push run on main).
+          ci=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yaml/runs?head_sha=$head&event=push&per_page=1" \
+            --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"')
+          if [ "$ci" != "completed success" ]; then
+            echo "CI on $head is '$ci', not 'completed success'; skipping"
+            exit 0
+          fi
+
+          IFS=. read -r major minor patch <<<"${last#v}"
+          case "$BUMP" in
+            major) next="v$((major + 1)).0.0" ;;
+            minor) next="v$major.$((minor + 1)).0" ;;
+            *)     next="v$major.$minor.$((patch + 1))" ;;
+          esac
+          echo "releasing $next (previous $last, commit $head)"
+          gh workflow run release.yaml --ref main -f version="$next"
+          echo "### Started release $next" >> "$GITHUB_STEP_SUMMARY"
