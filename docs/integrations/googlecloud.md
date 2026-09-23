@@ -41,7 +41,7 @@ the service account should be held by hallpass alone.
 | Key | Meaning |
 |---|---|
 | `scope` | `organization:<number>`, `folder:<number>` or `project:<id>`: where the service account holds `roles/iam.securityReviewer`. The probe asks the troubleshooter about this resource. Checks are not restricted to it |
-| `credential` | service-account key JSON (`file:`); `client_email`, `private_key`, `private_key_id` and `token_uri` are read from it. Required in `auth_mode: key` |
+| `credential` | service-account key JSON (`file:`); `client_email`, `private_key` and `private_key_id` are read from it (the token endpoint is `token_url`). Required in `auth_mode: key` |
 | `auth_mode` | `key` (default) signs a JWT with the key; `keyless` uses the GCE/GKE runtime identity |
 | `quota_project` | sent as `X-Goog-User-Project` on every call |
 | `googleworkspace_connection` | id of a `googleworkspace` connection used to resolve the user first |
@@ -73,7 +73,7 @@ itself.
 
 | Resource | Full resource name |
 |---|---|
-| `project:<id>` | `//cloudresourcemanager.googleapis.com/projects/<id>` |
+| `project:<id or number>` | `//cloudresourcemanager.googleapis.com/projects/<id>` |
 | `folder:<number>` | `//cloudresourcemanager.googleapis.com/folders/<number>` |
 | `organization:<number>` | `//cloudresourcemanager.googleapis.com/organizations/<number>` |
 | `bucket:<name>` | `//storage.googleapis.com/projects/_/buckets/<name>` |
@@ -87,9 +87,11 @@ itself.
 | `cluster:<project>/<location>/<name>` | `//container.googleapis.com/projects/<p>/locations/<l>/clusters/<name>` (GKE) |
 | `name:<full resource name>` | verbatim; must start with `//<service>.googleapis.com/` |
 
-Every piece is validated against a strict shape (project ids, bucket names, numbers, resource
-names) before it is placed in the request; anything else is `invalid_request`. Google-managed
-service accounts (`...@developer.gserviceaccount.com`) are addressed through `name:`.
+Every piece is validated against a strict shape (project ids or numbers, bucket names, numbers,
+resource names) before it is placed in the request; anything else is `invalid_request`. An object
+name may contain any character but control characters, since it only travels inside the JSON body,
+except `.` or `..` segments. `<project>` is a project id or a project number everywhere.
+Google-managed service accounts (`...@developer.gserviceaccount.com`) are addressed through `name:`.
 
 ## Actions
 
@@ -128,12 +130,12 @@ whether the user may delete objects anywhere in the project's buckets (as far as
 | no Workspace account (with `googleworkspace_connection`) | deny (`user_not_found`) |
 | Workspace record without `suspended` or `archived` | unknown (`unsupported`) |
 | HTTP 400 (bad permission name, bad resource name, principal is not a Google Account or service account) | unknown (`invalid_request`) |
-| HTTP 403 with a rate-limit reason, HTTP 429 | unknown (`upstream_rate_limited`) |
+| HTTP 403 with a rate-limit reason (`RATE_LIMIT_EXCEEDED`, `quotaExceeded`, status `RESOURCE_EXHAUSTED`), HTTP 429 | unknown (`upstream_rate_limited`) |
 | HTTP 403 otherwise (API disabled, role missing, quota project refused), HTTP 401 after one retry, token endpoint `invalid_grant` | unknown (`credential_rejected`) |
 | HTTP 404 | unknown (`resource_not_visible`) |
 | 5xx, timeout | unknown (`upstream_error` / `upstream_timeout`) |
 
-Google error messages and the explained policies are never copied into a decision text.
+Error bodies are read whole so the reason is found even after a long message; only the status and reason tokens are used. Google error messages and the explained policies are never copied into a decision text.
 
 ## Probe
 

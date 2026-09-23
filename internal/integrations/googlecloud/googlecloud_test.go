@@ -32,6 +32,16 @@ var (
 	bob  = integration.User{Email: "bob@example.com"}
 )
 
+// The allow and deny states of the v3 response, as the fake emits them.
+const (
+	allowGranted    = "ALLOW_ACCESS_STATE_GRANTED"
+	allowNotGranted = "ALLOW_ACCESS_STATE_NOT_GRANTED"
+	allowUnknownCon = "ALLOW_ACCESS_STATE_UNKNOWN_CONDITIONAL"
+	allowUnknownInf = "ALLOW_ACCESS_STATE_UNKNOWN_INFO"
+	denyNotDenied   = "DENY_ACCESS_STATE_NOT_DENIED"
+	denyUnknownInf  = "DENY_ACCESS_STATE_UNKNOWN_INFO"
+)
+
 // tupleKey identifies one question the fake has an answer for.
 type tupleKey struct{ principal, permission, resource string }
 
@@ -210,10 +220,18 @@ func (f *fakeTroubleshooter) metadata(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// apiErr writes a Google error body the way the real API does: a long
+// message first, then status and details, so the reason sits well past the
+// 256-byte snippet httpx keeps and can only be read from the whole body.
 func apiErr(w http.ResponseWriter, status int, reason string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(fmt.Sprintf(`{"error":{"code":%d,"message":"%smsg","status":"X","details":[{"reason":"%s"}]}}`, status, itest.Canary, reason)))
+	msg := itest.Canary + " Quota exceeded for quota metric 'Troubleshoot requests' and limit 'Troubleshoot requests per minute' of service 'policytroubleshooter.googleapis.com' for consumer 'project_number:123456789012'. " + strings.Repeat("padding ", 20)
+	details := "[]"
+	if reason != "" {
+		details = fmt.Sprintf(`[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"%s","domain":"googleapis.com"}]`, reason)
+	}
+	_, _ = w.Write([]byte(fmt.Sprintf(`{"error":{"code":%d,"message":"%s","status":"PERMISSION_DENIED","details":%s}}`, status, msg, details)))
 }
 
 // troubleshoot serves POST /v3/iam:troubleshoot.
@@ -523,6 +541,24 @@ func TestFullResourceNames(t *testing.T) {
 	}
 }
 
+func TestProjectNumbersAndObjectNames(t *testing.T) {
+	srv, f, c := setup(t, nil)
+	f.mu.Lock()
+	f.answers[tupleKey{"dana@example.com", "secretmanager.versions.access", "//secretmanager.googleapis.com/projects/123456789012/secrets/db-password"}] = answer{stateCanAccess, allowGranted, denyNotDenied}
+	f.answers[tupleKey{"dana@example.com", "storage.objects.get", "//storage.googleapis.com/projects/_/buckets/acme-data/objects/reports/Q1 2026 (final).pdf"}] = answer{stateCanAccess, allowGranted, denyNotDenied}
+	f.mu.Unlock()
+	itest.ExpectCode(t, check(t, c, dana, "secret.read", "secret:123456789012/db-password"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, dana, "project.view", "project:123456789012"), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, dana, "storage.read", "object:acme-data/reports/Q1 2026 (final).pdf"), integration.CodeAllowed)
+	var body struct {
+		AccessTuple accessTuple `json:"accessTuple"`
+	}
+	srv.LastCall().JSON(t, &body)
+	if body.AccessTuple.FullResourceName != "//storage.googleapis.com/projects/_/buckets/acme-data/objects/reports/Q1 2026 (final).pdf" {
+		t.Errorf("object name changed: %q", body.AccessTuple.FullResourceName)
+	}
+}
+
 func TestRawActions(t *testing.T) {
 	srv, _, c := setup(t, nil)
 	itest.ExpectCode(t, check(t, c, dana, "raw:storage.objects.delete", "project:acme-prod"), integration.CodeAllowed)
@@ -547,6 +583,7 @@ func TestRejectsBadResources(t *testing.T) {
 	n := len(srv.Calls())
 	cases := []struct{ action, resource string }{
 		{"project.view", "project:Acme"},
+		{"project.view", "project:ab"},
 		{"project.view", "project:acme-prod?x=1"},
 		{"project.view", "bucket:acme-data"},
 		{"project.view", "user:dana@example.com"},
@@ -556,6 +593,9 @@ func TestRejectsBadResources(t *testing.T) {
 		{"storage.read", "bucket:AB"},
 		{"storage.read", "object:acme-data"},
 		{"storage.read", "object:acme-data/../etc"},
+		{"storage.read", "object:acme-data/a/../etc"},
+		{"storage.read", "object:acme-data/a/.."},
+		{"storage.read", "object:acme-data/./a"},
 		{"bigquery.read", "table:acme-prod/analytics"},
 		{"bigquery.read", "dataset:acme-prod/a b"},
 		{"secret.read", "secret:acme-prod/x/y"},
@@ -569,6 +609,8 @@ func TestRejectsBadResources(t *testing.T) {
 		{"storage.read", "name://storage.googleapis.com/projects/../x"},
 		{"storage.read", "name://evil.example.com/projects/x"},
 		{"storage.read", "name://storage.googleapis.com/x y"},
+		{"storage.read", "name://storage.googleapis.com/"},
+		{"storage.read", "name://storage.googleapis.com/a/./b"},
 	}
 	for _, tc := range cases {
 		d := check(t, c, dana, tc.action, tc.resource)
@@ -636,6 +678,10 @@ func TestAPIErrors(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, dana, "project.view", "project:acme-prod"), integration.CodeCredentialRejected)
 	set(403, "RATE_LIMIT_EXCEEDED")
 	itest.ExpectCode(t, check(t, c, dana, "project.view", "project:acme-prod"), integration.CodeUpstreamRateLimit)
+	set(429, "")
+	itest.ExpectCode(t, check(t, c, dana, "project.view", "project:acme-prod"), integration.CodeUpstreamRateLimit)
+	set(418, "")
+	itest.ExpectCode(t, check(t, c, dana, "project.view", "project:acme-prod"), integration.CodeUpstreamError)
 	set(400, "INVALID_ARGUMENT")
 	itest.ExpectCode(t, check(t, c, dana, "project.view", "project:acme-prod"), integration.CodeInvalidRequest)
 	set(404, "NOT_FOUND")
@@ -857,6 +903,22 @@ func TestProbe(t *testing.T) {
 	} else {
 		itest.AssertNoCanary(t, err.Error())
 	}
+}
+
+func TestProbeReportsKeyErrors(t *testing.T) {
+	srv := itest.NewServer(t)
+	deps, _ := itest.Deps(t, srv)
+	s := itest.Settings("gcp", "googlecloud", map[string]string{"scope": "project:acme-prod", "token_url": srv.URL + "/token", "api_url": srv.URL},
+		map[string]secret.Secret{"credential": secret.Literal(`{"client_email":"x@y.z","private_key":"` + itest.Canary + `"}`)})
+	c, err := (Integration{}).New(context.Background(), s, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Probe(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "PEM RSA key") {
+		t.Errorf("probe error %v, want the key parsing cause", err)
+	}
+	itest.AssertNoCanary(t, integration.ToDecision(err).Text)
 }
 
 func TestProbeScopes(t *testing.T) {

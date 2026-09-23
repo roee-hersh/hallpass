@@ -12,11 +12,11 @@ package googlecloud
 
 import (
 	"context"
-	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -70,10 +70,10 @@ func (Integration) Fields() []integration.Field {
 }
 
 func validateProject(v string) error {
-	if v == "" || projectRe.MatchString(v) {
+	if v == "" || isProject(v) {
 		return nil
 	}
-	return errors.New("must be a project id")
+	return errors.New("must be a project id or number")
 }
 
 func validateScope(v string) error {
@@ -116,7 +116,9 @@ func validateHTTPURL(v string) error {
 }
 
 // New builds a connection. It touches no network; the key is read when a
-// token is minted, so a rotated key file takes effect.
+// token is minted, so a rotated key file takes effect. The config loader
+// has already run every Field's Validate and Enum; the checks repeated here
+// cover connections built from raw settings, as tests do.
 func (Integration) New(_ context.Context, s *integration.Settings, d integration.Deps) (integration.Connection, error) {
 	hc, err := d.HTTPClient(s)
 	if err != nil {
@@ -129,7 +131,6 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		tokenURL:     strings.TrimRight(s.Get("token_url"), "/"),
 		metadataURL:  strings.TrimRight(s.Get("metadata_url"), "/"),
 		now:          d.Now,
-		tokenURLFrom: "config",
 	}
 	c.scope, err = parseScope(s.Get("scope"))
 	if err != nil {
@@ -147,8 +148,8 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	default:
 		return nil, fmt.Errorf("auth_mode %q must be key or keyless", c.mode)
 	}
-	if c.quotaProject != "" && !projectRe.MatchString(c.quotaProject) {
-		return nil, errors.New("quota_project must be a project id")
+	if err := validateProject(c.quotaProject); err != nil {
+		return nil, fmt.Errorf("quota_project: %v", err)
 	}
 	if ws := s.Get("googleworkspace_connection"); ws != "" {
 		c.workspace, err = d.Connection(ws)
@@ -160,7 +161,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		c.now = time.Now
 	}
 	if c.tokenURL == "" {
-		c.tokenURLFrom = "key"
+		c.tokenURL = defaultTokenURL
 	}
 	if c.metadataURL == "" {
 		c.metadataURL = defaultMetadata
@@ -186,9 +187,6 @@ type Connection struct {
 	now          func() time.Time
 	workspace    integration.Connection // optional identity source
 
-	// tokenURLFrom is "config" or "key" (use the key's token_uri).
-	tokenURLFrom string
-
 	plain  *httpx.Client // token and metadata endpoints
 	api    *httpx.Client // the troubleshooter, per-call bearer
 	tokens *authx.TokenSource
@@ -196,32 +194,12 @@ type Connection struct {
 
 // --- authentication ---------------------------------------------------------
 
-// saKey is the service-account key JSON.
-type saKey struct {
-	ClientEmail  string `json:"client_email"`
-	PrivateKey   string `json:"private_key"`
-	PrivateKeyID string `json:"private_key_id"`
-	TokenURI     string `json:"token_uri"`
-	ProjectID    string `json:"project_id"`
-}
-
-func (c *Connection) loadKey() (saKey, *rsa.PrivateKey, error) {
+func (c *Connection) loadKey() (authx.GoogleServiceAccountKey, error) {
 	raw, err := c.settings.Secret("credential").GetString()
 	if err != nil {
-		return saKey{}, nil, integration.Wrap(integration.CodeCredentialRejected, err, "the service-account key could not be read")
+		return authx.GoogleServiceAccountKey{}, integration.Wrap(integration.CodeCredentialRejected, err, "the service-account key could not be read")
 	}
-	var k saKey
-	if err := json.Unmarshal([]byte(raw), &k); err != nil {
-		return saKey{}, nil, integration.Wrap(integration.CodeCredentialRejected, err, "credential is not a service-account key JSON")
-	}
-	if !emailRe.MatchString(k.ClientEmail) || k.PrivateKey == "" {
-		return saKey{}, nil, integration.Errorf(integration.CodeCredentialRejected, "the service-account key JSON lacks client_email or private_key")
-	}
-	key, err := authx.ParseRSAPrivateKey([]byte(k.PrivateKey))
-	if err != nil {
-		return saKey{}, nil, integration.Wrap(integration.CodeCredentialRejected, err, "the service-account private_key is not a PEM RSA key")
-	}
-	return k, key, nil
+	return authx.ParseGoogleServiceAccountKey(raw)
 }
 
 // claims of the JWT bearer assertion: the service account itself, one scope.
@@ -233,81 +211,53 @@ type claims struct {
 	Exp   int64  `json:"exp"`
 }
 
-// mint obtains an access token for the service account.
+// mint obtains an access token for the service account: a JWT bearer
+// exchange in key mode, the metadata server's token in keyless mode.
 func (c *Connection) mint(ctx context.Context) (authx.Token, error) {
 	if c.mode == modeKeyless {
-		return c.fetchMetadataToken(ctx)
+		return authx.GoogleMetadataToken(ctx, c.plain, c.metadataURL, c.now)
 	}
-	k, key, err := c.loadKey()
+	k, err := c.loadKey()
 	if err != nil {
 		return authx.Token{}, err
-	}
-	tokenURL := c.tokenURL
-	if c.tokenURLFrom == "key" && k.TokenURI != "" {
-		if err := integration.ValidateHTTPSURL(k.TokenURI); err != nil {
-			return authx.Token{}, integration.Wrap(integration.CodeCredentialRejected, err, "the key's token_uri is not an https URL")
-		}
-		tokenURL = k.TokenURI
-	}
-	if tokenURL == "" {
-		tokenURL = defaultTokenURL
 	}
 	now := c.now()
-	payload, err := json.Marshal(claims{Iss: k.ClientEmail, Scope: scopeCloudPlatform, Aud: tokenURL, Iat: authx.Unix(now), Exp: authx.Unix(now.Add(assertionTTL))})
+	payload, err := json.Marshal(claims{Iss: k.ClientEmail, Scope: scopeCloudPlatform, Aud: c.tokenURL, Iat: authx.Unix(now), Exp: authx.Unix(now.Add(assertionTTL))})
 	if err != nil {
 		return authx.Token{}, err
 	}
-	fetch := authx.JWTBearer(c.plain, tokenURL, func(context.Context) (string, error) {
-		return authx.SignJWT(key, authx.Header{Alg: authx.RS256, Kid: k.PrivateKeyID}, payload)
-	}, nil)
-	return fetch(ctx)
-}
-
-// fetchMetadataToken reads the attached service account's token from the
-// GCE metadata server. Its scope is whatever the instance was created with;
-// cloud-platform is the default.
-func (c *Connection) fetchMetadataToken(ctx context.Context) (authx.Token, error) {
-	var out struct {
-		AccessToken string          `json:"access_token"`
-		ExpiresIn   json.RawMessage `json:"expires_in"`
-	}
-	resp, err := c.plain.Do(ctx, &httpx.Request{Method: http.MethodGet,
-		Path:   c.metadataURL + "/computeMetadata/v1/instance/service-accounts/default/token",
-		Header: http.Header{"Metadata-Flavor": {"Google"}}})
+	assertion, err := authx.SignJWT(k.Key, authx.Header{Alg: authx.RS256, Kid: k.PrivateKeyID}, payload)
 	if err != nil {
-		return authx.Token{}, integration.Wrap(integration.CodeCredentialRejected, err, "the metadata server gave no token; auth_mode keyless needs a GCE or GKE Workload Identity")
+		return authx.Token{}, err
 	}
-	if err := resp.JSON(&out); err != nil || out.AccessToken == "" {
-		return authx.Token{}, integration.Errorf(integration.CodeCredentialRejected, "the metadata server returned no access_token")
+	form := url.Values{
+		"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
+		"assertion":  {assertion},
 	}
-	t := authx.Token{Value: out.AccessToken}
-	var secs int64
-	if json.Unmarshal(out.ExpiresIn, &secs) == nil && secs > 0 {
-		t.Expiry = c.now().Add(time.Duration(secs) * time.Second)
-	}
-	return t, nil
+	return authx.FetchToken(ctx, c.plain, authx.TokenRequest{URL: c.tokenURL, Form: form, Now: c.now})
 }
 
-// whoami is the service account email, for the probe. Keyless mode asks
-// the metadata server; a failure there leaves it empty.
-func (c *Connection) whoami(ctx context.Context) string {
+// whoami is the service account's email, for the probe: the key's
+// client_email, or in keyless mode the metadata server's answer.
+func (c *Connection) whoami(ctx context.Context) (string, error) {
 	if c.mode == modeKey {
-		if k, _, err := c.loadKey(); err == nil {
-			return k.ClientEmail
+		k, err := c.loadKey()
+		if err != nil {
+			return "", err
 		}
-		return ""
+		return k.ClientEmail, nil
 	}
 	resp, err := c.plain.Do(ctx, &httpx.Request{Method: http.MethodGet,
 		Path:   c.metadataURL + "/computeMetadata/v1/instance/service-accounts/default/email",
 		Header: http.Header{"Metadata-Flavor": {"Google"}}})
 	if err != nil {
-		return ""
+		return "", integration.Wrap(integration.CodeCredentialRejected, err, "the metadata server did not report the service account's email; auth_mode keyless needs a GCE or GKE Workload Identity")
 	}
 	email := strings.TrimSpace(string(resp.Body))
 	if !emailRe.MatchString(email) {
-		return ""
+		return "", integration.Errorf(integration.CodeCredentialRejected, "the metadata server returned no service account email")
 	}
-	return email
+	return email, nil
 }
 
 // tokenError classifies a minting failure.
@@ -328,24 +278,10 @@ func tokenError(err error) *integration.Error {
 
 // --- API transport ----------------------------------------------------------
 
-var reasonRe = regexp.MustCompile(`"reason"\s*:\s*"([A-Za-z_]+)"`)
-
-// reason extracts the first reason from a Google error body snippet. The
-// message is never used.
-func reason(err error) string {
-	var se *httpx.StatusError
-	if !errors.As(err, &se) {
-		return ""
-	}
-	if m := reasonRe.FindStringSubmatch(se.Snippet); m != nil {
-		return m[1]
-	}
-	return ""
-}
-
-// call performs one API request. A 401 invalidates the token and retries
-// once. The returned error is the raw httpx error so callers can branch on
-// the status; classify maps everything else.
+// call performs one API request with the bearer token. 4xx responses are
+// returned whole so their status and reason can be read from the full
+// body; a 401 invalidates the token and retries once. Transport errors,
+// timeouts and 5xx come back as httpx errors.
 func (c *Connection) call(ctx context.Context, req *httpx.Request) (*httpx.Response, error) {
 	attempt := func() (*httpx.Response, error) {
 		tok, err := c.tokens.Get(ctx)
@@ -361,42 +297,79 @@ func (c *Connection) call(ctx context.Context, req *httpx.Request) (*httpx.Respo
 		if c.quotaProject != "" {
 			r.Header.Set("X-Goog-User-Project", c.quotaProject)
 		}
+		r.Accept4xx = true
 		return c.api.Do(ctx, &r)
 	}
 	resp, err := attempt()
-	if httpx.Status(err) == 401 {
+	if err == nil && resp.Status == 401 {
 		c.tokens.Invalidate()
 		resp, err = attempt()
 	}
-	return resp, err
-}
-
-// rateLimitReasons are the 403 reasons that mean "slow down".
-var rateLimitReasons = map[string]bool{
-	"rateLimitExceeded": true, "userRateLimitExceeded": true, "quotaExceeded": true,
-	"dailyLimitExceeded": true, "RATE_LIMIT_EXCEEDED": true,
-}
-
-// classify maps an API error to an integration error. A 403 is hallpass's
-// own setup (the API is not enabled, the service account lacks the role,
-// the quota project is wrong) unless its reason is a rate limit.
-func classify(err error) *integration.Error {
-	switch httpx.Status(err) {
-	case 403:
-		r := reason(err)
-		if rateLimitReasons[r] {
-			return integration.Wrap(integration.CodeUpstreamRateLimit, err, "rate limited by Google")
-		}
-		if r == "" {
-			return integration.Wrap(integration.CodeCredentialRejected, err, "the Policy Troubleshooter refused the call (HTTP 403): enable the API, grant the service account roles/iam.securityReviewer, or set quota_project")
-		}
-		return integration.Wrap(integration.CodeCredentialRejected, err, "the Policy Troubleshooter refused the call (HTTP 403, %s): enable the API, grant the service account roles/iam.securityReviewer, or set quota_project", r)
-	case 400:
-		return integration.Wrap(integration.CodeInvalidRequest, err, "the Policy Troubleshooter rejected the request: check the permission name, the resource and that the principal is a Google Account or service account")
-	case 404:
-		return integration.Wrap(integration.CodeResourceNotVisible, err, "the Policy Troubleshooter found no such resource")
+	if err != nil {
+		return nil, httpx.Classify(err)
 	}
-	return httpx.Classify(err)
+	if resp.Status >= 400 {
+		return nil, apiError(resp)
+	}
+	return resp, nil
+}
+
+// rateLimitReasons and rateLimitStatuses are the 403 markers that mean
+// "slow down" rather than "not allowed".
+var (
+	rateLimitReasons  = map[string]bool{"rateLimitExceeded": true, "userRateLimitExceeded": true, "quotaExceeded": true, "dailyLimitExceeded": true, "RATE_LIMIT_EXCEEDED": true}
+	rateLimitStatuses = map[string]bool{"RESOURCE_EXHAUSTED": true}
+)
+
+// googleError is the envelope of a Google API error body. Only the status
+// and the reason tokens are read; the message is never used.
+type googleError struct {
+	Error struct {
+		Status  string `json:"status"`
+		Details []struct {
+			Reason string `json:"reason"`
+		} `json:"details"`
+		Errors []struct {
+			Reason string `json:"reason"`
+		} `json:"errors"`
+	} `json:"error"`
+}
+
+// apiError maps a 4xx response to an integration error. A 403 is hallpass's
+// own setup (the API is not enabled, the service account lacks the role,
+// the quota project is refused) unless its reason is a rate limit.
+func apiError(resp *httpx.Response) *integration.Error {
+	var ge googleError
+	_ = json.Unmarshal(resp.Body, &ge)
+	reason := authx.GoogleReasonIn(string(resp.Body))
+	if reason == "" {
+		for _, d := range ge.Error.Details {
+			if d.Reason != "" {
+				reason = d.Reason
+				break
+			}
+		}
+	}
+	cause := fmt.Errorf("policy troubleshooter: HTTP %d", resp.Status)
+	switch resp.Status {
+	case 429:
+		return integration.Wrap(integration.CodeUpstreamRateLimit, cause, "rate limited by Google")
+	case 403:
+		if rateLimitReasons[reason] || rateLimitStatuses[ge.Error.Status] {
+			return integration.Wrap(integration.CodeUpstreamRateLimit, cause, "rate limited by Google")
+		}
+		if reason == "" {
+			return integration.Wrap(integration.CodeCredentialRejected, cause, "the Policy Troubleshooter refused the call (HTTP 403): enable the API, grant the service account roles/iam.securityReviewer, or set quota_project")
+		}
+		return integration.Wrap(integration.CodeCredentialRejected, cause, "the Policy Troubleshooter refused the call (HTTP 403, %s): enable the API, grant the service account roles/iam.securityReviewer, or set quota_project", reason)
+	case 401:
+		return integration.Wrap(integration.CodeCredentialRejected, cause, "the Policy Troubleshooter rejected the access token twice")
+	case 400:
+		return integration.Wrap(integration.CodeInvalidRequest, cause, "the Policy Troubleshooter rejected the request: check the permission name, the resource and that the principal is a Google Account or service account")
+	case 404:
+		return integration.Wrap(integration.CodeResourceNotVisible, cause, "the Policy Troubleshooter found no such resource")
+	}
+	return integration.Wrap(integration.CodeUpstreamError, cause, "the Policy Troubleshooter answered HTTP %d", resp.Status)
 }
 
 // --- identity ---------------------------------------------------------------
@@ -451,16 +424,9 @@ type accessTuple struct {
 
 // troubleshootResponse is the subset of the v3 response hallpass reads.
 type troubleshootResponse struct {
-	OverallAccessState string `json:"overallAccessState"`
-	AccessTuple        struct {
-		PermissionFQDN string `json:"permissionFqdn"`
-	} `json:"accessTuple"`
-	AllowPolicyExplanation struct {
-		AllowAccessState string `json:"allowAccessState"`
-	} `json:"allowPolicyExplanation"`
+	OverallAccessState    string `json:"overallAccessState"`
 	DenyPolicyExplanation struct {
-		DenyAccessState    string `json:"denyAccessState"`
-		PermissionDeniable *bool  `json:"permissionDeniable"`
+		DenyAccessState string `json:"denyAccessState"`
 	} `json:"denyPolicyExplanation"`
 }
 
@@ -471,15 +437,7 @@ const (
 	stateUnknownInfo        = "UNKNOWN_INFO"
 	stateUnknownConditional = "UNKNOWN_CONDITIONAL"
 
-	allowGranted    = "ALLOW_ACCESS_STATE_GRANTED"
-	allowNotGranted = "ALLOW_ACCESS_STATE_NOT_GRANTED"
-	allowUnknownCon = "ALLOW_ACCESS_STATE_UNKNOWN_CONDITIONAL"
-	allowUnknownInf = "ALLOW_ACCESS_STATE_UNKNOWN_INFO"
-
-	denyDenied     = "DENY_ACCESS_STATE_DENIED"
-	denyNotDenied  = "DENY_ACCESS_STATE_NOT_DENIED"
-	denyUnknownCon = "DENY_ACCESS_STATE_UNKNOWN_CONDITIONAL"
-	denyUnknownInf = "DENY_ACCESS_STATE_UNKNOWN_INFO"
+	denyDenied = "DENY_ACCESS_STATE_DENIED"
 )
 
 // troubleshoot asks one question.
@@ -490,7 +448,7 @@ func (c *Connection) troubleshoot(ctx context.Context, principal, permission, re
 	resp, err := c.call(ctx, &httpx.Request{Method: http.MethodPost, Path: "/v3/iam:troubleshoot",
 		JSON: map[string]accessTuple{"accessTuple": {Principal: principal, FullResourceName: resource, Permission: permission}}, Idempotent: &idem})
 	if err != nil {
-		return out, classify(err)
+		return out, err
 	}
 	if err := resp.JSON(&out); err != nil {
 		return out, integration.Wrap(integration.CodeUpstreamError, err, "the Policy Troubleshooter returned an unreadable response")
@@ -553,9 +511,9 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 // proves the API is enabled and the policies under scope are readable;
 // UNKNOWN_INFO means the securityReviewer role is missing there.
 func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error) {
-	who := c.whoami(ctx)
-	if who == "" {
-		return integration.ProbeResult{}, integration.Errorf(integration.CodeCredentialRejected, "could not determine the service account's email")
+	who, err := c.whoami(ctx)
+	if err != nil {
+		return integration.ProbeResult{}, err
 	}
 	permission := "resourcemanager.projects.get"
 	switch {

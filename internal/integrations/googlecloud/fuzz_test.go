@@ -21,6 +21,10 @@ func FuzzParseRef(f *testing.F) {
 		{"gke.access", "cluster:acme-prod/europe-west1/main"},
 		{"storage.read", "name://storage.googleapis.com/projects/../x"},
 		{"storage.read", "object:acme-data/../x"},
+		{"storage.read", "object:acme-data/a/../x"},
+		{"storage.read", "object:acme-data/a/.."},
+		{"storage.read", "object:acme-data/Q1 2026 (final).pdf"},
+		{"secret.read", "secret:123456789012/db-password"},
 		{"project.view", "project:acme-prod?x=1"},
 		{"raw:storage.objects.get x", "project:acme-prod"},
 	} {
@@ -48,9 +52,11 @@ func FuzzParseRef(f *testing.F) {
 		} else if _, ok := actionIndex[action]; !ok {
 			t.Fatalf("unknown action %q accepted", action)
 		}
-		if !within(fullNameRe, q.resource) || strings.Contains(q.resource, "/../") || strings.HasSuffix(q.resource, "/..") ||
-			strings.ContainsAny(q.resource, " \t\r\n?#\"\\") {
+		if !wellFormed(q.resource) {
 			t.Fatalf("unvalidated resource %q from %q", q.resource, resource)
+		}
+		if res.Type != "object" && strings.ContainsAny(q.resource, " \t?#\"\\") {
+			t.Fatalf("unexpected characters in %q from %q", q.resource, resource)
 		}
 		if res.Type != "name" {
 			for _, piece := range strings.Split(res.ID, "/") {
