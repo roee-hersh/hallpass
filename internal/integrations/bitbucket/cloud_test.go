@@ -30,18 +30,19 @@ type cloudFake struct {
 	t  *testing.T
 	mu sync.Mutex
 
-	token         string
-	members       map[string]cloudMember       // email -> member
-	owners        []string                     // account ids
-	repos         map[string]bool              // slug -> is_private
-	repoPerms     map[string]map[string]string // slug -> account id -> permission
-	restrictions  map[string][]map[string]any  // slug -> restrictions
-	projects      map[string]bool              // key -> exists
-	projectUsers  map[string]map[string]string // key -> account id -> permission
-	projectGroups map[string]map[string]string // key -> group slug -> permission
-	rejectFilter  bool                         // 400 on q=user.account_id
-	status        int                          // when set, every API call fails with it
-	filtered      int                          // repository permission calls that carried a user filter
+	token          string
+	members        map[string]cloudMember       // email -> member
+	owners         []string                     // account ids
+	repos          map[string]bool              // slug -> is_private
+	repoPerms      map[string]map[string]string // slug -> account id -> permission
+	restrictions   map[string][]map[string]any  // slug -> restrictions
+	projects       map[string]bool              // key -> exists
+	projectUsers   map[string]map[string]string // key -> account id -> permission
+	projectGroups  map[string]map[string]string // key -> group slug -> permission
+	publicProjects map[string]bool              // key -> is_private false
+	rejectFilter   bool                         // 400 on q=user.account_id
+	status         int                          // when set, every API call fails with it
+	filtered       int                          // repository permission calls that carried a user filter
 }
 
 func newCloudFake(t *testing.T) *cloudFake {
@@ -237,7 +238,7 @@ func (f *cloudFake) api(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case sub == "":
-			write(w, map[string]any{"key": key, "name": itest.Canary})
+			write(w, map[string]any{"key": key, "name": itest.Canary, "is_private": !f.publicProjects[key]})
 		case strings.HasPrefix(sub, "permissions-config/users/"):
 			id := strings.TrimPrefix(sub, "permissions-config/users/")
 			perm, ok := f.projectUsers[key][id]
@@ -350,8 +351,14 @@ func TestAction_project_read_allow(t *testing.T) {
 	expect(t, check(t, c, bob, "project.read", "project:APP"), integration.CodeAllowed, "has read on project APP directly")
 }
 func TestAction_project_read_deny(t *testing.T) {
-	_, _, c := setupCloud(t, nil)
+	_, f, c := setupCloud(t, nil)
 	expect(t, check(t, c, cr, "project.read", "project:DOCS"), integration.CodeDenied, "has none on project DOCS, needs read")
+	// A public project is readable by everyone, but only readable.
+	f.mu.Lock()
+	f.publicProjects = map[string]bool{"DOCS": true}
+	f.mu.Unlock()
+	expect(t, check(t, c, cr, "project.read", "project:DOCS"), integration.CodeAllowed, "public")
+	expect(t, check(t, c, cr, "project.write", "project:DOCS"), integration.CodeDenied, "")
 }
 func TestAction_project_write_allow(t *testing.T) {
 	_, _, c := setupCloud(t, nil)
@@ -405,6 +412,9 @@ func TestCloudBranchRestrictionsUnknowns(t *testing.T) {
 	_, f, c := setupCloud(t, nil)
 	// A restriction exempting a group: Cloud does not say who is in it.
 	expect(t, check(t, c, dana, "repo.push", "repo:api@release/1.2"), integration.CodeUnsupported, "exempts group developers")
+	// "release/*" against a nested branch: Cloud's glob semantics are
+	// undocumented, so the answer is unknown rather than a guess.
+	expect(t, check(t, c, dana, "repo.push", "repo:api@release/1/hotfix"), integration.CodeUnsupported, `pattern "release/*"`)
 	// Branching model and character classes cannot be evaluated.
 	f.mu.Lock()
 	f.restrictions["api"] = append(f.restrictions["api"],
@@ -446,8 +456,6 @@ func TestCloudPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	orig := conn.cloudList
-	_ = orig
 	// The owner list has two entries (ola owner, dana member); with the
 	// fake's two-page mode the second page must be followed on the same host.
 	srv.Handle("GET", "/2.0/workspaces/acme/permissions", func(w http.ResponseWriter, r *http.Request) {
@@ -473,7 +481,7 @@ func TestCloudPagination(t *testing.T) {
 	srv.Handle("GET", "/2.0/workspaces/acme/permissions", func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"values": []any{}, "next": "https://evil.example/2.0/workspaces/acme/permissions?page=2"})
 	})
-	if _, err := conn.cloudIsOwner(context.Background(), id); err == nil || !strings.Contains(err.Error(), "another host") {
+	if _, err := conn.cloudIsOwner(context.Background(), id); err == nil || !strings.Contains(err.Error(), "outside its API") {
 		t.Errorf("foreign next link accepted: %v", err)
 	}
 }
@@ -548,25 +556,34 @@ func TestRejectsBadResources(t *testing.T) {
 func TestGlob(t *testing.T) {
 	cases := []struct {
 		pattern, branch string
-		match, ok       bool
+		dc, cloud       bool // matched
+		dcOK, cloudOK   bool // supported
 	}{
-		{"main", "main", true, true},
-		{"main", "main2", false, true},
-		{"release/*", "release/1.2", true, true},
-		{"release/*", "release/a/b", true, true},
-		{"release/*", "releases", false, true},
-		{"*", "anything/at/all", true, true},
-		{"**/hotfix", "a/b/hotfix", true, true},
-		{"feature/?", "feature/a", true, true},
-		{"feature/?", "feature/ab", false, true},
-		{"refs/heads/main", "main", true, true},
-		{"release/[0-9]", "release/1", false, false},
-		{"{a,b}", "a", false, false},
+		{"main", "main", true, true, true, true},
+		{"main", "main2", false, false, true, true},
+		{"release/*", "release/1.2", true, true, true, true},
+		// "*" across "/": Data Center says no; Cloud is undocumented, so unknown.
+		{"release/*", "release/a/b", false, false, true, false},
+		{"release/*", "releases", false, false, true, true},
+		{"*", "main", true, true, true, true},
+		{"*", "a/b", false, false, true, false},
+		{"**", "anything/at/all", true, true, true, true},
+		{"**/hotfix", "a/b/hotfix", true, true, true, true},
+		{"**/hotfix", "hotfix", true, true, true, true},
+		{"release/**", "release/a/b", true, true, true, true},
+		{"feature/?", "feature/a", true, true, true, true},
+		{"feature/?", "feature/ab", false, false, true, true},
+		{"feature/?", "feature//", false, false, true, false},
+		{"refs/heads/main", "main", true, true, true, true},
+		{"release/[0-9]", "release/1", false, false, false, false},
+		{"{a,b}", "a", false, false, false, false},
 	}
 	for _, tc := range cases {
-		m, ok := refMatch(tc.pattern, tc.branch)
-		if m != tc.match || ok != tc.ok {
-			t.Errorf("refMatch(%q, %q) = %v, %v; want %v, %v", tc.pattern, tc.branch, m, ok, tc.match, tc.ok)
+		if m, ok := refMatch(tc.pattern, tc.branch, true); m != tc.dc || ok != tc.dcOK {
+			t.Errorf("data center refMatch(%q, %q) = %v, %v; want %v, %v", tc.pattern, tc.branch, m, ok, tc.dc, tc.dcOK)
+		}
+		if m, ok := refMatch(tc.pattern, tc.branch, false); m != tc.cloud || ok != tc.cloudOK {
+			t.Errorf("cloud refMatch(%q, %q) = %v, %v; want %v, %v", tc.pattern, tc.branch, m, ok, tc.cloud, tc.cloudOK)
 		}
 	}
 }
@@ -621,6 +638,13 @@ func TestCloudProbe(t *testing.T) {
 		t.Error("probe passed on 403")
 	} else {
 		itest.AssertNoCanary(t, err.Error())
+	}
+	f.mu.Lock()
+	f.status = 503
+	f.mu.Unlock()
+	_, err = c.Probe(context.Background())
+	if d := integration.ToDecision(err); d.Code != integration.CodeUpstreamError {
+		t.Errorf("probe on 503: %s (%s)", d.Code, d.Text)
 	}
 }
 

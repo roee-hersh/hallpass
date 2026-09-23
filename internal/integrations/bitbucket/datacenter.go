@@ -140,9 +140,10 @@ func dcLevel(p string) level {
 type grantSet struct {
 	level level
 	how   string
-	// groupsMatter is true when a group grant exists that would raise the
-	// level but the user's groups are unavailable.
-	groupsMatter bool
+	// unresolved names grants hallpass could not evaluate that might raise
+	// the level: a group grant while the user's groups are unavailable, or
+	// the global permissions while they are unreadable.
+	unresolved []string
 }
 
 // dcGrants reads the user and group permission listings under base
@@ -187,7 +188,7 @@ func (c *Connection) dcGrants(ctx context.Context, base string, id integration.I
 				continue
 			}
 			if id.Attr("groups") == "unavailable" {
-				out.groupsMatter = true
+				out.unresolved = append(out.unresolved, v.Permission+" of group "+v.Group.Name)
 				continue
 			}
 			for _, g := range id.Groups {
@@ -261,11 +262,13 @@ func (c *Connection) dcProjectLevel(ctx context.Context, key string, id integrat
 		if err != nil {
 			return grantSet{}, true, err
 		}
-		if global.level == levelAdmin {
+		switch {
+		case global.level == levelAdmin:
 			g.level, g.how = levelAdmin, global.how+" globally"
-		} else if !seen && g.level < need {
-			g.groupsMatter = true // stands for "a grant hallpass could not read"
-			g.how += " (global permissions not readable)"
+		case !seen && g.level < need:
+			g.unresolved = append(g.unresolved, "the global permissions (not readable without ADMIN)")
+		default:
+			g.unresolved = append(g.unresolved, global.unresolved...)
 		}
 	}
 	return g, true, nil
@@ -300,8 +303,8 @@ func (c *Connection) dcInstance(ctx context.Context, t target, id integration.Id
 	if global.level == levelAdmin {
 		return integration.Allowed("%s is a global administrator (%s)", id.Display, global.how), nil
 	}
-	if global.groupsMatter {
-		return integration.Unsupported("a group holds a global administrator permission and hallpass could not list the groups of %s (needs LICENSED_USER)", id.Display), nil
+	if len(global.unresolved) > 0 {
+		return integration.Unsupported("%s holds no global administrator permission directly, and hallpass could not resolve %s (listing the groups of a user needs LICENSED_USER)", id.Display, strings.Join(global.unresolved, ", ")), nil
 	}
 	return integration.Denied("%s holds no global administrator permission", id.Display), nil
 }
@@ -354,7 +357,7 @@ func (c *Connection) dcRepo(ctx context.Context, t target, id integration.Identi
 		if p.level > g.level {
 			g.level, g.how = p.level, p.how+" on project "+t.project
 		}
-		g.groupsMatter = g.groupsMatter || p.groupsMatter
+		g.unresolved = append(g.unresolved, p.unresolved...)
 	}
 	d := dcDecide(g, need, id, t)
 	if d.Code != integration.CodeAllowed || t.branch == "" {
@@ -368,8 +371,8 @@ func dcDecide(g grantSet, need level, id integration.Identity, t target) integra
 	if g.level >= need {
 		return integration.Allowed("%s %s on %s: %s", id.Display, describeLevel(g.level, need), t, g.how)
 	}
-	if g.groupsMatter {
-		return integration.Unsupported("%s %s on %s directly, and a group or global grant hallpass could not resolve may add more", id.Display, describeLevel(g.level, need), t)
+	if len(g.unresolved) > 0 {
+		return integration.Unsupported("%s %s on %s as far as hallpass can read, and %s could add more", id.Display, describeLevel(g.level, need), t, strings.Join(g.unresolved, ", "))
 	}
 	return integration.Denied("%s %s on %s", id.Display, describeLevel(g.level, need), t)
 }
@@ -409,12 +412,14 @@ func (c *Connection) dcBranch(ctx context.Context, t target, id integration.Iden
 				continue
 			}
 			switch r.Matcher.Type.ID {
+			case "ANY_REF":
+				matching = append(matching, r)
 			case "BRANCH":
 				if r.Matcher.DisplayID == t.branch || r.Matcher.ID == "refs/heads/"+t.branch {
 					matching = append(matching, r)
 				}
 			case "PATTERN":
-				matched, ok := refMatch(r.Matcher.ID, t.branch)
+				matched, ok := refMatch(r.Matcher.ID, t.branch, true)
 				if !ok {
 					unsupported = append(unsupported, "pattern "+strconv.Quote(r.Matcher.ID))
 				} else if matched {

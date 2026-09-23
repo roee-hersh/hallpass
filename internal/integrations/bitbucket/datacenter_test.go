@@ -326,6 +326,20 @@ func TestDCBranches(t *testing.T) {
 	f.groupsDenied = true
 	f.mu.Unlock()
 	expect(t, check(t, c, root, "repo.push", "repo:APP/api@release/2.0"), integration.CodeUnsupported, "could not list the groups")
+	// Ant-style: "release/*" does not reach a nested branch.
+	f.mu.Lock()
+	f.groupsDenied = false
+	f.mu.Unlock()
+	expect(t, check(t, c, root, "repo.push", "repo:APP/api@release/2.0/fix"), integration.CodeAllowed, "")
+	// An all-branches restriction matches everything.
+	f.mu.Lock()
+	f.restrictions["APP/api"] = append(f.restrictions["APP/api"], map[string]any{"id": 9, "type": "read-only", "matcher": map[string]any{"id": "ANY_REF_MATCHER_ID", "displayId": "ANY_REF_MATCHER_ID", "type": map[string]any{"id": "ANY_REF", "name": "Any branch"}}, "users": []map[string]any{{"name": "dana"}}, "groups": []string{}})
+	f.mu.Unlock()
+	expect(t, check(t, c, root, "repo.push", "repo:APP/api@feature/x"), integration.CodeDenied, "read-only restriction on ANY_REF_MATCHER_ID")
+	expect(t, check(t, c, dana, "repo.push", "repo:APP/api@feature/x"), integration.CodeAllowed, "")
+	f.mu.Lock()
+	f.restrictions["APP/api"] = f.restrictions["APP/api"][:3]
+	f.mu.Unlock()
 	// Branching-model matchers are unknown.
 	f.mu.Lock()
 	f.groupsDenied = false
@@ -357,7 +371,7 @@ func TestDCProjectAndInstance(t *testing.T) {
 	f.tokenIsAdmin = false
 	f.mu.Unlock()
 	expect(t, check(t, c, dana, "workspace.admin", "workspace"), integration.CodeCredentialRejected, "needs ADMIN")
-	expect(t, check(t, c, root, "repo.admin", "repo:APP/api"), integration.CodeUnsupported, "could not resolve")
+	expect(t, check(t, c, root, "repo.admin", "repo:APP/api"), integration.CodeUnsupported, "global permissions (not readable without ADMIN)")
 	expect(t, check(t, c, bob, "repo.read", "repo:APP/api"), integration.CodeAllowed, "")
 	r, err := c.Probe(context.Background())
 	if err != nil {
@@ -373,7 +387,7 @@ func TestDCProjectAndInstance(t *testing.T) {
 	f.mu.Unlock()
 	// dana still has PROJECT_WRITE directly; eve's only hope is a group.
 	expect(t, check(t, c, dana, "repo.push", "repo:APP/api"), integration.CodeAllowed, "PROJECT_WRITE granted directly")
-	expect(t, check(t, c, eve, "repo.push", "repo:APP/api"), integration.CodeUnsupported, "group or global grant hallpass could not resolve")
+	expect(t, check(t, c, eve, "repo.push", "repo:APP/api"), integration.CodeUnsupported, "REPO_WRITE of group developers")
 	expect(t, check(t, c, bob, "repo.read", "repo:APP/api"), integration.CodeAllowed, "")
 }
 

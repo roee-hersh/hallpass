@@ -144,20 +144,6 @@ func (c *Connection) getJSON(ctx context.Context, path string, q url.Values, out
 	return nil
 }
 
-// sameHost reports whether a pagination URL stays on the API host, so the
-// token never travels elsewhere.
-func (c *Connection) sameHost(raw string) bool {
-	next, err := url.Parse(raw)
-	if err != nil {
-		return false
-	}
-	base, err := url.Parse(c.api.Base)
-	if err != nil {
-		return false
-	}
-	return next.Scheme == base.Scheme && next.Host == base.Host
-}
-
 func (c *Connection) dataCenter() bool { return c.edition == editionDataCenter }
 
 // classify maps an API error to an integration error. 404 is left to the
@@ -167,7 +153,7 @@ func classify(err error, what string) *integration.Error {
 	case 401:
 		return integration.Wrap(integration.CodeCredentialRejected, err, "Bitbucket rejected hallpass's token")
 	case 403:
-		return integration.Wrap(integration.CodeCredentialRejected, err, "Bitbucket refused to %s: hallpass's token lacks admin on it (HTTP 403)", what)
+		return integration.Wrap(integration.CodeCredentialRejected, err, "Bitbucket refused to %s (HTTP 403): hallpass's token lacks the permission that read needs", what)
 	case 400:
 		return integration.Wrap(integration.CodeInvalidRequest, err, "Bitbucket rejected the request to %s (HTTP 400)", what)
 	}

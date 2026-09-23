@@ -5,6 +5,7 @@ package bitbucket
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -29,26 +30,39 @@ type cloudPage[T any] struct {
 	Next   string `json:"next"`
 }
 
-// cloudList reads every page of a Cloud list. Pages are followed through
-// the body's next URL, which must stay on the API host.
-func (c *Connection) cloudList(ctx context.Context, path string, q url.Values, each func(raw []byte) error) error {
+// cloudList reads every page of a Cloud list and hands each page's values
+// to each. Pages are followed through the body's next URL, which must stay
+// under the API base.
+func (c *Connection) cloudList(ctx context.Context, path string, q url.Values, each func(values []json.RawMessage) error) error {
 	req := &httpx.Request{Path: path, Query: q}
 	return c.api.Paginate(ctx, req, func(resp *httpx.Response) (*httpx.Request, error) {
-		if err := each(resp.Body); err != nil {
-			return nil, err
-		}
-		var page cloudPage[struct{}]
+		var page cloudPage[json.RawMessage]
 		if err := resp.JSON(&page); err != nil {
 			return nil, integration.Wrap(integration.CodeUpstreamError, err, "Bitbucket returned an unreadable page")
+		}
+		if err := each(page.Values); err != nil {
+			return nil, err
 		}
 		if page.Next == "" {
 			return nil, nil
 		}
-		if !c.sameHost(page.Next) {
-			return nil, integration.Errorf(integration.CodeUpstreamError, "Bitbucket sent a next page on another host")
+		if !c.api.Within(page.Next) {
+			return nil, integration.Errorf(integration.CodeUpstreamError, "Bitbucket sent a next page outside its API")
 		}
 		return &httpx.Request{Path: page.Next}, nil
 	})
+}
+
+// decodeEach unmarshals every raw value into T and calls fn.
+func decodeEach[T any](values []json.RawMessage, fn func(T)) error {
+	for _, raw := range values {
+		var v T
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return integration.Wrap(integration.CodeUpstreamError, err, "Bitbucket returned an unreadable entry")
+		}
+		fn(v)
+	}
+	return nil
 }
 
 // --- identity ---------------------------------------------------------------
@@ -110,25 +124,27 @@ func (c *Connection) cloudCheck(ctx context.Context, t target, id integration.Id
 // cloudIsOwner reports whether the user is a workspace owner.
 func (c *Connection) cloudIsOwner(ctx context.Context, id integration.Identity) (bool, error) {
 	owner := false
-	err := c.cloudList(ctx, "/2.0/workspaces/"+httpx.PathEscape(c.workspace)+"/permissions", url.Values{"q": {`permission="owner"`}, "pagelen": {"100"}}, func(raw []byte) error {
-		var page cloudPage[struct {
-			Permission string    `json:"permission"`
-			User       cloudUser `json:"user"`
-		}]
-		if err := (&httpx.Response{Body: raw}).JSON(&page); err != nil {
-			return integration.Wrap(integration.CodeUpstreamError, err, "Bitbucket returned an unreadable page")
-		}
-		for _, v := range page.Values {
-			if v.Permission == "owner" && (v.User.AccountID == id.ID || (v.User.UUID != "" && v.User.UUID == id.Attr("uuid"))) {
+	type membership struct {
+		Permission string    `json:"permission"`
+		User       cloudUser `json:"user"`
+	}
+	err := c.cloudList(ctx, "/2.0/workspaces/"+httpx.PathEscape(c.workspace)+"/permissions", url.Values{"q": {`permission="owner"`}, "pagelen": {"100"}}, func(values []json.RawMessage) error {
+		return decodeEach(values, func(m membership) {
+			if m.Permission == "owner" && sameUser(m.User, id) {
 				owner = true
 			}
-		}
-		return nil
+		})
 	})
 	if err != nil {
 		return false, classify(err, "list the workspace owners")
 	}
 	return owner, nil
+}
+
+// sameUser matches a Cloud user object against the identity by account id
+// or UUID.
+func sameUser(u cloudUser, id integration.Identity) bool {
+	return u.AccountID == id.ID || (u.UUID != "" && u.UUID == id.Attr("uuid"))
 }
 
 func (c *Connection) cloudWorkspace(ctx context.Context, t target, id integration.Identity) (integration.Decision, error) {
@@ -181,7 +197,10 @@ func (l cloudProjectLevel) satisfies(a action) bool {
 
 func (c *Connection) cloudProject(ctx context.Context, t target, id integration.Identity) (integration.Decision, error) {
 	base := "/2.0/workspaces/" + httpx.PathEscape(c.workspace) + "/projects/" + httpx.PathEscape(t.project)
-	if err := c.getJSON(ctx, base, nil, nil); err != nil {
+	var project struct {
+		IsPrivate *bool `json:"is_private"`
+	}
+	if err := c.getJSON(ctx, base, nil, &project); err != nil {
 		if httpx.Status(err) == 404 {
 			return integration.UnknownDecision(integration.CodeResourceNotVisible, "project %s does not exist in workspace %s or hallpass cannot see it", t.project, c.workspace), nil
 		}
@@ -201,6 +220,9 @@ func (c *Connection) cloudProject(ctx context.Context, t target, id integration.
 	if l := parseCloudProjectPermission(direct.Permission); l.satisfies(t.action) {
 		return integration.Allowed("%s has %s on project %s directly (needs %s)", id.Display, direct.Permission, t.project, need), nil
 	}
+	if t.action.level == levelRead && !t.action.createRepo && project.IsPrivate != nil && !*project.IsPrivate {
+		return integration.Allowed("project %s is public, so %s can read it", t.project, id.Display), nil
+	}
 	owner, err := c.cloudIsOwner(ctx, id)
 	if err != nil {
 		return integration.Decision{}, err
@@ -211,22 +233,18 @@ func (c *Connection) cloudProject(ctx context.Context, t target, id integration.
 	// Group grants: Cloud's API exposes no group membership, so a group
 	// that would suffice makes the answer unknown rather than deny.
 	var groups []string
-	err = c.cloudList(ctx, base+"/permissions-config/groups", url.Values{"pagelen": {"100"}}, func(raw []byte) error {
-		var page cloudPage[struct {
-			Permission string `json:"permission"`
-			Group      struct {
-				Slug string `json:"slug"`
-			} `json:"group"`
-		}]
-		if err := (&httpx.Response{Body: raw}).JSON(&page); err != nil {
-			return integration.Wrap(integration.CodeUpstreamError, err, "Bitbucket returned an unreadable page")
-		}
-		for _, v := range page.Values {
-			if parseCloudProjectPermission(v.Permission).satisfies(t.action) {
-				groups = append(groups, v.Group.Slug)
+	type groupGrant struct {
+		Permission string `json:"permission"`
+		Group      struct {
+			Slug string `json:"slug"`
+		} `json:"group"`
+	}
+	err = c.cloudList(ctx, base+"/permissions-config/groups", url.Values{"pagelen": {"100"}}, func(values []json.RawMessage) error {
+		return decodeEach(values, func(g groupGrant) {
+			if parseCloudProjectPermission(g.Permission).satisfies(t.action) {
+				groups = append(groups, g.Group.Slug)
 			}
-		}
-		return nil
+		})
 	})
 	if err != nil {
 		return integration.Decision{}, classify(err, "read the project group permissions")
@@ -263,23 +281,19 @@ func parseCloudLevel(p string) level {
 func (c *Connection) cloudRepoLevel(ctx context.Context, slug string, id integration.Identity) (level, error) {
 	path := "/2.0/workspaces/" + httpx.PathEscape(c.workspace) + "/permissions/repositories/" + httpx.PathEscape(slug)
 	found := levelNone
+	type grant struct {
+		Permission string    `json:"permission"`
+		User       cloudUser `json:"user"`
+	}
 	read := func(q url.Values) error {
-		return c.cloudList(ctx, path, q, func(raw []byte) error {
-			var page cloudPage[struct {
-				Permission string    `json:"permission"`
-				User       cloudUser `json:"user"`
-			}]
-			if err := (&httpx.Response{Body: raw}).JSON(&page); err != nil {
-				return integration.Wrap(integration.CodeUpstreamError, err, "Bitbucket returned an unreadable page")
-			}
-			for _, v := range page.Values {
-				if v.User.AccountID == id.ID || (v.User.UUID != "" && v.User.UUID == id.Attr("uuid")) {
-					if l := parseCloudLevel(v.Permission); l > found {
+		return c.cloudList(ctx, path, q, func(values []json.RawMessage) error {
+			return decodeEach(values, func(g grant) {
+				if sameUser(g.User, id) {
+					if l := parseCloudLevel(g.Permission); l > found {
 						found = l
 					}
 				}
-			}
-			return nil
+			})
 		})
 	}
 	// UNVERIFIED: the filter grammar for a single user; the spec says the
@@ -358,14 +372,10 @@ func (c *Connection) cloudBranch(ctx context.Context, t target, id integration.I
 	var matching []cloudRestriction
 	var unsupported []string
 	path := "/2.0/repositories/" + httpx.PathEscape(c.workspace) + "/" + httpx.PathEscape(t.repo) + "/branch-restrictions"
-	err := c.cloudList(ctx, path, url.Values{"kind": {kind}, "pagelen": {"100"}}, func(raw []byte) error {
-		var page cloudPage[cloudRestriction]
-		if err := (&httpx.Response{Body: raw}).JSON(&page); err != nil {
-			return integration.Wrap(integration.CodeUpstreamError, err, "Bitbucket returned an unreadable page")
-		}
-		for _, r := range page.Values {
+	err := c.cloudList(ctx, path, url.Values{"kind": {kind}, "pagelen": {"100"}}, func(values []json.RawMessage) error {
+		return decodeEach(values, func(r cloudRestriction) {
 			if r.Kind != kind {
-				continue
+				return
 			}
 			switch r.BranchMatchKind {
 			case "branching_model":
@@ -373,15 +383,14 @@ func (c *Connection) cloudBranch(ctx context.Context, t target, id integration.I
 				// repository's branching model, which hallpass does not read.
 				unsupported = append(unsupported, "branching model "+r.BranchType)
 			default:
-				matched, ok := refMatch(r.Pattern, t.branch)
+				matched, ok := refMatch(r.Pattern, t.branch, false)
 				if !ok {
 					unsupported = append(unsupported, "pattern "+strconv.Quote(r.Pattern))
 				} else if matched {
 					matching = append(matching, r)
 				}
 			}
-		}
-		return nil
+		})
 	})
 	if err != nil {
 		if httpx.Status(err) == 404 {
@@ -396,7 +405,7 @@ func (c *Connection) cloudBranch(ctx context.Context, t target, id integration.I
 	for _, r := range matching {
 		exempt := false
 		for _, u := range r.Users {
-			if u.AccountID == id.ID || (u.UUID != "" && u.UUID == id.Attr("uuid")) {
+			if sameUser(u, id) {
 				exempt = true
 			}
 		}
@@ -433,7 +442,10 @@ func (c *Connection) cloudProbe(ctx context.Context) (integration.ProbeResult, e
 	var page cloudPage[struct{}]
 	q := url.Values{"q": {`user.email IN ("probe@example.invalid")`}, "fields": {"values.user.email,values.user.account_id"}}
 	if err := c.getJSON(ctx, "/2.0/workspaces/"+httpx.PathEscape(c.workspace)+"/members", q, &page); err != nil {
-		return integration.ProbeResult{}, integration.Wrap(integration.CodeCredentialRejected, classify(err, "filter members by email"), "the token cannot filter workspace members by email; it must be a workspace access token or belong to a workspace administrator")
+		if st := httpx.Status(err); st == 401 || st == 403 || st == 400 {
+			return integration.ProbeResult{}, integration.Wrap(integration.CodeCredentialRejected, err, "the token cannot filter workspace members by email (HTTP %d); it must be a workspace access token or belong to a workspace administrator", st)
+		}
+		return integration.ProbeResult{}, classify(err, "filter members by email")
 	}
 	res := integration.ProbeResult{Summary: fmt.Sprintf("workspace %s: members can be looked up by email", ws.Slug)}
 	res.Warnings = append(res.Warnings,

@@ -185,33 +185,37 @@ func (t target) String() string {
 	return s
 }
 
-// globMatch matches a Bitbucket branch pattern against a branch name. "*"
-// and "**" match any run of characters, including "/"; "?" one character.
-// Anything else is literal. Patterns with character classes or
-// alternations are reported unsupported.
-func globMatch(pattern, name string) (matched, supported bool) {
-	if strings.ContainsAny(pattern, "[]{}") {
-		return false, false
-	}
-	return glob(pattern, name), true
-}
-
-func glob(p, s string) bool {
+// glob matches an Ant-style pattern: "*" and "?" stay within one path
+// segment, "**" crosses segments. With crossing set, "*" and "?" match "/"
+// too. Patterns with character classes or alternations are not handled.
+func glob(p, s string, crossing bool) bool {
 	for len(p) > 0 {
-		switch p[0] {
-		case '*':
+		switch {
+		case strings.HasPrefix(p, "**"):
 			p = strings.TrimLeft(p, "*")
+			p = strings.TrimPrefix(p, "/")
 			if p == "" {
 				return true
 			}
 			for i := 0; i <= len(s); i++ {
-				if glob(p, s[i:]) {
+				if (i == 0 || s[i-1] == '/') && glob(p, s[i:], crossing) {
 					return true
 				}
 			}
 			return false
-		case '?':
-			if s == "" {
+		case p[0] == '*':
+			p = p[1:]
+			for i := 0; i <= len(s); i++ {
+				if glob(p, s[i:], crossing) {
+					return true
+				}
+				if i < len(s) && s[i] == '/' && !crossing {
+					return false
+				}
+			}
+			return false
+		case p[0] == '?':
+			if s == "" || (s[0] == '/' && !crossing) {
 				return false
 			}
 			p, s = p[1:], s[1:]
@@ -225,11 +229,26 @@ func glob(p, s string) bool {
 	return s == ""
 }
 
-// refMatch matches a pattern that may carry a refs/heads/ prefix against a
-// branch name, as Bitbucket does.
-func refMatch(pattern, branch string) (bool, bool) {
+// refMatch matches a branch restriction pattern against a branch name. A
+// refs/heads/ prefix is stripped, as Bitbucket does. Data Center patterns
+// are Ant-style. Bitbucket Cloud does not document whether "*" crosses "/";
+// when the two readings disagree for this branch the match is reported
+// unsupported, so hallpass never guesses. Character classes and
+// alternations are unsupported on both.
+func refMatch(pattern, branch string, dataCenter bool) (matched, supported bool) {
 	pattern = strings.TrimPrefix(pattern, "refs/heads/")
-	return globMatch(pattern, branch)
+	if strings.ContainsAny(pattern, "[]{}") {
+		return false, false
+	}
+	segment := glob(pattern, branch, false)
+	if dataCenter {
+		return segment, true
+	}
+	// UNVERIFIED: whether Cloud's "*" matches across "/".
+	if crossing := glob(pattern, branch, true); crossing != segment {
+		return false, false
+	}
+	return segment, true
 }
 
 func describeLevel(l level, needed level) string {

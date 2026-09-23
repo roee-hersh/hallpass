@@ -115,8 +115,9 @@ reaches a URL.
   `users`; a matching restriction that exempts `groups` is `unknown`, since Cloud exposes no group
   membership. `branching_model` restrictions and patterns with `[]{}` are `unknown`.
 - Project: `GET .../projects/{key}/permissions-config/users/{account_id}` is the explicit
-  permission. When it does not suffice, a workspace owner is allowed; otherwise the project's group
-  permissions are read and a group that would suffice makes the answer `unknown`.
+  permission. When it does not suffice, a public project grants read and a workspace owner is
+  allowed; otherwise the project's group permissions are read and a group that would suffice makes
+  the answer `unknown`.
 - Workspace: `GET .../members/{account_id}` (404 is not a member); owners from
   `GET .../permissions?q=permission="owner"`.
 
@@ -129,12 +130,15 @@ reaches a URL.
   and the global permissions (`/rest/api/latest/admin/permissions/users|groups`, where `ADMIN` and
   `SYS_ADMIN` carry admin everywhere). Project levels carry to repositories.
 - Branch: `GET /rest/branch-permissions/2.0/projects/{key}/repos/{slug}/restrictions`. `read-only`
-  stops pushes and merges, `pull-request-only` stops direct pushes; `BRANCH` matchers compare the
-  name, `PATTERN` matchers are globs; the listed `users` and `groups` are exempt. Branching-model
-  matchers are `unknown`.
+  stops pushes and merges, `pull-request-only` stops direct pushes; `ANY_REF` matchers match every
+  branch, `BRANCH` matchers compare the name, `PATTERN` matchers are globs; the listed `users` and
+  `groups` are exempt. Branching-model matchers are `unknown`.
 
-Globs: `*` and `**` match any run of characters including `/`, `?` one character; `refs/heads/` is
-stripped from a pattern.
+Globs are Ant-style: `*` and `?` stay within one path segment, `**` crosses segments, and
+`refs/heads/` is stripped from a pattern. Bitbucket Cloud does not document whether its `*` crosses
+`/`, so on Cloud a pattern whose two readings disagree for the branch asked about (`release/*`
+against `release/1/hotfix`) answers `unknown` rather than guessing. Character classes and
+alternations are `unknown` on both editions.
 
 ## Decisions
 
@@ -144,14 +148,14 @@ stripped from a pattern.
 | level not held | deny ("has read, needs write") |
 | a restriction matches and the user is not exempt | deny, naming the restriction |
 | a matching restriction exempts a group hallpass cannot resolve (Cloud always; Data Center without `LICENSED_USER`) | unknown (`unsupported`) |
-| a `branching_model` restriction, or a pattern with character classes, could apply | unknown (`unsupported`) |
+| a `branching_model` restriction, a pattern with character classes, or on Cloud a pattern whose glob semantics are ambiguous for the branch, could apply | unknown (`unsupported`) |
 | Cloud project: explicit permission insufficient, not an owner, a group grant would suffice | unknown (`unsupported`) |
 | Data Center: level insufficient and a group or global grant hallpass could not read would matter | unknown (`unsupported`) |
 | deactivated user (Data Center) | deny |
 | no member / user with the email | deny (`user_not_found`) |
 | repository or project answers 404 | unknown (`resource_not_visible`) |
-| 401, 403 (token lacks admin on the object; Data Center `workspace.admin` without `ADMIN`) | unknown (`credential_rejected`) |
-| a next page on another host | unknown (`upstream_error`) |
+| 401, 403 (the token lacks the permission the read needs; Data Center `workspace.admin` without `ADMIN`) | unknown (`credential_rejected`) |
+| a next page outside the API base | unknown (`upstream_error`) |
 | 429, 5xx, timeout | unknown (`upstream_rate_limited` / `upstream_error` / `upstream_timeout`) |
 
 Error bodies are never copied into a decision text.
@@ -175,6 +179,8 @@ Marked `// UNVERIFIED:` in the code:
 - Cloud: the filter grammar `q=user.account_id="..."` on the repository permissions list; the spec
   says the list "may be filtered by user" and documents only `permission>"read"`. A 400 falls back to
   reading the list whole, so a wrong grammar costs calls, not correctness.
+- Cloud: whether `*` in a branch restriction pattern matches across `/`. hallpass answers `unknown`
+  whenever the two readings differ for the branch asked about.
 - Data Center: repository creation in a project is taken to need `PROJECT_ADMIN`. If Bitbucket lets
   `PROJECT_WRITE` create repositories, users with write are denied `repo.create` although they could.
 
