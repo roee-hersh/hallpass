@@ -62,10 +62,16 @@ func (r gqlRef) String() string {
 	return s
 }
 
-var sdlRe = regexp.MustCompile(`(?m)^\s*(extend\s+)?(schema|type|interface|input|enum|scalar|union|directive)\s`)
+// sdlRe is a type definition at the start of a line: `type Query {`,
+// `schema {`, `directive @x`, `scalar DateTime`, `union U = A | B`. A YAML
+// description that happens to start a line with "type of ..." does not
+// match, since the name must be followed by a brace, "implements", "=", "@"
+// or the end of the line.
+var sdlRe = regexp.MustCompile(`(?m)^\s*(?:(?:extend\s+)?(?:type|interface|input|enum|scalar|union)\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:\{|implements\b|=|@|$)|(?:extend\s+)?schema\s*(?:\{|@)|directive\s+@)`)
 
 // looksLikeSDL reports whether raw is a GraphQL schema rather than JSON or
-// YAML.
+// YAML. It is consulted only when the text is not a JSON or YAML document
+// of a known description format.
 func looksLikeSDL(raw []byte) bool {
 	trim := strings.TrimSpace(string(raw))
 	return trim != "" && trim[0] != '{' && sdlRe.MatchString(trim)

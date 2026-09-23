@@ -99,6 +99,30 @@ func TestGraphQL(t *testing.T) {
 	}
 }
 
+// TestSDLDetection: a YAML description whose free text starts a line with
+// an SDL keyword is not taken for a schema, and an SDL schema is.
+func TestSDLDetection(t *testing.T) {
+	yamlDoc := "swagger: '2.0'\npaths:\n  /x:\n    get:\n      description: |\n        The\n        type of item to import is controlled by the `relation` attribute. Skips\n        enum values that do not fit.\n"
+	if looksLikeSDL([]byte(yamlDoc)) {
+		t.Error("YAML taken for SDL")
+	}
+	s, err := LoadSpec("y", []byte(yamlDoc))
+	if err != nil || s.Name() != "y" {
+		t.Fatalf("yaml: %v", err)
+	}
+	if _, ok := s.(*graphQL); ok {
+		t.Error("yaml loaded as GraphQL")
+	}
+	for _, src := range []string{sdl, "type Query { a: Int }", "schema {\n query: Q\n}", "scalar X\ntype Query { x: X }", "\"\"\"doc\"\"\"\ntype Query implements Node { id: ID! }"} {
+		if !looksLikeSDL([]byte(src)) {
+			t.Errorf("SDL not recognised: %q", src[:20])
+		}
+		if _, err := LoadSpec("g", []byte(src)); err != nil {
+			t.Errorf("SDL failed to load: %v", err)
+		}
+	}
+}
+
 // TestGraphQLRealSchema parses the Linear schema when it is available.
 func TestGraphQLRealSchema(t *testing.T) {
 	dir := os.Getenv("HALLPASS_SPECS_DIR")
