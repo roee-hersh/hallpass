@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -355,4 +356,79 @@ func (c *TTL[K, V]) inflightCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.inflight)
+}
+
+// Under a fresh context Do looks the value up again, ignoring the entry
+// and any fill in flight, records the calls as its own, and stores the
+// answer for the callers after it.
+func TestDoFresh(t *testing.T) {
+	c := New[string, int](0)
+	var fills atomic.Int32
+	fill := func(ctx context.Context) (int, time.Duration, error) {
+		n := int(fills.Add(1))
+		integration.RecorderFrom(ctx).Record(integration.Call{Method: "GET", Path: "/v", Status: 200, ETag: strconv.Itoa(n)})
+		return n, time.Minute, nil
+	}
+	ctx := context.Background()
+	if v, _ := c.Do(ctx, "k", fill); v != 1 {
+		t.Fatal(v)
+	}
+	if v, _ := c.Do(ctx, "k", fill); v != 1 || fills.Load() != 1 {
+		t.Fatal("not cached")
+	}
+	fctx, frec := integration.WithRecorder(integration.WithFresh(ctx))
+	if v, err := c.Do(fctx, "k", fill); err != nil || v != 2 || fills.Load() != 2 {
+		t.Fatalf("fresh: %v %v fills=%d", v, err, fills.Load())
+	}
+	if ev := frec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached || ev.Upstream[0].ETag != "2" {
+		t.Fatalf("fresh evidence: %+v", ev)
+	}
+	// The fresh answer replaced the entry, evidence included.
+	nctx, nrec := integration.WithRecorder(ctx)
+	if v, _ := c.Do(nctx, "k", fill); v != 2 || fills.Load() != 2 {
+		t.Fatal("fresh answer not stored")
+	}
+	if ev := nrec.Evidence(); ev == nil || !ev.Upstream[0].Cached || ev.Upstream[0].ETag != "2" {
+		t.Fatalf("after fresh: %+v", ev)
+	}
+
+	// A fresh caller does not join a fill in flight.
+	started := make(chan struct{})
+	release := make(chan struct{})
+	slow := func(ctx context.Context) (int, time.Duration, error) {
+		close(started)
+		<-release
+		return 100, time.Minute, nil
+	}
+	go c.Do(ctx, "slow", slow)
+	<-started
+	done := make(chan int, 1)
+	go func() {
+		v, _ := c.Do(integration.WithFresh(ctx), "slow", func(context.Context) (int, time.Duration, error) { return 7, time.Minute, nil })
+		done <- v
+	}()
+	select {
+	case v := <-done:
+		if v != 7 {
+			t.Fatal(v)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fresh caller waited for the in-flight fill")
+	}
+	close(release)
+
+	// A failed fresh lookup stores nothing and leaves the entry; a fresh
+	// answer with ttl 0 removes it.
+	if _, err := c.Do(integration.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 0, time.Minute, errors.New("x") }); err == nil {
+		t.Fatal("no error")
+	}
+	if v, ok := c.Get("k"); !ok || v != 2 {
+		t.Fatal("entry lost on a failed fresh lookup")
+	}
+	if v, err := c.Do(integration.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 9, 0, nil }); err != nil || v != 9 {
+		t.Fatal(v, err)
+	}
+	if _, ok := c.Get("k"); ok {
+		t.Fatal("ttl 0 fresh answer stored")
+	}
 }

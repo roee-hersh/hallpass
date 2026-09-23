@@ -78,7 +78,9 @@ Every response `httpx` completes during `ResolveIdentity` and `Check` is recorde
 decision (method, path, status, and the `ETag` or the body's SHA-256) and written to the decision log
 by the engine; an integration does nothing for this. Calls made from the client's `Auth` func or
 by an `authx` token source are not recorded. A lookup an integration caches in a `cache.TTL`
-(role definitions, policies) is replayed, marked `cached`, on every check the entry serves.
+(role definitions, policies) is replayed, marked `cached`, on every check the entry serves, and
+is looked up again for a check with `"fresh": true` (`integration.Fresh(ctx)`). Keep such lookups
+in a `cache.TTL` rather than a hand-rolled map so both hold.
 
 ## Auth (`internal/authx`)
 

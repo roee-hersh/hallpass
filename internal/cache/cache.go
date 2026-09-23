@@ -61,19 +61,8 @@ func (c *TTL[K, V]) SetClock(now func() time.Time) {
 
 // Get returns the cached value when present and not expired.
 func (c *TTL[K, V]) Get(k K) (V, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, ok := c.items[k]
-	if !ok {
-		var zero V
-		return zero, false
-	}
-	if !c.now().Before(e.exp) {
-		delete(c.items, k)
-		var zero V
-		return zero, false
-	}
-	return e.v, true
+	v, _, ok := c.get(k)
+	return v, ok
 }
 
 // Set stores v for ttl. A ttl <= 0 removes the key.
@@ -159,6 +148,10 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // cached. So a decision served from a cached lookup still shows what the
 // upstream said when the lookup was made.
 //
+// Under a fresh context (integration.WithFresh) Do neither reads the cache
+// nor joins a fill in flight: it runs fill itself, on ctx, and stores the
+// answer for the callers after it.
+//
 // The fill runs in its own goroutine on a context detached from the first
 // caller's cancellation (see Detach) rather than on ctx itself: otherwise
 // that caller going away would abort the fill and hand every waiter a
@@ -167,6 +160,9 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // *PanicError for everyone waiting on it.
 func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
 	rec := integration.RecorderFrom(ctx)
+	if integration.Fresh(ctx) {
+		return c.fresh(ctx, k, fill, rec)
+	}
 	if v, ev, ok := c.get(k); ok {
 		rec.Add(ev, true)
 		return v, nil
@@ -210,6 +206,29 @@ func (c *TTL[K, V]) get(k K) (V, *integration.Evidence, bool) {
 		return zero, nil, false
 	}
 	return e.v, e.ev, true
+}
+
+// fresh runs fill for k now, on the caller's own context, and stores the
+// answer (with its evidence) in place of whatever the cache held. Nobody
+// waits on it, so a panic propagates to the caller like any other.
+func (c *TTL[K, V]) fresh(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error), rec *integration.Recorder) (V, error) {
+	fctx, own := integration.WithRecorder(ctx)
+	v, ttl, err := fill(fctx)
+	ev := own.Evidence()
+	rec.Add(ev, false)
+	if err != nil {
+		var zero V
+		return zero, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ttl <= 0 {
+		delete(c.items, k)
+		return v, nil
+	}
+	c.evictLocked()
+	c.items[k] = entry[V]{v: v, exp: c.now().Add(ttl), ev: ev}
+	return v, nil
 }
 
 // fill runs one fill for k, then always removes the inflight entry and

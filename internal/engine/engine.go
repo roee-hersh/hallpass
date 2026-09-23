@@ -35,9 +35,10 @@ type Request struct {
 	Action     string
 	Resource   string
 	// Fresh asks for an answer straight from the upstream system: the
-	// decision cache and the identity cache are not consulted, and what
-	// the request learns replaces their entries. For a caller about to do
-	// something destructive.
+	// decision cache, the identity cache and the lookups integrations
+	// cache themselves are not consulted, and what the request learns
+	// replaces their entries. For a caller about to do something
+	// destructive.
 	Fresh bool
 	// Remote is the caller's address, for the decision log only.
 	Remote string
@@ -312,6 +313,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	decKey := strings.Join([]string{req.Connection, req.User, groupsKey(groups), req.Action, req.Resource}, "\x00")
 	if e.decTTL > 0 && !req.Fresh {
 		if d, ok := e.decs.Get(decKey); ok {
+			d.Evidence = d.Evidence.AsCached()
 			return Result{Decision: d, Status: http.StatusOK, Cached: true}
 		}
 	}
@@ -319,8 +321,13 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	ctx, cancel := context.WithTimeout(ctx, c.settings.EffectiveTimeout())
 	defer cancel()
 	ctx, rec := integration.WithRecorder(ctx)
+	if req.Fresh {
+		// Every cache.TTL on the way, the identity cache and the ones
+		// integrations keep, looks up again under a fresh context.
+		ctx = integration.WithFresh(ctx)
+	}
 
-	identity, err := e.identity(ctx, c, user, req.Fresh)
+	identity, err := e.identity(ctx, c, user)
 	if err != nil {
 		d := integration.ToDecision(err)
 		d.Evidence = rec.Evidence()
@@ -379,10 +386,9 @@ func identityKey(connID string, u integration.User) string {
 }
 
 // identity resolves u through the identity cache, which also carries the
-// evidence of the lookup to every check it serves. A fresh request drops
-// the cached entry first, so it looks up again (or joins a lookup already
-// in flight) and its answer replaces the entry.
-func (e *Engine) identity(ctx context.Context, c *conn, u integration.User, fresh bool) (integration.Identity, error) {
+// evidence of the lookup to every check it serves and looks up again under
+// a fresh context.
+func (e *Engine) identity(ctx context.Context, c *conn, u integration.User) (integration.Identity, error) {
 	key := identityKey(c.settings.ID, u)
 	fill := func(ctx context.Context) (idEntry, time.Duration, error) {
 		id, err := c.c.ResolveIdentity(ctx, u)
@@ -398,9 +404,6 @@ func (e *Engine) identity(ctx context.Context, c *conn, u integration.User, fres
 	var ent idEntry
 	var err error
 	if e.idTTL > 0 {
-		if fresh {
-			e.idCache.Delete(key)
-		}
 		ent, err = e.idCache.Do(ctx, key, fill)
 	} else {
 		ent, _, err = fill(ctx)

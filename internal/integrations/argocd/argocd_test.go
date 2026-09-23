@@ -245,6 +245,19 @@ func TestPolicyCacheAndFailures(t *testing.T) {
 	if cl.reads != reads {
 		t.Fatal("policy re-read within the cache window")
 	}
+	// A fresh check re-reads the policy inside the window and the next
+	// check is served from what it read.
+	if _, err := c.(*Connection).load(integration.WithFresh(context.Background())); err != nil {
+		t.Fatal(err)
+	}
+	if cl.reads == reads {
+		t.Fatal("policy not re-read for a fresh check")
+	}
+	reads = cl.reads
+	check(t, c, dev, "app.sync", "applications:dev/web")
+	if cl.reads != reads {
+		t.Fatal("fresh read not stored")
+	}
 	*now = now.Add(policyCacheTTL + time.Second)
 	check(t, c, dev, "app.sync", "applications:dev/web")
 	if cl.reads == reads {

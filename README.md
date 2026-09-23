@@ -179,8 +179,9 @@ has it working and tested in each framework:
 `deny` means the third-party system positively said no. Anything hallpass could not evaluate is
 `unknown`. Callers should treat `unknown` as deny.
 
-The request also accepts `"fresh": true`. A fresh check skips the decision cache and the identity
-cache for that one request and asks the upstream system now; what it learns replaces the cached
+The request also accepts `"fresh": true`. A fresh check skips every cache for that one request,
+the decision cache, the identity cache and the lookups an integration caches itself (role
+definitions, policies), and asks the upstream system now; what it learns replaces the cached
 entries, so reads keep using the cache. Use it for destructive actions (delete, merge, scale),
 where a 30-second-old answer is not good enough. A fresh check narrows the window between the
 check and the action to the time between the two; it does not close it. Closing it needs a
@@ -385,7 +386,7 @@ made only of validated pieces before it reaches a URL or query; CI runs them nig
   ETag or body hash) of the upstream calls the decision was computed from.
 - Allow and deny answers are cached for 30 seconds by default; unknown answers are never cached.
   Both caches key on the connection, the user and the exact list of groups the caller sent. A
-  request with `"fresh": true` bypasses both for itself and refreshes their entries.
+  request with `"fresh": true` bypasses every cache for itself and refreshes their entries.
 
 ## License
 

@@ -87,6 +87,17 @@ func (r *Recorder) Add(ev *Evidence, cached bool) {
 	}
 }
 
+// AsCached returns a copy of ev with every call marked cached, for a
+// decision served from a cache. A nil ev gives nil.
+func (ev *Evidence) AsCached() *Evidence {
+	if ev == nil {
+		return nil
+	}
+	r := &Recorder{}
+	r.Add(ev, true)
+	return r.Evidence()
+}
+
 // Evidence returns a snapshot of what was recorded, or nil when nothing
 // was. The snapshot is not affected by later calls to Record.
 func (r *Recorder) Evidence() *Evidence {
@@ -125,4 +136,20 @@ func WithoutRecorder(ctx context.Context) context.Context {
 func RecorderFrom(ctx context.Context) *Recorder {
 	r, _ := ctx.Value(recorderKey{}).(*Recorder)
 	return r
+}
+
+type freshKey struct{}
+
+// WithFresh marks a context as belonging to a fresh check: every cache.TTL
+// consulted under it looks the value up again instead of serving a cached
+// or in-flight one, and replaces its entry with the answer. The engine sets
+// it for a request with "fresh": true.
+func WithFresh(ctx context.Context) context.Context {
+	return context.WithValue(ctx, freshKey{}, true)
+}
+
+// Fresh reports whether ctx belongs to a fresh check.
+func Fresh(ctx context.Context) bool {
+	v, _ := ctx.Value(freshKey{}).(bool)
+	return v
 }

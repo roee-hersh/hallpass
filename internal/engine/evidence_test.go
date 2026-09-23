@@ -98,6 +98,10 @@ func (web) New(_ context.Context, s *integration.Settings, d integration.Deps) (
 
 type webConn struct{ api *httpx.Client }
 
+// lastFresh is whether the last Check ran under a fresh context, which is
+// what an integration's own cache.TTL looks at.
+var lastFresh atomic.Bool
+
 func (c *webConn) ResolveIdentity(ctx context.Context, u integration.User) (integration.Identity, error) {
 	var out struct{ ID string }
 	if _, err := c.api.GetJSON(ctx, "/users/"+httpx.PathEscape(u.Email), nil, &out); err != nil {
@@ -107,6 +111,7 @@ func (c *webConn) ResolveIdentity(ctx context.Context, u integration.User) (inte
 }
 
 func (c *webConn) Check(ctx context.Context, r integration.CheckRequest) (integration.Decision, error) {
+	lastFresh.Store(integration.Fresh(ctx))
 	var out struct{ Allow bool }
 	q := url.Values{"user": {r.Identity.ID}, "token": {canary + "-query"}}
 	if _, err := c.api.GetJSON(ctx, "/perm", q, &out); err != nil {
@@ -235,8 +240,8 @@ func TestFreshCheck(t *testing.T) {
 	e, logs := buildWeb(t, u, Options{DecisionCache: 30 * time.Second, IdentityCache: 15 * time.Minute})
 	ctx := context.Background()
 
-	if r := e.Check(ctx, webReq("thing:1", false)); r.Decision.Outcome != integration.Allow {
-		t.Fatalf("%+v", r)
+	if r := e.Check(ctx, webReq("thing:1", false)); r.Decision.Outcome != integration.Allow || lastFresh.Load() {
+		t.Fatalf("%+v fresh=%v", r, lastFresh.Load())
 	}
 	u.allow.Store(false)
 	u.etag.Store(`"user-v2"`)
@@ -251,6 +256,9 @@ func TestFreshCheck(t *testing.T) {
 	}
 	if c := r.Decision.Evidence.Upstream[0]; c.Cached || c.ETag != `"user-v2"` {
 		t.Errorf("fresh identity call: %+v", c)
+	}
+	if !lastFresh.Load() {
+		t.Error("the integration did not see a fresh context")
 	}
 	// The fresh answer is what the caches now hold.
 	r = e.Check(ctx, webReq("thing:1", false))
