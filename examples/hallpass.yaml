@@ -59,6 +59,9 @@ connections:
   #   client_id: 66666666-7777-8888-9999-000000000000
   #   credential: env:AZURE_CLIENT_SECRET                # app registration with Reader at the root management group
   #   # microsoft365_connection: m365-corp                # resolve users through the microsoft365 connection instead of Graph
+  # - id: linear-acme
+  #   integration: linear
+  #   credential: env:LINEAR_API_KEY                   # personal API key of a workspace admin, or an OAuth token with auth_mode: oauth
   # - id: zendesk-acme
   #   integration: zendesk
   #   url: https://acme.zendesk.com

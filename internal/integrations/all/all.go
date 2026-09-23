@@ -18,6 +18,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/googleworkspace"
 	"github.com/roee-hersh/hallpass/internal/integrations/jira"
 	"github.com/roee-hersh/hallpass/internal/integrations/kubernetes"
+	"github.com/roee-hersh/hallpass/internal/integrations/linear"
 	"github.com/roee-hersh/hallpass/internal/integrations/microsoft365"
 	"github.com/roee-hersh/hallpass/internal/integrations/pagerduty"
 	"github.com/roee-hersh/hallpass/internal/integrations/salesforce"
@@ -42,6 +43,7 @@ func Registry() *integration.Registry {
 	r.Register(microsoft365.Integration{})
 	r.Register(googleworkspace.Integration{})
 	r.Register(azure.Integration{})
+	r.Register(linear.Integration{})
 	r.Register(zendesk.Integration{})
 	r.Register(datadog.Integration{})
 	r.Register(pagerduty.Integration{})

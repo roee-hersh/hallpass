@@ -44,6 +44,7 @@ AZ=https://raw.githubusercontent.com/Azure/azure-rest-api-specs/master/specifica
 fetch azure-RoleAssignmentsCalls  $AZ/authorization-RoleAssignmentsCalls.json
 fetch azure-RoleDefinitionsCalls  $AZ/authorization-RoleDefinitionsCalls.json
 fetch azure-DenyAssignmentCalls   $AZ/authorization-DenyAssignmentCalls.json
+fetch linear            https://raw.githubusercontent.com/linear/linear/master/packages/sdk/src/schema.graphql
 fetch zendesk           https://developer.zendesk.com/zendesk/oas.yaml
 fetch google-policytroubleshooter 'https://policytroubleshooter.googleapis.com/$discovery/rest?version=v3'
 # Jira, from the APIs.guru mirror, when the Atlassian host is unreachable.

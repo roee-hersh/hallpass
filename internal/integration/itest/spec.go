@@ -128,6 +128,10 @@ func LoadSpec(name string, raw []byte) (Spec, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		doc = map[string]any{}
 		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			// Not a document: a GraphQL schema in SDL form is plain text.
+			if looksLikeSDL(raw) {
+				return newGraphQL(name, raw)
+			}
 			return nil, fmt.Errorf("%s: neither JSON nor YAML: %w", name, err)
 		}
 		doc = normaliseYAML(doc).(map[string]any)
@@ -139,6 +143,9 @@ func LoadSpec(name string, raw []byte) (Spec, error) {
 		return newDiscovery(name, doc)
 	case doc["metadata"] != nil && doc["operations"] != nil && doc["shapes"] != nil:
 		return newBotocore(name, doc)
+	}
+	if looksLikeSDL(raw) {
+		return newGraphQL(name, raw)
 	}
 	return nil, fmt.Errorf("%s: unknown description format", name)
 }
