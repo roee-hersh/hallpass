@@ -311,6 +311,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	groups := normalizeGroups(req.Groups)
 	user := integration.User{Email: req.User, Groups: groups}
 	decKey := strings.Join([]string{req.Connection, req.User, groupsKey(groups), req.Action, req.Resource}, "\x00")
+	started := e.now()
 	if e.decTTL > 0 && !req.Fresh {
 		if d, ok := e.decs.Get(decKey); ok {
 			d.Evidence = d.Evidence.AsCached()
@@ -350,7 +351,9 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	d.Outcome = integration.OutcomeOf(d.Code)
 	d.Evidence = rec.Evidence()
 	if e.decTTL > 0 && d.Outcome != integration.Unknown {
-		e.decs.Set(decKey, d, e.decTTL)
+		// Store, not Set: a check that began earlier must not replace the
+		// answer of a later one (a fresh check's, in particular).
+		e.decs.Store(decKey, d, e.decTTL, started)
 	}
 	return Result{Decision: d, Status: http.StatusOK}
 }

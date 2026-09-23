@@ -28,7 +28,7 @@ func TestRecorder(t *testing.T) {
 	}
 	var nilRec *Recorder
 	nilRec.Record(Call{})
-	nilRec.Add(ev, true)
+	nilRec.Add(ev, Cached)
 	if nilRec.Evidence() != nil || len(rec.Evidence().Upstream) != 2 {
 		t.Fatal("suppressed record leaked")
 	}
@@ -37,8 +37,8 @@ func TestRecorder(t *testing.T) {
 	}
 	// Cached calls are marked; a nil evidence adds nothing.
 	rec2 := &Recorder{}
-	rec2.Add(nil, true)
-	rec2.Add(ev, true)
+	rec2.Add(nil, Cached)
+	rec2.Add(ev, Cached)
 	got := rec2.Evidence()
 	if len(got.Upstream) != 1 || !got.Upstream[0].Cached || got.Upstream[0].Path != "/a" {
 		t.Fatalf("%+v", got)
@@ -46,11 +46,14 @@ func TestRecorder(t *testing.T) {
 	if ev.Upstream[0].Cached {
 		t.Error("Add changed the source")
 	}
-	// Live calls keep their flag; an already-cached call stays cached.
+	// Own calls keep their flags; a cached call stays cached whatever the
+	// origin; a shared one is shared unless cached.
 	rec3 := &Recorder{}
-	rec3.Add(got, false)
-	rec3.Add(ev, false)
-	if c := rec3.Evidence().Upstream; !c[0].Cached || c[1].Cached {
+	rec3.Add(got, Own)
+	rec3.Add(ev, Own)
+	rec3.Add(got, Shared)
+	rec3.Add(ev, Shared)
+	if c := rec3.Evidence().Upstream; !c[0].Cached || c[1].Cached || c[1].Shared || !c[2].Cached || c[2].Shared || c[3].Cached || !c[3].Shared {
 		t.Fatalf("%+v", c)
 	}
 }
@@ -85,8 +88,19 @@ func TestRecorderCap(t *testing.T) {
 			t.Fatal("a replayed call displaced a live one")
 		}
 	}
+	// With nothing replayed left, the oldest live call goes: the last
+	// calls a check made are the ones that decided it.
+	rec = &Recorder{}
+	for i := 0; i < MaxEvidenceCalls; i++ {
+		rec.Record(Call{Method: "GET", Path: "/page", Status: 200})
+	}
+	rec.Record(Call{Method: "POST", Path: "/decides", Status: 200})
+	ev = rec.Evidence()
+	if len(ev.Upstream) != MaxEvidenceCalls || ev.Upstream[MaxEvidenceCalls-1].Path != "/decides" || !ev.Truncated {
+		t.Fatalf("deciding call dropped: %+v", ev.Upstream[MaxEvidenceCalls-1])
+	}
 	rec2 := &Recorder{}
-	rec2.Add(ev, false)
+	rec2.Add(ev, Own)
 	if !rec2.Evidence().Truncated {
 		t.Error("truncation not carried over")
 	}

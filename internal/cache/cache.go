@@ -26,9 +26,9 @@ type TTL[K comparable, V any] struct {
 type entry[V any] struct {
 	v   V
 	exp time.Time
-	// set is when the entry was stored; a fill that began earlier does not
-	// replace it.
-	set time.Time
+	// started is when the read that produced v began; a read that began
+	// earlier does not replace it.
+	started time.Time
 	// ev is the evidence of the fill that produced v, replayed on hits.
 	ev *integration.Evidence
 }
@@ -81,30 +81,40 @@ func (c *TTL[K, V]) Set(k K, v V, ttl time.Duration) {
 		delete(c.items, k)
 		return
 	}
-	c.evictLocked()
 	now := c.now()
-	c.items[k] = entry[V]{v: v, exp: now.Add(ttl), set: now}
+	c.storeLocked(k, v, ttl, nil, now)
 }
 
-// dropOlderLocked removes k's entry unless a fill that began after started
-// stored it.
+// Store is Set for a value read from the upstream at started: it is
+// skipped when the entry already there came from a read that began later,
+// which saw the upstream more recently. A fresh check's answer in
+// particular must not be replaced by an older read that finished after it.
+func (c *TTL[K, V]) Store(k K, v V, ttl time.Duration, started time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ttl <= 0 {
+		c.dropOlderLocked(k, started)
+		return
+	}
+	c.storeLocked(k, v, ttl, nil, started)
+}
+
+// dropOlderLocked removes k's entry unless a read that began after started
+// produced it.
 func (c *TTL[K, V]) dropOlderLocked(k K, started time.Time) {
-	if e, ok := c.items[k]; ok && !e.set.After(started) {
+	if e, ok := c.items[k]; ok && !e.started.After(started) {
 		delete(c.items, k)
 	}
 }
 
-// storeLocked stores the result of a fill that began at started, unless a
-// fill that began later already stored a newer entry: the later fill saw
-// the upstream more recently, and a fresh check's answer in particular
-// must not be replaced by an older read that finished after it.
+// storeLocked stores the result of a read that began at started, unless
+// the entry already there came from a read that began later.
 func (c *TTL[K, V]) storeLocked(k K, v V, ttl time.Duration, ev *integration.Evidence, started time.Time) {
-	if e, ok := c.items[k]; ok && e.set.After(started) {
+	if e, ok := c.items[k]; ok && e.started.After(started) {
 		return
 	}
 	c.evictLocked()
-	now := c.now()
-	c.items[k] = entry[V]{v: v, exp: now.Add(ttl), set: now, ev: ev}
+	c.items[k] = entry[V]{v: v, exp: c.now().Add(ttl), started: started, ev: ev}
 }
 
 // Delete removes one key.
@@ -172,17 +182,17 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // of 0 means "do not store". Errors are never stored.
 //
 // The upstream calls a fill makes are its evidence (see
-// integration.Recorder). The fill runs on its own Recorder; every caller
-// the fill answers, the one that started it and the ones that waited for
-// it, gets the calls on its context's Recorder as its own, and a later
-// hit on the stored entry gets them marked cached. So a decision served
-// from a cached lookup still shows what the upstream said when the lookup
-// was made.
+// integration.Recorder). The fill runs on its own Recorder; the caller
+// that started it gets the calls on its context's Recorder as its own,
+// one that waited for it gets them marked shared, and a later hit on the
+// stored entry gets them marked cached. So a decision served from a
+// cached lookup still shows what the upstream said when the lookup was
+// made.
 //
 // Under a fresh context (integration.WithFresh) Do neither reads the cache
-// nor joins a fill that began before it: it starts its own fill, which
-// later callers may join, and its answer replaces the entry unless an even
-// later fill stored one first.
+// nor waits on an ordinary fill: it starts a fresh fill, which takes over
+// the key so later callers, fresh ones included, join it, and its answer
+// replaces the entry unless an even later read stored one first.
 //
 // The fill runs in its own goroutine on a context detached from the first
 // caller's cancellation (see Detach) rather than on ctx itself: otherwise
@@ -195,19 +205,20 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 	fresh := integration.Fresh(ctx)
 	if !fresh {
 		if v, ev, ok := c.get(k); ok {
-			rec.Add(ev, true)
+			rec.Add(ev, integration.Cached)
 			return v, nil
 		}
 	}
 	c.mu.Lock()
 	cl, ok := c.inflight[k]
-	if !ok || fresh {
-		// A fresh caller never waits on a fill that began before it; its
-		// own fill is the one later callers join when the key is free.
+	leader := !ok || (fresh && !cl.fresh)
+	if leader {
+		// A fresh caller does not wait on an ordinary fill, which may have
+		// begun long before it; its own fill takes over the key, so the
+		// callers after it, fresh or not, join a read at least as new as
+		// they asked for. The ordinary fill's waiters keep their call.
 		cl = &call[V]{done: make(chan struct{}), started: c.now(), fresh: fresh}
-		if !ok {
-			c.inflight[k] = cl
-		}
+		c.inflight[k] = cl
 		fctx, cancel := Detach(ctx, DefaultFillTimeout)
 		fctx, cl.rec = integration.WithRecorder(fctx)
 		go func() {
@@ -219,9 +230,12 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 	select {
 	case <-cl.done:
 		// cl is complete: the fill's goroutine closed done after its
-		// last write. The calls were made for this check, whether it
-		// started the fill or waited for it.
-		rec.Add(cl.rec.Evidence(), false)
+		// last write.
+		by := integration.Own
+		if !leader {
+			by = integration.Shared
+		}
+		rec.Add(cl.rec.Evidence(), by)
 		return cl.v, cl.err
 	case <-ctx.Done():
 		var zero V

@@ -257,8 +257,9 @@ func TestDetach(t *testing.T) {
 }
 
 // Do carries the evidence of a fill to every caller it serves: the leader
-// and a waiter get the calls as their own, a later hit gets them marked
-// cached, and a fill that failed still reports what it saw to its leader.
+// gets the calls as its own, a waiter gets them marked shared, a later hit
+// gets them marked cached, and a fill that failed still reports what it
+// saw to its leader.
 func TestDoEvidence(t *testing.T) {
 	c := New[string, int](0)
 	call := func(p string) integration.Call { return integration.Call{Method: "GET", Path: p, Status: 200} }
@@ -311,11 +312,11 @@ func TestDoEvidence(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // let the waiter reach Do's select
 	close(release)
 	wg.Wait()
-	// Both saw a call made during their own check: neither is cached.
-	if ev := lrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached {
+	// The leader made the call; the waiter joined it: shared, not cached.
+	if ev := lrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached || ev.Upstream[0].Shared {
 		t.Fatalf("leader of shared fill: %+v", ev)
 	}
-	if ev := wrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached {
+	if ev := wrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached || !ev.Upstream[0].Shared {
 		t.Fatalf("waiter: %+v", ev)
 	}
 
@@ -425,9 +426,73 @@ func TestDoFresh(t *testing.T) {
 	if v, ok := c.Get("slow"); !ok || v != 7 {
 		t.Fatalf("older fill replaced the fresh answer: %v %v", v, ok)
 	}
-	// A fresh fill is joinable: a caller arriving while it runs waits for
-	// it rather than starting another.
+	// The other order: the older fill stores while the fresh one is still
+	// running. The fresh answer still stands, since its read began later.
+	started2 := make(chan struct{})
+	release2 := make(chan struct{})
+	slow2 := func(ctx context.Context) (int, time.Duration, error) {
+		close(started2)
+		<-release2
+		return 100, time.Minute, nil
+	}
+	slowDone2 := make(chan struct{})
+	go func() { defer close(slowDone2); c.Do(ctx, "order", slow2) }()
+	<-started2
+	time.Sleep(2 * time.Millisecond)
+	fstarted2 := make(chan struct{})
+	frelease2 := make(chan struct{})
+	freshDone2 := make(chan struct{})
+	go func() {
+		defer close(freshDone2)
+		c.Do(integration.WithFresh(ctx), "order", func(context.Context) (int, time.Duration, error) {
+			close(fstarted2)
+			<-frelease2
+			return 7, time.Minute, nil
+		})
+	}()
+	<-fstarted2
+	close(release2) // the older read stores first
+	<-slowDone2
+	if v, ok := c.Get("order"); !ok || v != 100 {
+		t.Fatalf("older read not stored while the fresh one runs: %v %v", v, ok)
+	}
+	close(frelease2)
+	<-freshDone2
+	if v, ok := c.Get("order"); !ok || v != 7 {
+		t.Fatalf("fresh answer lost to an older read that stored first: %v %v", v, ok)
+	}
+	// Store (the engine's decision cache) follows the same rule.
+	c.Store("order", 1, time.Minute, time.Now().Add(-time.Hour))
+	if v, _ := c.Get("order"); v != 7 {
+		t.Fatal("Store replaced a newer entry")
+	}
+	c.Store("order", 2, time.Minute, time.Now())
+	if v, _ := c.Get("order"); v != 2 {
+		t.Fatal("Store did not replace an older entry")
+	}
+	c.Store("order", 3, 0, time.Now().Add(-time.Hour))
+	if _, ok := c.Get("order"); !ok {
+		t.Fatal("Store with ttl 0 dropped a newer entry")
+	}
+	c.Store("order", 3, 0, time.Now())
+	if _, ok := c.Get("order"); ok {
+		t.Fatal("Store with ttl 0 kept an older entry")
+	}
+
+	// A fresh fill takes over the key: callers arriving while it runs,
+	// fresh or not, join it rather than starting another, and the
+	// ordinary fill's own waiter still gets that fill's answer.
 	var freshFills atomic.Int32
+	ostarted := make(chan struct{})
+	orelease := make(chan struct{})
+	ordinary := func(ctx context.Context) (int, time.Duration, error) {
+		close(ostarted)
+		<-orelease
+		return 10, time.Minute, nil
+	}
+	ordinaryDone := make(chan int, 1)
+	go func() { v, _ := c.Do(ctx, "join", ordinary); ordinaryDone <- v }()
+	<-ostarted
 	fstarted := make(chan struct{})
 	frelease := make(chan struct{})
 	joinable := func(ctx context.Context) (int, time.Duration, error) {
@@ -436,23 +501,32 @@ func TestDoFresh(t *testing.T) {
 		<-frelease
 		return 11, time.Minute, nil
 	}
-	go c.Do(integration.WithFresh(ctx), "join", joinable)
+	freshDone := make(chan int, 1)
+	go func() { v, _ := c.Do(integration.WithFresh(ctx), "join", joinable); freshDone <- v }()
 	<-fstarted
-	joined := make(chan int, 1)
-	go func() {
-		v, _ := c.Do(ctx, "join", func(context.Context) (int, time.Duration, error) {
-			freshFills.Add(1)
-			return 12, time.Minute, nil
-		})
-		joined <- v
-	}()
-	for c.inflightCount() != 1 {
-		time.Sleep(time.Millisecond)
+	joined := make(chan int, 2)
+	another := func(context.Context) (int, time.Duration, error) {
+		freshFills.Add(1)
+		return 12, time.Minute, nil
 	}
-	time.Sleep(10 * time.Millisecond)
+	go func() { v, _ := c.Do(ctx, "join", another); joined <- v }()
+	go func() { v, _ := c.Do(integration.WithFresh(ctx), "join", another); joined <- v }()
+	time.Sleep(20 * time.Millisecond) // let both reach Do's select
 	close(frelease)
-	if v := <-joined; v != 11 || freshFills.Load() != 1 {
-		t.Fatalf("joined fresh fill: v=%d fills=%d", v, freshFills.Load())
+	for i := 0; i < 2; i++ {
+		if v := <-joined; v != 11 {
+			t.Fatalf("caller %d did not join the fresh fill: %d", i, v)
+		}
+	}
+	if v := <-freshDone; v != 11 || freshFills.Load() != 1 {
+		t.Fatalf("fresh fill: v=%d fills=%d", v, freshFills.Load())
+	}
+	close(orelease)
+	if v := <-ordinaryDone; v != 10 {
+		t.Fatalf("ordinary waiter lost its fill: %d", v)
+	}
+	if v, _ := c.Get("join"); v != 11 {
+		t.Fatalf("older ordinary read replaced the fresh answer: %d", v)
 	}
 	// A panic in a fresh fill is a PanicError, like any other.
 	var pe *PanicError

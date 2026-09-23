@@ -42,13 +42,29 @@ type Call struct {
 	// integration keeps), and this is the evidence recorded when the call
 	// was made.
 	Cached bool `json:"cached,omitempty"`
+	// Shared marks a call made by a concurrent check whose lookup this
+	// check joined: the response was live during this check, but this
+	// check did not ask for it itself.
+	Shared bool `json:"shared,omitempty"`
 }
 
 // MaxEvidenceCalls bounds the calls one Recorder keeps, so a paginated
 // lookup cannot grow a log line without limit. Calls made for the check
-// take precedence: when the cap is reached, a live call replaces the
-// oldest replayed one.
+// take precedence over replayed ones, and among those the latest are
+// kept: the call that decided a check is the last one it made.
 const MaxEvidenceCalls = 100
+
+// Origin says how a check came by a call's response.
+type Origin int
+
+const (
+	// Own: the check made the call.
+	Own Origin = iota
+	// Shared: a concurrent check made the call and this check joined it.
+	Shared
+	// Cached: the call was made earlier and its result served from a cache.
+	Cached
+)
 
 // Recorder collects the evidence of one check. It is safe for concurrent
 // use: a shared fill may still be running on a detached context after the
@@ -64,8 +80,9 @@ type Recorder struct {
 }
 
 // Record adds one call. A nil Recorder records nothing. Past the cap a
-// live call takes the place of the oldest cached one, so what the check
-// itself asked the upstream is never the part that goes missing.
+// cached call is dropped and a live one takes the place of the oldest
+// cached call, or of the oldest live one when none is cached: the calls
+// the check made last are the ones that decided it.
 func (r *Recorder) Record(c Call) {
 	if r == nil {
 		return
@@ -79,21 +96,27 @@ func (r *Recorder) Record(c Call) {
 		}
 		i := slices.IndexFunc(r.calls, func(c Call) bool { return c.Cached })
 		if i < 0 {
-			return
+			i = 0
 		}
 		r.calls = slices.Delete(r.calls, i, i+1)
 	}
 	r.calls = append(r.calls, c)
 }
 
-// Add adds ev's calls, marked as served from a cache when cached is set,
-// and carries ev's truncation over. A nil ev adds nothing.
-func (r *Recorder) Add(ev *Evidence, cached bool) {
+// Add adds ev's calls, marked by how this check came by them, and carries
+// ev's truncation over. A call already marked cached stays cached. A nil
+// ev adds nothing.
+func (r *Recorder) Add(ev *Evidence, by Origin) {
 	if r == nil || ev == nil {
 		return
 	}
 	for _, c := range ev.Upstream {
-		c.Cached = c.Cached || cached
+		switch by {
+		case Cached:
+			c.Cached, c.Shared = true, false
+		case Shared:
+			c.Shared = !c.Cached
+		}
 		r.Record(c)
 	}
 	if ev.Truncated {
@@ -110,7 +133,7 @@ func (ev *Evidence) AsCached() *Evidence {
 		return nil
 	}
 	r := &Recorder{}
-	r.Add(ev, true)
+	r.Add(ev, Cached)
 	return r.Evidence()
 }
 

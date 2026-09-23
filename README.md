@@ -214,10 +214,12 @@ Response bodies, other headers and credentials are never logged; the token excha
 makes to authenticate is not evidence and is left out. A call marked `cached` was not made for this
 check: its result was served from a stored cache entry (the identity cache, or a lookup the
 integration keeps such as a role definition or a policy), and the entry shows the evidence recorded
-when the call was made. A decision served from the decision cache has `cached: true` and carries the
-evidence of the check that produced it, every call marked `cached`. `fresh: true` marks a check that skipped the caches on the caller's
-request. The list is capped at 100 calls, the check's own calls taking precedence over replayed
-ones; `truncated: true` says some were dropped.
+when the call was made. A call marked `shared` was made by a concurrent check whose lookup this one
+joined: live during this check, but not asked for by it. A decision served from the decision cache
+has `cached: true` and carries the evidence of the check that produced it, every call marked
+`cached`. `fresh: true` marks a check that skipped the caches on the caller's
+request. The list is capped at 100 calls; past it the oldest calls are dropped, replayed ones
+first, so the calls that decided the check are kept, and `truncated: true` says some were dropped.
 
 ## Configuration
 

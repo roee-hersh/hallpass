@@ -224,7 +224,7 @@ func (c *Client) sleep(ctx context.Context, d time.Duration) error {
 
 func (c *Client) build(ctx context.Context, r *Request) (*http.Request, error) {
 	u := r.Path
-	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+	if !absolute(u) {
 		if c.Base == "" {
 			return nil, fmt.Errorf("relative path %q with no base URL", r.Path)
 		}
@@ -379,7 +379,10 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 		return nil, ErrBodyTooLarge
 	}
 	c.logCall(req, res.StatusCode, start, nil)
-	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body, method: req.Method, path: req.URL.EscapedPath(), host: c.foreignHost(req.URL)}
+	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body, method: req.Method, path: req.URL.EscapedPath()}
+	if absolute(r.Path) {
+		out.host = c.foreignHost(req.URL)
+	}
 	if res.StatusCode >= 400 && !(r.Accept4xx && res.StatusCode < 500) {
 		return out, &StatusError{
 			Status:  res.StatusCode,
@@ -392,8 +395,15 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 	return out, nil
 }
 
+// absolute reports whether p is a full URL rather than a path under Base.
+func absolute(p string) bool {
+	return strings.HasPrefix(p, "https://") || strings.HasPrefix(p, "http://")
+}
+
 // foreignHost returns u's host when it is not the client's base host, for
-// the evidence record, and "" when it is (or the client has no base).
+// the evidence record of a request made with a full URL, and "" when it is
+// the base host. A relative path is always the base host, so this is not
+// on that path's way.
 func (c *Client) foreignHost(u *url.URL) string {
 	if c.Base == "" {
 		return u.Host
