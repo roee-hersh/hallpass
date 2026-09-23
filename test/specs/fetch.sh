@@ -41,6 +41,7 @@ fetch google-directory  'https://admin.googleapis.com/$discovery/rest?version=di
 fetch google-calendar   https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest
 fetch google-gmail      'https://gmail.googleapis.com/$discovery/rest?version=v1'
 fetch snowflake-sqlapi  https://raw.githubusercontent.com/snowflakedb/snowflake-rest-api-specs/main/specifications/sqlapi.yaml
+fetch linear            https://raw.githubusercontent.com/linear/linear/master/packages/sdk/src/schema.graphql
 fetch zendesk           https://developer.zendesk.com/zendesk/oas.yaml
 fetch google-policytroubleshooter 'https://policytroubleshooter.googleapis.com/$discovery/rest?version=v3'
 # Jira, from the APIs.guru mirror, when the Atlassian host is unreachable.

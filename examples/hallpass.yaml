@@ -59,6 +59,9 @@ connections:
   #   user: HALLPASS
   #   role: SECURITYADMIN                                # or a custom role with MANAGE GRANTS
   #   credential: file:/secrets/snowflake-hallpass.p8    # the user's RSA private key (key-pair auth)
+  # - id: linear-acme
+  #   integration: linear
+  #   credential: env:LINEAR_API_KEY                   # personal API key of a workspace admin, or an OAuth token with auth_mode: oauth
   # - id: zendesk-acme
   #   integration: zendesk
   #   url: https://acme.zendesk.com
