@@ -53,6 +53,9 @@ connections:
   #   credential: file:/secrets/github-app.pem        # GitHub App private key
   #   identity_mode: saml
 
+  # - id: linear-acme
+  #   integration: linear
+  #   credential: env:LINEAR_API_KEY                   # personal API key of a workspace admin, or an OAuth token with auth_mode: oauth
   # - id: zendesk-acme
   #   integration: zendesk
   #   url: https://acme.zendesk.com
