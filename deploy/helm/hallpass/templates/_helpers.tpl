@@ -84,10 +84,22 @@ Name of the ConfigMap holding hallpass.yaml: the user's or the chart's own.
 {{- end }}
 
 {{/*
-Image reference.
+Name for cluster-scoped resources. Carries the namespace so two releases
+with the same name in different namespaces do not collide.
+*/}}
+{{- define "hallpass.clusterScopedName" -}}
+{{- printf "%s-%s-subjectaccessreview" (include "hallpass.fullname" .) .Release.Namespace | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Image reference: repository@digest when a digest is set, else repository:tag.
 */}}
 {{- define "hallpass.image" -}}
+{{- if .Values.image.digest }}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest }}
+{{- else }}
 {{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) }}
+{{- end }}
 {{- end }}
 
 {{/*
@@ -99,5 +111,13 @@ Fail early on a values combination that would produce a pod that cannot start.
 {{- end }}
 {{- if and (not .Values.apiKey.existingSecret) (not .Values.apiKey.value) }}
 {{- fail "an API key is required: set apiKey.existingSecret (a Secret you manage) or apiKey.value (for a try-out), e.g. --set apiKey.value=change-me" }}
+{{- end }}
+{{- if .Values.rbac.subjectAccessReview.create }}
+{{- if not .Values.serviceAccount.automountToken }}
+{{- fail "rbac.subjectAccessReview.create grants the pod's ServiceAccount a permission it can only use with its token mounted: also set serviceAccount.automountToken=true" }}
+{{- end }}
+{{- if and (not .Values.serviceAccount.create) (not .Values.serviceAccount.name) }}
+{{- fail "rbac.subjectAccessReview.create with serviceAccount.create=false needs serviceAccount.name; binding the namespace's default ServiceAccount would grant the permission to every pod using it" }}
+{{- end }}
 {{- end }}
 {{- end }}

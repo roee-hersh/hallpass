@@ -102,6 +102,7 @@ See [docs/integrations/kubernetes.md](../../../docs/integrations/kubernetes.md) 
 |---|---|---|
 | `image.repository` | `ghcr.io/roee-hersh/hallpass` | Image |
 | `image.tag` | chart `appVersion` | Image tag |
+| `image.digest` | `""` | Pin by digest (`sha256:...`) instead of tag |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | |
 | `replicaCount` | `1` | hallpass keeps no state, so more is fine |
@@ -118,7 +119,7 @@ See [docs/integrations/kubernetes.md](../../../docs/integrations/kubernetes.md) 
 | `service.type`, `service.port`, `service.annotations` | `ClusterIP`, `8080`, `{}` | |
 | `serviceAccount.create`, `.name`, `.annotations` | `true`, `""`, `{}` | |
 | `serviceAccount.automountToken` | `false` | Needed only for an in-cluster `kubernetes` connection |
-| `rbac.subjectAccessReview.create` | `false` | ClusterRole + binding allowing only `create subjectaccessreviews` |
+| `rbac.subjectAccessReview.create` | `false` | ClusterRole + binding allowing only `create subjectaccessreviews`. Requires `automountToken: true` and a named ServiceAccount |
 | `podSecurityContext`, `securityContext` | non-root 65532, read-only root, no capabilities | |
 | `livenessProbe`, `readinessProbe` | `GET /healthz` | |
 | `resources`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `priorityClassName` | unset | |

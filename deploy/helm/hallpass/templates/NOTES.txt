@@ -13,7 +13,7 @@ hallpass is starting.
 Ask it a question from your machine:
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "hallpass.fullname" . }} 8080:{{ .Values.service.port }} &
-  export HALLPASS_API_KEY="$(kubectl -n {{ .Release.Namespace }} get secret {{ include "hallpass.apiKeySecretName" . }} -o jsonpath='{.data.{{ .Values.apiKey.key }}}' | base64 -d)"
+  export HALLPASS_API_KEY="$(kubectl -n {{ .Release.Namespace }} get secret {{ include "hallpass.apiKeySecretName" . }} -o jsonpath="{.data['{{ .Values.apiKey.key }}']}" | base64 -d)"
   curl -X POST localhost:8080/check \
     -H "Authorization: Bearer $HALLPASS_API_KEY" -H 'Content-Type: application/json' \
     -d '{"user":"dana@example.com","connection":"demo","action":"thing.write","resource":"thing:1"}'

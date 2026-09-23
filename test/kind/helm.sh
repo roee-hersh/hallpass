@@ -13,24 +13,18 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-CLUSTER="${CLUSTER:-hallpass-e2e}"
+. test/kind/cluster.sh
 RELEASE=hallpass
 NS=hallpass-helm
 KEY=ci-key
 PF_PID=
 
 cleanup() {
-  [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
-  if [ -z "${KEEP:-}" ]; then
-    kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
-  fi
+  if [ -n "$PF_PID" ]; then kill "$PF_PID" 2>/dev/null || true; fi
+  kind_cleanup
 }
 trap cleanup EXIT
 
-if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
-  kind create cluster --name "$CLUSTER" --wait 120s
-fi
-kubectl config use-context "kind-$CLUSTER" >/dev/null
 kubectl apply -f test/kind/fixtures.yaml
 
 docker build -t hallpass:e2e .
@@ -52,7 +46,17 @@ helm test "$RELEASE" --namespace "$NS"
 
 kubectl -n "$NS" port-forward "svc/$RELEASE" 18080:8080 >/dev/null 2>&1 &
 PF_PID=$!
-for i in $(seq 1 30); do curl -fsS http://localhost:18080/healthz >/dev/null 2>&1 && break; sleep 1; done
+ready=
+for i in $(seq 1 30); do
+  if curl -fsS http://localhost:18080/healthz >/dev/null 2>&1; then ready=1; break; fi
+  sleep 1
+done
+if [ -z "$ready" ]; then
+  echo "hallpass never answered /healthz through the port-forward"
+  kubectl -n "$NS" get pods
+  kubectl -n "$NS" logs "deploy/$RELEASE" --tail=50 || true
+  exit 1
+fi
 
 ask() { # user action resource
   curl -fsS -X POST http://localhost:18080/check \

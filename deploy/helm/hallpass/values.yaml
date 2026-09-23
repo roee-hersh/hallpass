@@ -15,6 +15,8 @@ image:
   pullPolicy: IfNotPresent
   # Defaults to the chart's appVersion.
   tag: ""
+  # Pin by digest instead, e.g. "sha256:...". Takes precedence over tag.
+  digest: ""
 
 imagePullSecrets: []
 nameOverride: ""
@@ -97,8 +99,8 @@ serviceAccount:
 
 # Let hallpass answer questions about the cluster it runs in. Creates a
 # ClusterRole that may only create SubjectAccessReviews and binds it to the
-# chart's ServiceAccount. Pair it with serviceAccount.automountToken: true and
-# a connection like:
+# chart's ServiceAccount. Requires serviceAccount.automountToken: true (the
+# chart refuses to render otherwise) and a connection like:
 #
 #   - id: k8s-local
 #     integration: kubernetes
