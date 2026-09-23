@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Action is one thing a user may be allowed to do in an integration.
@@ -60,7 +61,7 @@ func ParseResource(raw string) (Resource, error) {
 		return r, fmt.Errorf("resource is longer than %d bytes", MaxResourceLength)
 	}
 	for _, c := range raw {
-		if c < 0x20 || c == 0x7f {
+		if unicode.IsControl(c) {
 			return r, errors.New("resource contains a control character")
 		}
 	}
@@ -79,9 +80,10 @@ func ParseResource(raw string) (Resource, error) {
 			if !typeRe.MatchString(k) || len(vs) != 1 {
 				return r, fmt.Errorf("resource query key %q must be a single lowercase key", k)
 			}
-			// Percent-decoding can produce bytes the raw check never saw.
+			// Percent-decoding can produce characters the raw check never
+			// saw, including C1 controls such as NEL (%C2%85).
 			for _, c := range vs[0] {
-				if c < 0x20 || c == 0x7f {
+				if unicode.IsControl(c) {
 					return r, fmt.Errorf("resource query value for %q contains a control character", k)
 				}
 			}
