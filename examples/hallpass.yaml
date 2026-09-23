@@ -59,6 +59,12 @@ connections:
   #   user: HALLPASS
   #   role: SECURITYADMIN                                # or a custom role with MANAGE GRANTS
   #   credential: file:/secrets/snowflake-hallpass.p8    # the user's RSA private key (key-pair auth)
+  # - id: zendesk-acme
+  #   integration: zendesk
+  #   url: https://acme.zendesk.com
+  #   username: hallpass-bot@acme.com                  # the administrator the API token acts as
+  #   credential: env:ZENDESK_API_TOKEN
+  #   # auth_mode: oauth                                # credential is then an OAuth access token
   # - id: datadog-acme
   #   integration: datadog
   #   api_key: env:DATADOG_API_KEY
