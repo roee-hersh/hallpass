@@ -622,6 +622,10 @@ func (c *Client) within(rawURL string) bool {
 	return u.Path == prefix || strings.HasPrefix(u.Path, prefix+"/")
 }
 
+// Within reports whether rawURL is a page under c.Base, for integrations
+// whose next-page links arrive in the body rather than a Link header.
+func (c *Client) Within(rawURL string) bool { return c.within(rawURL) }
+
 // ErrTooManyPages is returned when pagination exceeds MaxPages.
 var ErrTooManyPages = errors.New("pagination exceeded the page limit")
 
