@@ -53,6 +53,12 @@ connections:
   #   credential: file:/secrets/github-app.pem        # GitHub App private key
   #   identity_mode: saml
 
+  # - id: datadog-acme
+  #   integration: datadog
+  #   api_key: env:DATADOG_API_KEY
+  #   credential: env:DATADOG_APP_KEY                   # application key scoped to user_access_read, teams_read, *_read
+  #   # url: https://api.datadoghq.eu                   # EU site
+
   # - id: jira-main
   #   integration: jira
   #   url: https://acme.atlassian.net

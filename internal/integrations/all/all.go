@@ -7,6 +7,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/argocd"
 	"github.com/roee-hersh/hallpass/internal/integrations/aws"
 	"github.com/roee-hersh/hallpass/internal/integrations/confluence"
+	"github.com/roee-hersh/hallpass/internal/integrations/datadog"
 	"github.com/roee-hersh/hallpass/internal/integrations/fake"
 	"github.com/roee-hersh/hallpass/internal/integrations/github"
 	"github.com/roee-hersh/hallpass/internal/integrations/gitlab"
@@ -33,5 +34,6 @@ func Registry() *integration.Registry {
 	r.Register(salesforce.Integration{})
 	r.Register(microsoft365.Integration{})
 	r.Register(googleworkspace.Integration{})
+	r.Register(datadog.Integration{})
 	return r
 }
