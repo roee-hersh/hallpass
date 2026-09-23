@@ -45,6 +45,32 @@ sequenceDiagram
 - **Fails closed.** Anything it cannot evaluate is `unknown`, not `allow`.
 - **Single static binary.** One YAML file and one dependency (`yaml.v3`). No database.
 
+## Security model
+
+hallpass treats the agent as an **untrusted deputy**: what the agent's own credential can do never
+decides anything. The rules, and where each is enforced:
+
+- **The user comes from your session, never from the model.** The caller of `/check` is your agent's
+  tool layer, and it passes the user it authenticated (the Slack user, the SSO session). Bind it when
+  the tools are built, as the [agent examples](examples/agent/) do; never let the model supply it as a
+  tool argument.
+- **Checked at the tool gateway.** The check runs in the tool wrapper before the call. The action runs
+  only after an `allow`.
+- **Fails closed.** `deny`, `unknown`, and any failure to reach hallpass all mean the tool does not
+  run. hallpass answers `unknown` whenever it cannot evaluate, and never guesses.
+- **Per resource, from the source of truth.** Each check names one resource (`issue:PAY-123`,
+  `namespace:payments`) and is answered live by the system that owns it, with a read-only credential.
+- **Every decision is logged** as a JSON line: user, connection, action, resource, decision, reason,
+  and whether it came from the cache.
+
+Not goals, on purpose:
+
+- **Human approval.** For destructive actions, add a confirmation step in the agent *after* an `allow`.
+- **Atomicity.** It is a check before the action, not a transaction; permissions can change in
+  between. Answers are cached for 30 seconds by default (`decision_cache_seconds: 0` disables it).
+- **Proving who the user is.** hallpass answers "may *this* user…"; authenticating the user is your
+  agent's job.
+
 ## Install
 
 Download a binary from [Releases](https://github.com/roee-hersh/hallpass/releases), or:
