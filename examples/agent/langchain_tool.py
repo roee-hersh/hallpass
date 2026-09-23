@@ -4,7 +4,7 @@ The tools are defined once. The application sets ``current_user`` (and
 optionally ``current_groups``) for the session before it runs the agent, so
 the acting user is never chosen by the model:
 
-    current_user.set("dana@example.com")
+    current_user.set(user.email)  # in the request handler, from your auth
     agent = create_agent(llm, tools)          # any LangChain agent constructor
 
 Needs ``langchain-core`` (pip install -r requirements.txt). The tools do not
@@ -55,6 +55,8 @@ if __name__ == "__main__":
     # Smoke test without an LLM: call the tools directly.
     import sys
 
+    # Demo only: the command line stands in for the user a real request was
+    # authenticated as (see docs/agents.md, "Where the user comes from").
     current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
     print(check_permission.invoke({"connection": "demo", "action": "thing.write", "resource": "thing:1"}))
     print(write_thing.invoke({"thing_id": "1", "content": "hello"}))

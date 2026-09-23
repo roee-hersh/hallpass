@@ -118,6 +118,62 @@ per framework whether `guarded` raises or returns:
 In every case the text names the user, action, resource and hallpass's
 reason, so the model can tell the person why.
 
+## Where the user comes from
+
+The user must come from something the model cannot write: your own
+authentication. Set `current_user` in the code that handles the incoming
+request, from the identity that request was authenticated as, then run the
+agent in that same request. Each request runs in its own task, so parallel
+requests keep their own user.
+
+A web app, where your auth dependency has already verified the session
+(Strands shown; any framework works the same way):
+
+```python
+from fastapi import Depends, FastAPI
+from strands import Agent
+from strands_tool import current_groups, current_user, tools
+
+app = FastAPI()
+
+@app.post("/chat")
+async def chat(body: ChatIn, user: User = Depends(authenticated_user)):  # your SSO / session auth
+    current_user.set(user.email)
+    current_groups.set(tuple(user.groups))
+    agent = Agent(tools=tools)               # one agent per request: no history shared between users
+    result = await agent.invoke_async(body.message)
+    return {"reply": str(result)}
+```
+
+A Slack bot, where Slack signs the event and names the user who wrote it
+(Claude Agent SDK shown; needs the `users:read.email` scope):
+
+```python
+from slack_bolt.async_app import AsyncApp
+from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk_tool import current_user, server
+
+app = AsyncApp(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)  # Bolt verifies the signature
+options = ClaudeAgentOptions(
+    mcp_servers={"hallpass": server},
+    allowed_tools=["mcp__hallpass__check_permission", "mcp__hallpass__write_thing"],
+)
+
+@app.event("app_mention")
+async def on_mention(event, client, say):
+    info = await client.users_info(user=event["user"])   # the Slack user who wrote the message
+    current_user.set(info["user"]["profile"]["email"])
+    async for message in query(prompt=event["text"], options=options):
+        ...                                              # post the answer with say(...)
+```
+
+Never take the user from the message text, a tool argument or anything else
+the model or the requester can type.
+
+With a long-lived `ClaudeSDKClient`, set `current_user` before `connect()`:
+its tool calls run in the context it was connected in. Use one client per
+user's conversation, never one shared between users.
+
 ## Frameworks
 
 Every example below defines two tools: `check_permission`, so the model can
@@ -142,7 +198,7 @@ tools = [check_permission, write_thing]
 ```
 
 ```python
-current_user.set("dana@example.com")
+current_user.set(user.email)  # from your auth, see above
 agent = create_agent(model, tools=tools)   # or any LangChain agent constructor
 ```
 
@@ -158,7 +214,7 @@ from langchain.agents import create_agent
 from langgraph.prebuilt import ToolNode
 from langchain_tool import current_user, tools
 
-current_user.set("dana@example.com")
+current_user.set(user.email)  # from your auth, see above
 agent = create_agent("anthropic:claude-opus-5", tools=tools)
 agent.invoke({"messages": [("user", "Write 'hello' to thing 1.")]})
 
@@ -183,7 +239,7 @@ def write_thing(thing_id: str, content: str) -> str:
     """
     ...
 
-current_user.set("dana@example.com")
+current_user.set(user.email)  # from your auth, see above
 Agent(tools=[check_permission, write_thing])("Write 'hello' to thing 1.")
 ```
 
@@ -208,7 +264,7 @@ async def write_thing(args: dict) -> dict:
 
 server = create_sdk_mcp_server(name="hallpass", version="1.0.0", tools=[check_permission, write_thing])
 
-current_user.set("dana@example.com")
+current_user.set(user.email)  # from your auth, see above
 options = ClaudeAgentOptions(
     mcp_servers={"hallpass": server},
     allowed_tools=["mcp__hallpass__check_permission", "mcp__hallpass__write_thing"],
