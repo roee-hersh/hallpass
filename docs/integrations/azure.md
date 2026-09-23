@@ -61,7 +61,9 @@ memberships itself through `$filter=assignedTo('{objectId}')`.
 | `resourcegroup:<guid>/<name>` | `/subscriptions/<guid>/resourceGroups/<name>` |
 | `resource:/subscriptions/.../providers/<ns>/<type>/<name>[/<type>/<name>]` | the full ARM id |
 
-Every segment is validated and path-escaped before it reaches the URL.
+Every segment is limited to letters, digits, `-`, `_`, `.`, `(` and `)`, with no dot-only
+segments, so the scope hallpass builds is the one ARM spells in assignment scopes and needs no
+escaping in the URL.
 
 ## Actions
 
@@ -84,20 +86,23 @@ Wildcards are not accepted in `raw:` or `data:`; role definitions carry them.
 
 ### Evaluation
 
-1. `GET {scope}/providers/Microsoft.Authorization/denyAssignments?$filter=assignedTo('{oid}')`.
+1. `GET {scope}/providers/Microsoft.Authorization/roleAssignments?$filter=assignedTo('{oid}')`. Each
+   assignment whose scope is the target or an ancestor is read (`GET {roleDefinitionId}`, cached five
+   minutes) and its permissions evaluated. When none grants the operation the answer is **denied**
+   and nothing else is read. An assignment with an ABAC `condition` counts only as a conditional
+   grant.
+2. When something grants (or might), `GET {scope}/providers/Microsoft.Authorization/denyAssignments?$filter=assignedTo('{oid}')`.
    Each deny whose scope is the target or an ancestor (honouring `doNotApplyToChildScopes`) and
    whose `actions` minus `notActions` (or data equivalents) match the operation **denies**, unless
    `excludePrincipals` names the user. A deny with a `condition`, one excluding a **group** (hallpass
-   does not read group membership), or one at a management group whose relation to a management-group
-   target is unknown, makes the answer `unsupported` if a role would otherwise grant.
-2. `GET {scope}/providers/Microsoft.Authorization/roleAssignments?$filter=assignedTo('{oid}')`. Each
-   assignment whose scope is the target or an ancestor is read (`GET {roleDefinitionId}`, cached five
-   minutes); the first whose permissions grant the operation **allows**, naming the role, whether it
-   was assigned directly or through a group, and the scope. An assignment with an ABAC `condition`
-   counts only as a conditional grant: if nothing else grants, `unsupported`.
-3. Assignments below the target scope do not apply. Management-group and tenant-root assignments
+   does not read group membership), or one whose scope cannot be placed, makes the answer
+   `unsupported` instead of allowed.
+3. Otherwise the first unconditional grant **allows**, naming the role, whether it was assigned
+   directly or through a group, and the scope; only conditional grants answer `unsupported`.
+4. Assignments below the target scope do not apply. Management-group and tenant-root assignments
    are ancestors of every subscription; for a management-group target, an assignment at a different
-   management group is `unsupported` since the hierarchy is not read.
+   management group is `unsupported` since the hierarchy is not read. An assignment without a scope
+   is treated as uncertain.
 
 ## Decisions
 
@@ -105,7 +110,7 @@ Wildcards are not accepted in `raw:` or `data:`; role definitions carry them.
 |---|---|
 | `allowed` | an unconditional assignment at or above the scope grants the operation and no deny blocks it |
 | `denied` | a deny assignment blocks it; no assignment at or above the scope grants it; the account is disabled |
-| `unsupported` | only conditional grants; an uncertain deny (condition, excluded group, management-group scope); a management-group assignment whose place in the hierarchy is unknown |
+| `unsupported` | only conditional grants; an uncertain deny (condition, excluded group, unplaceable scope); a management-group assignment whose place in the hierarchy is unknown; Graph did not report whether the account is enabled |
 | `resource_not_visible` | ARM answers 404, or 403 `AuthorizationFailed` (no Reader at the scope) |
 | `user_not_found` / `user_ambiguous` | the Graph lookup |
 | `credential_rejected` | the token endpoint rejects the client; 401; 403 other than `AuthorizationFailed` |

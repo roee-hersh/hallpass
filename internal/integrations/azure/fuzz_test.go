@@ -17,6 +17,8 @@ func FuzzParseTarget(f *testing.F) {
 		{"raw:Microsoft.Compute/virtualMachines/read", "resource:/subscriptions/33333333-3333-3333-3333-333333333333/resourceGroups/prod/providers/Microsoft.Compute/virtualMachines/web-1"},
 		{"data:Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read", "managementgroup:corp"},
 		{"vm.read", "resource:/subscriptions/x/../y"}, {"raw:Microsoft.Compute/*", "subscription:x"},
+		{"vm.read", "resource:/subscriptions/33333333-3333-3333-3333-333333333333/resourceGroups/prod/providers/Microsoft.Compute/../.."},
+		{"vm.read", "managementgroup:.."}, {"vm.read", "resourcegroup:33333333-3333-3333-3333-333333333333/rg(1)"},
 	} {
 		f.Add(s[0], s[1])
 	}
@@ -33,8 +35,13 @@ func FuzzParseTarget(f *testing.F) {
 			t.Fatalf("query slipped through %+v", res)
 		}
 		op := tg.action.operation
-		if strings.ContainsAny(op, "*?#% \\") || strings.Contains(op, "..") || !strings.Contains(op, "/") || strings.Contains(op, "//") {
+		if strings.ContainsAny(op, "*?#% \\/") == strings.ContainsAny(op, "*?#% \\") || strings.Contains(op, "//") {
 			t.Fatalf("unvalidated operation %q from %q", op, action)
+		}
+		for _, seg := range strings.Split(op, "/") {
+			if seg == "" || strings.Trim(seg, ".") == "" {
+				t.Fatalf("bad segment %q in operation %q", seg, op)
+			}
 		}
 		if strings.HasPrefix(action, "raw:") && (tg.action.data || op != strings.TrimPrefix(action, "raw:")) {
 			t.Fatalf("raw action %q became %+v", action, tg.action)
@@ -47,7 +54,7 @@ func FuzzParseTarget(f *testing.F) {
 			t.Fatalf("malformed scope %q from %q", sc, resource)
 		}
 		for _, seg := range strings.Split(sc[1:], "/") {
-			if seg == "" || seg == "." || seg == ".." || strings.ContainsAny(seg, " \\") {
+			if seg == "" || strings.Trim(seg, ".") == "" || strings.ContainsAny(seg, " \\%?#") {
 				t.Fatalf("bad segment %q in %q", seg, sc)
 			}
 		}

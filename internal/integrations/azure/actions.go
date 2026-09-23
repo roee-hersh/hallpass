@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/roee-hersh/hallpass/internal/catalog"
-	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
 
@@ -108,8 +107,10 @@ func invalid(format string, args ...any) error {
 // target is a parsed question.
 type target struct {
 	action action
-	// scope is the ARM scope, leading slash included, each segment
-	// path-escaped: /subscriptions/<id>/resourceGroups/<rg>/providers/...
+	// scope is the ARM scope, leading slash included, exactly as ARM
+	// spells it in assignment scopes: /subscriptions/<id>/resourceGroups/
+	// <rg>/providers/... Every segment is limited to [-\w.()], which needs
+	// no escaping in a URL path, so the same string is the request path.
 	scope string
 	// kind is managementgroup, subscription, resourcegroup or resource.
 	kind string
@@ -130,10 +131,10 @@ func parseTarget(actionName string, r catalog.Resource) (target, error) {
 	t := target{action: a, kind: r.Type}
 	switch r.Type {
 	case "managementgroup":
-		if !mgRe.MatchString(id) {
+		if !mgRe.MatchString(id) || dots(id) {
 			return target{}, invalid("managementgroup: takes the group's name or id")
 		}
-		t.scope = "/providers/Microsoft.Management/managementGroups/" + httpx.PathEscape(id)
+		t.scope = "/providers/Microsoft.Management/managementGroups/" + id
 	case "subscription":
 		if !guidRe.MatchString(id) {
 			return target{}, invalid("subscription: takes the subscription id (a GUID)")
@@ -144,7 +145,7 @@ func parseTarget(actionName string, r catalog.Resource) (target, error) {
 		if !ok || !guidRe.MatchString(sub) || !rgRe.MatchString(rg) || strings.HasSuffix(rg, ".") {
 			return target{}, invalid("resourcegroup: takes <subscription id>/<resource group name>")
 		}
-		t.scope = "/subscriptions/" + strings.ToLower(sub) + "/resourceGroups/" + httpx.PathEscape(rg)
+		t.scope = "/subscriptions/" + strings.ToLower(sub) + "/resourceGroups/" + rg
 	case "resource":
 		scope, err := parseResourceID(id)
 		if err != nil {
@@ -170,15 +171,19 @@ func parseResourceID(id string) (string, error) {
 	if len(rest)%2 != 0 {
 		return "", invalid("resource: the id must end in <type>/<name> pairs")
 	}
-	out := []string{"subscriptions", strings.ToLower(segs[1]), "resourceGroups", httpx.PathEscape(segs[3]), "providers", segs[5]}
+	out := []string{"subscriptions", strings.ToLower(segs[1]), "resourceGroups", segs[3], "providers", segs[5]}
 	for _, seg := range rest {
-		if !segmentRe.MatchString(seg) {
+		if !segmentRe.MatchString(seg) || dots(seg) {
 			return "", invalid("resource: segment %q is not a resource type or name", seg)
 		}
-		out = append(out, httpx.PathEscape(seg))
+		out = append(out, seg)
 	}
 	return "/" + strings.Join(out, "/"), nil
 }
+
+// dots reports whether a segment is made of dots only (., ..), which a
+// front end may fold into the parent path.
+func dots(seg string) bool { return strings.Trim(seg, ".") == "" }
 
 // String names the target for decision texts.
 func (t target) String() string {

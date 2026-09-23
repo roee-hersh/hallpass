@@ -41,6 +41,7 @@ const (
 	scopeCond  = scopeSub + "/resourceGroups/cond"
 	scopeVM    = scopeProd + "/providers/Microsoft.Compute/virtualMachines/web-1"
 	scopeStor  = scopeProd + "/providers/Microsoft.Storage/storageAccounts/prodstore"
+	scopeParen = scopeSub + "/resourceGroups/rg(1)"
 	scopeMG    = "/providers/Microsoft.Management/managementGroups/corp"
 	scopeMG2   = "/providers/Microsoft.Management/managementGroups/other-mg"
 	allPrinces = "00000000-0000-0000-0000-000000000000"
@@ -125,6 +126,8 @@ func newFake(t *testing.T) *fake {
 			{id: "da-4", name: "no-restart-except-dana", scope: scopeProd, actions: []string{"Microsoft.Compute/virtualMachines/restart/action"}, principals: []string{allPrinces}, excludes: []string{oidDana}},
 			// Deny only at the exact scope.
 			{id: "da-5", name: "no-deploy-sub-exact", scope: scopeSub, exact: true, actions: []string{"Microsoft.Resources/deployments/write"}, principals: []string{allPrinces}},
+			// A scope with parentheses, spelled by ARM as it is.
+			{id: "da-6", name: "no-vm-delete-paren", scope: scopeParen, actions: []string{"Microsoft.Compute/virtualMachines/delete"}, principals: []string{allPrinces}},
 		},
 		forbidden: map[string]bool{},
 	}
@@ -321,7 +324,14 @@ func (f *fake) arm(w http.ResponseWriter, r *http.Request) {
 		}
 		write(w, 200, map[string]any{"value": value})
 	case strings.HasPrefix(rest, "roleDefinitions/"):
-		props, ok := f.roles[strings.ToLower(p)]
+		guid := strings.TrimPrefix(rest, "roleDefinitions/")
+		var props map[string]any
+		ok := false
+		for id, pr := range f.roles {
+			if strings.HasSuffix(id, "/"+guid) {
+				props, ok = pr, true
+			}
+		}
 		if !ok {
 			armErr(w, 404, "RoleDefinitionDoesNotExist")
 			return
@@ -445,6 +455,20 @@ func TestAction_vm_delete_deny(t *testing.T) {
 	_, _, c := setup(t)
 	expect(t, check(t, c, lead, "vm.delete", "resource:"+scopeVM), integration.CodeDenied, `deny assignment "no-vm-delete-prod" at `+scopeProd+" blocks")
 	expect(t, check(t, c, dana, "vm.delete", "resource:"+scopeVM), integration.CodeDenied, "")
+	// The scope is compared as ARM spells it: parentheses are not escaped.
+	expect(t, check(t, c, lead, "vm.delete", "resource:"+scopeParen+"/providers/Microsoft.Compute/virtualMachines/x"), integration.CodeDenied, `"no-vm-delete-paren"`)
+	expect(t, check(t, c, lead, "vm.delete", "resourcegroup:"+subID+"/rg(1)"), integration.CodeDenied, `"no-vm-delete-paren"`)
+	expect(t, check(t, c, lead, "vm.start", "resourcegroup:"+subID+"/rg(1)"), integration.CodeAllowed, "Contributor")
+}
+
+func TestDeniesReadOnlyWhenSomethingGrants(t *testing.T) {
+	srv, _, c := setup(t)
+	expect(t, check(t, c, none, "vm.read", "resource:"+scopeVM), integration.CodeDenied, "")
+	for _, call := range srv.Calls() {
+		if strings.HasSuffix(call.Path, "/denyAssignments") {
+			t.Error("deny assignments listed although nothing grants")
+		}
+	}
 }
 func TestAction_storage_listkeys_allow(t *testing.T) {
 	_, f, c := setup(t)
@@ -639,6 +663,18 @@ func TestMicrosoft365Connection(t *testing.T) {
 			t.Errorf("Graph called although a microsoft365 connection resolves users: %s", call.Path)
 		}
 	}
+	if _, err := (Integration{}).New(context.Background(), itest.Settings("az", "azure", map[string]string{"tenant_id": tenantID, "client_id": clientID, "microsoft365_connection": "nope"}, map[string]secret.Secret{"credential": secret.Literal("x")}), deps); err == nil {
+		t.Error("unknown connection accepted")
+	}
+	// An identity that does not say whether the account is enabled.
+	deps.Connection = func(string) (integration.Connection, error) {
+		return stubIdentity{id: integration.Identity{ID: oidDana, Display: "dana@example.com", Attrs: map[string]string{"account_enabled": "unknown"}}}, nil
+	}
+	c2, err := (Integration{}).New(context.Background(), s, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, check(t, c2, dana, "vm.read", "subscription:"+subID), integration.CodeUnsupported, "not reported")
 	// The token endpoint was used for ARM only.
 	tokens := 0
 	for _, call := range srv.Calls() {
@@ -648,9 +684,6 @@ func TestMicrosoft365Connection(t *testing.T) {
 	}
 	if tokens != 1 {
 		t.Errorf("%d token calls, want 1", tokens)
-	}
-	if _, err := (Integration{}).New(context.Background(), itest.Settings("az", "azure", map[string]string{"tenant_id": tenantID, "client_id": clientID, "microsoft365_connection": "nope"}, map[string]secret.Secret{"credential": secret.Literal("x")}), deps); err == nil {
-		t.Error("unknown connection accepted")
 	}
 }
 
@@ -727,7 +760,10 @@ func TestInvalidRequests(t *testing.T) {
 		{"vm.read", "resource:/subscriptions/" + subID + "/resourceGroups/prod/providers/Compute/virtualMachines/x"},
 		{"vm.read", "resource:/subscriptions/" + subID + "/resourceGroups/prod/providers/Microsoft.Compute/virtualMachines/a b"},
 		{"vm.read", "subscription:" + subID + "?x=1"}, {"vm.read", "vm:x"},
-		{"vm.read", "managementgroup:a/b"},
+		{"vm.read", "managementgroup:a/b"}, {"vm.read", "managementgroup:.."}, {"vm.read", "managementgroup:..."},
+		{"vm.read", "resource:/subscriptions/" + subID + "/resourceGroups/prod/providers/Microsoft.Compute/../.."},
+		{"vm.read", "resource:/subscriptions/" + subID + "/resourceGroups/prod/providers/Microsoft.Compute/virtualMachines/."},
+		{"vm.read", "resourcegroup:" + subID + "/.."},
 	} {
 		d := check(t, c, dana, tc[0], tc[1])
 		if d.Code != integration.CodeInvalidRequest {

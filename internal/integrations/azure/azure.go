@@ -184,6 +184,10 @@ func classifyToken(err error) *integration.Error {
 // getJSON performs one GET against client, retrying once after a 401 with
 // a fresh token. notFound builds the error for a 404.
 func (c *Connection) getJSON(ctx context.Context, client *httpx.Client, tokens *authx.TokenSource, path string, q url.Values, out any, notFound func() error) error {
+	remedy := "it needs Reader (Microsoft.Authorization/*/read) at or above the scope"
+	if client == c.graph {
+		remedy = "it needs the Graph application permission User.Read.All, or set microsoft365_connection"
+	}
 	req := &httpx.Request{Path: path, Query: q}
 	resp, err := client.Do(ctx, req)
 	if httpx.Status(err) == 401 {
@@ -208,7 +212,7 @@ func (c *Connection) getJSON(ctx context.Context, client *httpx.Client, tokens *
 			if notFound != nil && errorCode(err) == "AuthorizationFailed" {
 				return notFound()
 			}
-			return integration.Wrap(integration.CodeCredentialRejected, err, "the app registration may not read this (HTTP 403, %s); it needs Reader (Microsoft.Authorization/*/read) at or above the scope", orEmpty(errorCode(err), "no code"))
+			return integration.Wrap(integration.CodeCredentialRejected, err, "the app registration may not read this (HTTP 403, %s); %s", orEmpty(errorCode(err), "no code"), remedy)
 		case 400:
 			return integration.Wrap(integration.CodeInvalidRequest, err, "the request was rejected (HTTP 400, %s)", orEmpty(errorCode(err), "no code"))
 		}
@@ -375,15 +379,19 @@ type denyAssignment struct {
 // tenant root, ending in the definition's GUID.
 var roleDefinitionIDRe = regexp.MustCompile(`^(/[A-Za-z0-9_.()-]+)*/providers/Microsoft\.Authorization/roleDefinitions/[0-9a-fA-F-]{36}$`)
 
-// roleDefinition reads a role definition by its full id, cached for roleTTL.
-func (c *Connection) roleDefinition(ctx context.Context, id string) (roleDefinition, error) {
+// roleDefinition reads the role definition an assignment names, by its GUID
+// at the target scope (built-in definitions are readable at every scope,
+// custom ones at the scopes they are assignable to), cached for roleTTL.
+func (c *Connection) roleDefinition(ctx context.Context, scope, id string) (roleDefinition, error) {
 	if !roleDefinitionIDRe.MatchString(id) {
 		return roleDefinition{}, integration.Errorf(integration.CodeUpstreamError, "a role assignment names a role definition id of an unexpected shape")
 	}
-	return c.roles.Do(ctx, strings.ToLower(id), func(ctx context.Context) (roleDefinition, time.Duration, error) {
+	guid := strings.ToLower(id[strings.LastIndex(id, "/")+1:])
+	return c.roles.Do(ctx, guid, func(ctx context.Context) (roleDefinition, time.Duration, error) {
 		var def roleDefinition
-		err := c.getJSON(ctx, c.arm, c.armTokens, id, url.Values{"api-version": {apiVersion}}, &def, func() error {
-			return integration.Errorf(integration.CodeUpstreamError, "role definition %s is assigned but cannot be read", id)
+		path := scope + "/providers/Microsoft.Authorization/roleDefinitions/" + guid
+		err := c.getJSON(ctx, c.arm, c.armTokens, path, url.Values{"api-version": {apiVersion}}, &def, func() error {
+			return integration.Errorf(integration.CodeUpstreamError, "role definition %s is assigned but cannot be read at %s", guid, scope)
 		})
 		if err != nil {
 			return roleDefinition{}, 0, err
@@ -450,6 +458,11 @@ func (p permission) grants(op string, data bool) bool {
 // returned for a subscription-or-lower target is taken as inherited.
 // exact restricts to the same scope (doNotApplyToChildScopes).
 func covers(assigned, target string, exact bool) (applies, uncertain bool) {
+	if strings.TrimSpace(assigned) == "" {
+		// An assignment without a scope is malformed; it neither applies
+		// nor can be ruled out.
+		return false, true
+	}
 	a, t := strings.ToLower(strings.TrimRight(assigned, "/")), strings.ToLower(strings.TrimRight(target, "/"))
 	if a == t {
 		return true, false
@@ -458,7 +471,7 @@ func covers(assigned, target string, exact bool) (applies, uncertain bool) {
 		return false, false
 	}
 	if a == "" {
-		return true, false // the tenant root
+		return true, false // the tenant root, "/"
 	}
 	isMG := func(s string) bool { return strings.HasPrefix(s, "/providers/microsoft.management/managementgroups/") }
 	switch {
@@ -472,7 +485,9 @@ func covers(assigned, target string, exact bool) (applies, uncertain bool) {
 	return strings.HasPrefix(t, a+"/"), false
 }
 
-// Check answers one question.
+// Check answers one question: the role assignments decide whether anything
+// grants the operation; when something does, the deny assignments are read
+// and may block it.
 func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (integration.Decision, error) {
 	t, err := parseTarget(r.ActionName, r.Resource)
 	if err != nil {
@@ -480,8 +495,12 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	}
 	id := r.Identity
 	who := id.Display
-	if id.Attr("account_enabled") == "false" {
+	switch id.Attr("account_enabled") {
+	case "true":
+	case "false":
 		return integration.Denied("%s's account is disabled", who), nil
+	default:
+		return integration.Unsupported("whether %s's account is enabled was not reported", who), nil
 	}
 	oid := strings.ToLower(id.ID)
 	if !guidRe.MatchString(oid) {
@@ -493,25 +512,124 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		return integration.Errorf(integration.CodeResourceNotVisible, "%s does not exist or hallpass cannot read its assignments (it needs Reader there)", t)
 	}
 
-	// Deny assignments first: a deny wins over any grant.
-	raw, err := c.listARM(ctx, t.scope+"/providers/Microsoft.Authorization/denyAssignments", filter, notVisible)
+	grant, err := c.roleGrant(ctx, t, oid, filter, notVisible)
 	if err != nil {
 		return integration.Decision{}, err
 	}
-	var denyUncertain string
+	if grant.role == "" && grant.conditional == "" && grant.uncertain == "" {
+		if grant.covering == 0 {
+			return integration.Denied("%s has no role assignment at or above %s", who, t), nil
+		}
+		return integration.Denied("none of %s's %d role assignment(s) at or above %s grants %s", who, grant.covering, t, op), nil
+	}
+
+	// Something grants, or might: a deny wins over all of it.
+	blocked, uncertainDeny, err := c.denied(ctx, t, oid, filter, notVisible)
+	if err != nil {
+		return integration.Decision{}, err
+	}
+	if blocked != nil {
+		return integration.Denied("deny assignment %q at %s blocks %s for %s", blocked.Properties.DenyAssignmentName, blocked.Properties.Scope, op, who), nil
+	}
+	switch {
+	case grant.role != "":
+		if uncertainDeny != "" {
+			return integration.Unsupported("role %q grants %s to %s at %s, but deny assignment %q may block it (a condition, an excluded group or a scope hallpass cannot place)", grant.role, op, who, grant.scope, uncertainDeny), nil
+		}
+		return integration.Allowed("role %q assigned %s at %s grants %s to %s", grant.role, grant.via, grant.scope, op, who), nil
+	case grant.conditional != "":
+		return integration.Unsupported("role %q grants %s to %s only under an ABAC condition hallpass does not evaluate", grant.conditional, op, who), nil
+	}
+	return integration.Unsupported("role %q grants %s to %s at a management group whose place above %s hallpass cannot tell", grant.uncertain, op, who, t), nil
+}
+
+// grantResult is what the role assignments say.
+type grantResult struct {
+	// role, scope and via describe the first unconditional grant.
+	role, scope, via string
+	// conditional and uncertain name roles that grant only under a
+	// condition, or at a management group of unknown relation.
+	conditional, uncertain string
+	// covering counts the assignments at or above the scope.
+	covering int
+}
+
+// roleGrant lists the user's role assignments and evaluates the covering
+// ones against the operation.
+func (c *Connection) roleGrant(ctx context.Context, t target, oid, filter string, notFound func() error) (grantResult, error) {
+	var g grantResult
+	raw, err := c.listARM(ctx, t.scope+"/providers/Microsoft.Authorization/roleAssignments", filter, notFound)
+	if err != nil {
+		return g, err
+	}
+	for _, item := range raw {
+		var a roleAssignment
+		if err := json.Unmarshal(item, &a); err != nil {
+			return g, integration.Wrap(integration.CodeUpstreamError, err, "a role assignment could not be decoded")
+		}
+		applies, uncertain := covers(a.Properties.Scope, t.scope, false)
+		if !applies && !uncertain {
+			continue
+		}
+		g.covering++
+		def, err := c.roleDefinition(ctx, t.scope, a.Properties.RoleDefinitionID)
+		if err != nil {
+			return g, err
+		}
+		granted := false
+		for _, p := range def.Properties.Permissions {
+			if p.grants(t.action.operation, t.action.data) {
+				granted = true
+				break
+			}
+		}
+		if !granted {
+			continue
+		}
+		name := orEmpty(def.Properties.RoleName, def.ID)
+		switch {
+		case uncertain:
+			if g.uncertain == "" {
+				g.uncertain = name
+			}
+		case a.Properties.Condition != "":
+			if g.conditional == "" {
+				g.conditional = name
+			}
+		default:
+			if g.role != "" {
+				continue
+			}
+			g.role, g.scope, g.via = name, a.Properties.Scope, "directly"
+			if !strings.EqualFold(a.Properties.PrincipalID, oid) {
+				g.via = "through " + strings.ToLower(orEmpty(a.Properties.PrincipalType, "group")) + " " + a.Properties.PrincipalID
+			}
+		}
+	}
+	return g, nil
+}
+
+// denied lists the deny assignments that apply to the user at the scope.
+// It returns the first that certainly blocks the operation, else the name
+// of one that might (a condition, an excluded group, an unplaceable scope).
+func (c *Connection) denied(ctx context.Context, t target, oid, filter string, notFound func() error) (*denyAssignment, string, error) {
+	raw, err := c.listARM(ctx, t.scope+"/providers/Microsoft.Authorization/denyAssignments", filter, notFound)
+	if err != nil {
+		return nil, "", err
+	}
+	uncertainName := ""
 	for _, item := range raw {
 		var d denyAssignment
 		if err := json.Unmarshal(item, &d); err != nil {
-			return integration.Decision{}, integration.Wrap(integration.CodeUpstreamError, err, "a deny assignment could not be decoded")
+			return nil, "", integration.Wrap(integration.CodeUpstreamError, err, "a deny assignment could not be decoded")
 		}
 		applies, uncertain := covers(d.Properties.Scope, t.scope, d.Properties.DoNotApplyToChildScopes)
 		if !applies && !uncertain {
 			continue
 		}
-		matched := false
-		conditional := d.Properties.Condition != ""
+		matched, conditional := false, d.Properties.Condition != ""
 		for _, p := range d.Properties.Permissions {
-			if p.grants(op, t.action.data) {
+			if p.grants(t.action.operation, t.action.data) {
 				matched = true
 				if p.Condition != "" {
 					conditional = true
@@ -538,78 +656,16 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		if excluded {
 			continue
 		}
-		name := orEmpty(d.Properties.DenyAssignmentName, "unnamed")
-		switch {
-		case uncertain || excludeUnknown || conditional:
-			if denyUncertain == "" {
-				denyUncertain = name
+		d.Properties.DenyAssignmentName = orEmpty(d.Properties.DenyAssignmentName, "unnamed")
+		if uncertain || excludeUnknown || conditional {
+			if uncertainName == "" {
+				uncertainName = d.Properties.DenyAssignmentName
 			}
-		default:
-			return integration.Denied("deny assignment %q at %s blocks %s for %s", name, d.Properties.Scope, op, who), nil
-		}
-	}
-
-	// Role assignments: any unconditional grant at or above the scope.
-	raw, err = c.listARM(ctx, t.scope+"/providers/Microsoft.Authorization/roleAssignments", filter, notVisible)
-	if err != nil {
-		return integration.Decision{}, err
-	}
-	var conditionalRole, uncertainRole string
-	roles := 0
-	for _, item := range raw {
-		var a roleAssignment
-		if err := json.Unmarshal(item, &a); err != nil {
-			return integration.Decision{}, integration.Wrap(integration.CodeUpstreamError, err, "a role assignment could not be decoded")
-		}
-		applies, uncertain := covers(a.Properties.Scope, t.scope, false)
-		if !applies && !uncertain {
 			continue
 		}
-		roles++
-		def, err := c.roleDefinition(ctx, a.Properties.RoleDefinitionID)
-		if err != nil {
-			return integration.Decision{}, err
-		}
-		granted := false
-		for _, p := range def.Properties.Permissions {
-			if p.grants(op, t.action.data) {
-				granted = true
-				break
-			}
-		}
-		if !granted {
-			continue
-		}
-		name := orEmpty(def.Properties.RoleName, def.ID)
-		switch {
-		case uncertain:
-			if uncertainRole == "" {
-				uncertainRole = name
-			}
-		case a.Properties.Condition != "":
-			if conditionalRole == "" {
-				conditionalRole = name
-			}
-		default:
-			if denyUncertain != "" {
-				return integration.Unsupported("role %q grants %s to %s at %s, but deny assignment %q may block it (a condition, an excluded group or a management-group scope hallpass cannot evaluate)", name, op, who, a.Properties.Scope, denyUncertain), nil
-			}
-			via := "directly"
-			if !strings.EqualFold(a.Properties.PrincipalID, oid) {
-				via = "through " + strings.ToLower(orEmpty(a.Properties.PrincipalType, "group")) + " " + a.Properties.PrincipalID
-			}
-			return integration.Allowed("role %q assigned %s at %s grants %s to %s", name, via, a.Properties.Scope, op, who), nil
-		}
+		return &d, "", nil
 	}
-	switch {
-	case conditionalRole != "":
-		return integration.Unsupported("role %q grants %s to %s only under an ABAC condition hallpass does not evaluate", conditionalRole, op, who), nil
-	case uncertainRole != "":
-		return integration.Unsupported("role %q grants %s to %s at a management group whose place above %s hallpass cannot tell", uncertainRole, op, who, t), nil
-	case roles == 0:
-		return integration.Denied("%s has no role assignment at or above %s", who, t), nil
-	}
-	return integration.Denied("none of %s's %d role assignment(s) at or above %s grants %s", who, roles, t, op), nil
+	return nil, uncertainName, nil
 }
 
 // --- probe ------------------------------------------------------------------
@@ -618,14 +674,11 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 // (UNVERIFIED: the form az role definition list uses; the specification
 // file has no path for it), and a Graph user page when identity is local.
 func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error) {
-	var body struct {
-		Value []json.RawMessage `json:"value"`
-	}
-	q := url.Values{"api-version": {apiVersion}, "$filter": {"type eq 'BuiltInRole'"}}
-	if err := c.getJSON(ctx, c.arm, c.armTokens, "/providers/Microsoft.Authorization/roleDefinitions", q, &body, nil); err != nil {
+	defs, err := c.listARM(ctx, "/providers/Microsoft.Authorization/roleDefinitions", "type eq 'BuiltInRole'", nil)
+	if err != nil {
 		return integration.ProbeResult{}, err
 	}
-	res := integration.ProbeResult{Summary: fmt.Sprintf("authenticated to Azure Resource Manager; %d built-in role definitions visible", len(body.Value))}
+	res := integration.ProbeResult{Summary: fmt.Sprintf("authenticated to Azure Resource Manager; %d built-in role definitions visible", len(defs))}
 	if c.identity == nil {
 		var users struct {
 			Value []graphUser `json:"value"`
