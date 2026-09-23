@@ -64,44 +64,56 @@ export class FakeHallpass {
       req.setEncoding("utf8");
       req.on("data", (c: string) => (data += c));
       req.on("end", () => {
-        const body = JSON.parse(data) as Record<string, unknown>;
-        fake.seen.push({ headers: req.headers, body });
-        const thing = String(body.resource).split(":", 2)[1] ?? "";
-        const socket = req.socket;
-        if (thing === "badline") {
-          socket.write("garbage\r\n\r\n");
-          socket.destroy();
-          return;
+        try {
+          answer(req, res, data);
+        } catch (e) {
+          // A test mistake (an id the table lacks, a non-JSON body) fails
+          // that one check as client_error instead of killing the process.
+          const msg = `fake hallpass: ${e instanceof Error ? e.message : String(e)}`;
+          res.writeHead(500, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(msg) });
+          res.end(msg);
         }
-        if (thing === "short") {
-          socket.write('HTTP/1.1 200 OK\r\nContent-Length: 999\r\n\r\n{"decision":"allow"}');
-          socket.destroy();
-          return;
-        }
-        let status: number;
-        let ans: unknown;
-        if (req.headers.authorization !== "Bearer " + API_KEY) {
-          [status, ans] = [401, { decision: "unknown", reason: "unauthorized: missing or wrong API key" }];
-        } else {
-          const a = ANSWERS[thing];
-          if (!a) {
-            throw new Error(`fake hallpass: no answer for ${thing}`);
-          }
-          [status, ans] = a;
-        }
-        const raw = typeof ans === "string" ? ans : JSON.stringify(ans);
-        const headers: http.OutgoingHttpHeaders = { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(raw) };
-        if (status === 302) {
-          // An allow at the other end of a redirect must not count.
-          headers.Location = `http://127.0.0.1:${(sink.address() as AddressInfo).port}/check`;
-        }
-        res.writeHead(status, headers);
-        res.end(raw);
       });
     });
     await listen(sink);
     await listen(server);
     const fake = new FakeHallpass(server, sink);
+
+    function answer(req: http.IncomingMessage, res: http.ServerResponse, data: string): void {
+      const body = JSON.parse(data) as Record<string, unknown>;
+      fake.seen.push({ headers: req.headers, body });
+      const thing = String(body.resource).split(":", 2)[1] ?? "";
+      const socket = req.socket;
+      if (thing === "badline") {
+        socket.write("garbage\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      if (thing === "short") {
+        socket.write('HTTP/1.1 200 OK\r\nContent-Length: 999\r\n\r\n{"decision":"allow"}');
+        socket.destroy();
+        return;
+      }
+      let status: number;
+      let ans: unknown;
+      if (req.headers.authorization !== "Bearer " + API_KEY) {
+        [status, ans] = [401, { decision: "unknown", reason: "unauthorized: missing or wrong API key" }];
+      } else {
+        const a = ANSWERS[thing];
+        if (!a) {
+          throw new Error(`no answer for ${JSON.stringify(thing)}`);
+        }
+        [status, ans] = a;
+      }
+      const raw = typeof ans === "string" ? ans : JSON.stringify(ans);
+      const headers: http.OutgoingHttpHeaders = { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(raw) };
+      if (status === 302) {
+        // An allow at the other end of a redirect must not count.
+        headers.Location = `http://127.0.0.1:${(sink.address() as AddressInfo).port}/check`;
+      }
+      res.writeHead(status, headers);
+      res.end(raw);
+    }
     return fake;
   }
 
@@ -131,6 +143,19 @@ function listen(s: http.Server): Promise<void> {
 
 function close(s: http.Server): Promise<void> {
   return new Promise((resolve, reject) => s.close((err) => (err ? reject(err) : resolve())));
+}
+
+/** A server that accepts connections and never answers, for timeout tests. */
+export async function silentServer(): Promise<{ url: string; close: () => Promise<void> }> {
+  const s = http.createServer(() => {});
+  await listen(s);
+  return {
+    url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`,
+    close: async () => {
+      s.closeAllConnections();
+      await close(s);
+    },
+  };
 }
 
 /** A port on 127.0.0.1 nobody listens on. */

@@ -123,16 +123,19 @@ export class Hallpass {
     this.timeoutMs = options.timeoutMs ?? 10_000;
   }
 
-  /** Ask hallpass. Never rejects on transport: every failure becomes an `unknown` decision. */
+  /**
+   * Ask hallpass. Never rejects on transport: every failure becomes an
+   * `unknown` decision. `groups` left out or null is omitted from the request.
+   */
   async check(
     user: string,
     connection: string,
     action: string,
     resource: string,
-    groups?: readonly string[],
+    groups?: readonly string[] | null,
   ): Promise<Decision> {
     const body: Record<string, unknown> = { user, connection, action, resource };
-    if (groups !== undefined) {
+    if (groups != null) {
       body.groups = groupList(groups);
     }
     let response: Response;
@@ -165,7 +168,7 @@ export class Hallpass {
     connection: string,
     action: string,
     resource: string,
-    groups?: readonly string[],
+    groups?: readonly string[] | null,
   ): Promise<boolean> {
     return (await this.check(user, connection, action, resource, groups)).allowed;
   }
@@ -176,7 +179,7 @@ export class Hallpass {
     connection: string,
     action: string,
     resource: string,
-    groups?: readonly string[],
+    groups?: readonly string[] | null,
   ): Promise<Decision> {
     const d = await this.check(user, connection, action, resource, groups);
     if (!d.allowed) {
@@ -209,6 +212,7 @@ function validateUrl(url: string): string {
   throw new Error(`hallpass url ${JSON.stringify(url)} must start with https:// (http:// only for localhost)`);
 }
 
+/** localhost, 127.0.0.0/8, ::1, and 127.0.0.0/8 mapped into IPv6, as Go's net.IP.IsLoopback. */
 function isLoopback(hostname: string): boolean {
   if (hostname === "localhost") {
     return true;
@@ -217,7 +221,15 @@ function isLoopback(hostname: string): boolean {
   if (isIPv4(host)) {
     return host.startsWith("127.");
   }
-  return isIPv6(host) && host === "::1";
+  if (!isIPv6(host)) {
+    return false;
+  }
+  if (host === "::1") {
+    return true;
+  }
+  // URL normalizes ::ffff:127.0.0.1 to ::ffff:7f00:1; the first hex group holds the top two octets.
+  const mapped = /^::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/i.exec(host);
+  return mapped !== null && parseInt(mapped[1]!, 16) >> 8 === 127;
 }
 
 function groupList(groups: readonly string[]): string[] {

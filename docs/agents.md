@@ -326,10 +326,11 @@ Or in any host that takes an `mcpServers` JSON block:
 
 [`examples/agent-ts/hallpass_client.ts`](../examples/agent-ts/hallpass_client.ts)
 is the same client for Node, on the built-in `fetch` with no dependencies.
-Copy it into your project. It follows the rules above to the letter: every
-transport failure, redirect, non-JSON body or non-200 status is an `unknown`
-decision with the code `client_error`, and `guarded` never reads the user
-from the arguments.
+Copy it into your project. It follows the rules above to the letter: a
+transport failure, a redirect, a non-JSON body or an `allow` with a non-200
+status is an `unknown` decision with the code `client_error` (a 400 or 401
+keeps hallpass's own reason), and `guarded` never reads the user from the
+arguments.
 
 ```ts
 import { Hallpass, current, guarded } from "./hallpass_client.ts";
@@ -355,6 +356,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 const session = new AsyncLocalStorage<{ user: string; groups?: string[] }>();
 const user = () => current(session).user;
+const groups = () => current(session).groups ?? [];
 
 const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user })(
   async ({ key }: { key: string }) => {
@@ -387,8 +389,8 @@ const writeThing = tool({
   ),
 });
 
-session.run({ user: req.user.email }, () =>
-  generateText({ model, tools: { check_permission, write_thing: writeThing }, prompt }));
+const tools = { check_permission: checkPermission, write_thing: writeThing };
+session.run({ user: req.user.email }, () => generateText({ model, tools, prompt }));
 ```
 
 The schema the model sees has only `thing_id` and `content`; a `user` the

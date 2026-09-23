@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { after, before, beforeEach, describe, test } from "node:test";
-import { API_KEY, DANA, FakeHallpass, unusedPort } from "./fake_hallpass.ts";
+import { API_KEY, DANA, FakeHallpass, silentServer, unusedPort } from "./fake_hallpass.ts";
 import { type Decision, Hallpass, PermissionDenied, current, guarded } from "./hallpass_client.ts";
 
 let fake: FakeHallpass;
@@ -23,7 +23,7 @@ before(async () => {
 after(() => fake.close());
 beforeEach(() => fake.clear());
 
-function check(thing: string, groups?: readonly string[]): Promise<Decision> {
+function check(thing: string, groups?: readonly string[] | null): Promise<Decision> {
   return hp.check(DANA, "demo", "thing.write", "thing:" + thing, groups);
 }
 
@@ -87,23 +87,27 @@ describe("client", () => {
   });
 
   test("timeout is unknown", async () => {
-    // The fake answers only after the client gave up.
-    const slow = await FakeHallpass.start();
+    const silent = await silentServer(); // accepts the connection and never answers
     try {
-      const d = await new Hallpass({ url: slow.url, apiKey: API_KEY, timeoutMs: 1 }).check(
+      const d = await new Hallpass({ url: silent.url, apiKey: API_KEY, timeoutMs: 200 }).check(
         "u", "demo", "thing.read", "thing:allowed");
       assert.deepEqual([d.decision, d.code, d.status], ["unknown", "client_error", 0]);
+      assert.match(d.reason, /timeout/i);
     } finally {
-      await slow.close();
+      await silent.close();
     }
   });
 
   test("url rules", () => {
-    for (const ok of ["https://hallpass.internal", "http://localhost:8080/", "http://127.0.0.1:1", "http://[::1]:8080"]) {
+    for (const ok of [
+      "https://hallpass.internal", "http://localhost:8080/", "http://127.0.0.1:1", "http://127.1.2.3",
+      "http://[::1]:8080", "http://[::ffff:127.0.0.1]:1", "http://[::ffff:7f00:1]:1",
+    ]) {
       new Hallpass({ url: ok, apiKey: API_KEY });
     }
     for (const bad of [
-      "http://hallpass.internal", "localhost:8080", "ftp://x", "http://10.0.0.5:8080", "http://[::ffff:7f00:1]:1",
+      "http://hallpass.internal", "localhost:8080", "ftp://x", "http://10.0.0.5:8080", "http://[::2]:1",
+      "http://[::ffff:10.0.0.5]:1", "http://[::ffff:a00:1]:1", "http://[fe80::1]:1",
       "https://hallpass.internal/?debug=1", "https://hallpass.internal/#x",
       "https://user:pw@hallpass.internal", "https://hallpass.internal /",
     ]) {
@@ -122,10 +126,12 @@ describe("client", () => {
     });
     await check("allowed");
     assert.equal("groups" in fake.lastRequest(), false, "groups omitted when not given");
+    await check("allowed", null);
+    assert.equal("groups" in fake.lastRequest(), false, "groups omitted when null");
     // A string is not a list of groups.
     await assert.rejects(check("allowed", "platform-team" as unknown as string[]), TypeError);
     await assert.rejects(check("allowed", ["ok", 1] as unknown as string[]), TypeError);
-    assert.equal(fake.seen.length, 2);
+    assert.equal(fake.seen.length, 3);
   });
 
   test("require and allowed", async () => {
@@ -272,7 +278,8 @@ describe("guarded", () => {
     const out = await write({ thing_id: "denied" });
     assert.ok(out.startsWith("refused: dana@example.com may not thing.write on thing:denied"), out);
     // Only a refusal goes through the hook; other errors still reject.
-    await assert.rejects(write({ thing_id: "denied", user: 1 } as unknown as WriteArgs), /refused/).catch(() => {});
+    await assert.rejects(write({ content: "no thing_id" } as unknown as WriteArgs), /thing_id/);
     await assert.rejects(write("x" as unknown as WriteArgs), TypeError);
+    assert.equal(fake.seen.length, 2);
   });
 });
