@@ -103,6 +103,11 @@ connections:
   #   credential: file:/secrets/google-sa.json          # service-account key with domain-wide delegation
   #   admin_email: hallpass-admin@acme.com              # custom admin role: Users > Read, Groups > Read
 
+  # - id: databricks-prod
+  #   integration: databricks
+  #   url: https://adb-1234567890123456.7.azuredatabricks.net
+  #   client_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890    # service principal application id
+  #   credential: env:DATABRICKS_OAUTH_SECRET             # its OAuth secret; or auth_mode: token with a PAT
   # - id: gcp-acme
   #   integration: googlecloud
   #   scope: organization:123456789012                  # where the service account has roles/iam.securityReviewer
