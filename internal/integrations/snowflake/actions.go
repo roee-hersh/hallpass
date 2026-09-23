@@ -134,7 +134,7 @@ func parseTarget(actionName string, r catalog.Resource) (target, error) {
 	if a.kind != r.Type {
 		return target{}, invalid("action %s takes a %s: resource, not %s:", a.name, a.kind, r.Type)
 	}
-	if a.name == "role.use" && strings.HasPrefix(actionName, "raw:") {
+	if r.Type == "role" && strings.HasPrefix(actionName, "raw:") {
 		return target{}, invalid("raw: privileges do not apply to role:; use role.use")
 	}
 	t := target{action: a, kind: r.Type}

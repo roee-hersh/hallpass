@@ -48,24 +48,25 @@ implemented here.
 | `user` | the service user |
 | `role` | the role statements run as |
 | `credential` | the RSA private key (PEM, PKCS#1 or PKCS#8, unencrypted), `env:` or `file:` |
-| `url` | the account URL; default `https://<account>.snowflakecomputing.com` |
+| `url` | the account URL; default `https://<account>.snowflakecomputing.com` (underscores in the account become hyphens); https, or http on loopback only |
 
 ### Identity
 
 `SHOW USERS LIKE '<email>'` first (SCIM-provisioned users are named by their address; the `LIKE`
 wildcards are escaped), then a page-by-page `SHOW USERS LIMIT 10000 [FROM '<name>']` scan matching
-`name`, `login_name` or `email` exactly (ignoring case); none is `user_not_found`, two are
-`user_ambiguous`. A disabled user is denied every action. The identity's groups are the roles
-`SHOW GRANTS TO USER` lists (both the classic `role` column and the 2025 shape with `granted_on
-ROLE` are read). Groups sent by the caller are ignored.
+`name`, `login_name` or `email` exactly (ignoring case). A match on `name` or `login_name`, which
+only the user's owner can set, outranks a match on `email`, which users may set on themselves; none
+is `user_not_found`, two of equal rank are `user_ambiguous`. A disabled user is denied every action.
+The identity's groups are the roles `SHOW GRANTS TO USER` lists (both the classic `role` column and
+the 2025 shape with `granted_on ROLE` are read). Groups sent by the caller are ignored.
 
 ### Roles
 
 The answer is the union of every role granted to the user, directly or through other roles and
-database roles: a user can activate any of them, and with `DEFAULT_SECONDARY_ROLES = ('ALL')` a
-session holds all of them at once. `SHOW GRANTS TO ROLE <r>` rows with `granted_on ROLE` (or
-`DATABASE_ROLE`) and privilege `USAGE` are followed; the walk stops at 500 roles and is cached for
-two minutes per role.
+database roles, plus `PUBLIC`, which every user holds: a user can activate any of them, and with
+`DEFAULT_SECONDARY_ROLES = ('ALL')` a session holds all of them at once. `SHOW GRANTS TO ROLE <r>`
+rows with `granted_on ROLE` (or `DATABASE_ROLE`) and privilege `USAGE` are followed; the walk stops
+at 500 roles and is cached for two minutes per role.
 
 ## Resources
 
@@ -104,7 +105,7 @@ them answers `denied` and says which `USAGE` is missing.
 | Code | When |
 |---|---|
 | `allowed` | a reachable role holds the privilege (or `OWNERSHIP`) on the object, and `USAGE` on its parents |
-| `denied` | no reachable role holds it (or the object does not exist: `SHOW GRANTS` says nothing about existence); `USAGE` on a parent is missing; the user has no role; the user is disabled |
+| `denied` | no reachable role holds it (or the object does not exist: `SHOW GRANTS` says nothing about existence); `USAGE` on a parent is missing; the user is disabled |
 | `unsupported` | `SHOW USERS` did not report `disabled`; more than 500 roles |
 | `resource_not_visible` | a granted role's grants cannot be read by hallpass's role (Snowflake error 002003) |
 | `user_not_found` / `user_ambiguous` | the user search |
@@ -119,9 +120,9 @@ them answers `denied` and says which `USAGE` is missing.
   policies**: a `SELECT` grant may still return masked or filtered data.
 - **Which role a session activates**: the answer is the union over all granted roles.
 - **Object existence**: `SHOW GRANTS` does not say whether the object exists.
-- **Grants through `PUBLIC`** are seen only when `PUBLIC` appears in the role walk (every user
-  holds it; hallpass follows it only when `SHOW GRANTS TO USER` lists it).
 - **Application roles, share grants and the `ACCOUNT_USAGE` views**.
+- **A user changing their own `EMAIL`** can make an address match two users; the owner-set `name`
+  and `login_name` win, and an address that matches only by `email` is trusted.
 
 ## Unverified
 

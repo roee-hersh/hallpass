@@ -58,7 +58,7 @@ func (Integration) Fields() []integration.Field {
 		{Name: "user", Required: true, Description: "the service user hallpass authenticates as"},
 		integration.CredentialField(true, "the user's RSA private key (PEM, unencrypted) for key-pair authentication"),
 		{Name: "role", Description: "the role to run as; it needs MANAGE GRANTS (or SECURITYADMIN) to see other users' grants"},
-		{Name: "url", Description: "the account URL, default https://<account>.snowflakecomputing.com"},
+		integration.URLField(false, "the account URL, default https://<account>.snowflakecomputing.com"),
 	}
 }
 
@@ -95,10 +95,11 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	}
 	base := strings.TrimRight(strings.TrimSpace(s.Get("url")), "/")
 	if base == "" {
-		base = "https://" + strings.ToLower(account) + ".snowflakecomputing.com"
+		// Underscores in an account identifier are hyphens in its host name.
+		base = "https://" + strings.ReplaceAll(strings.ToLower(account), "_", "-") + ".snowflakecomputing.com"
 	}
-	if !strings.HasPrefix(base, "https://") && !strings.HasPrefix(base, "http://") {
-		return nil, errors.New("url must be an http(s) URL")
+	if err := integration.ValidateHTTPSURL(base); err != nil {
+		return nil, fmt.Errorf("url: %w", err)
 	}
 	cred := s.Secret("credential")
 	// The iss and sub claims name the account and user the way the
@@ -212,10 +213,6 @@ func (c *Connection) run(ctx context.Context, statement string) ([]row, error) {
 	idem := true
 	resp, err := c.api.Do(ctx, &httpx.Request{Method: http.MethodPost, Path: "/api/v2/statements", JSON: body, Idempotent: &idem, Accept4xx: true})
 	if err != nil {
-		var ie *integration.Error
-		if errors.As(err, &ie) {
-			return nil, err
-		}
 		return nil, httpx.Classify(err)
 	}
 	for attempt := 0; resp.Status == 202; attempt++ {
@@ -242,6 +239,9 @@ func (c *Connection) run(ctx context.Context, statement string) ([]row, error) {
 	switch resp.Status {
 	case 200:
 	case 401:
+		// A rotated key: the next call signs a fresh token from the
+		// credential as it is now.
+		c.tokens.Invalidate()
 		return nil, integration.Errorf(integration.CodeCredentialRejected, "Snowflake rejected the key-pair token (HTTP 401): check account, user and the public key registered on the user")
 	case 403:
 		return nil, integration.Errorf(integration.CodeCredentialRejected, "Snowflake refused the request (HTTP 403)")
@@ -316,7 +316,7 @@ func classifySQL(f sqlFailure) error {
 	case "002003", "002043", "090105":
 		// Object does not exist or not authorized; not authorized to view.
 		return errNotVisible
-	case "003001", "001003":
+	case "003001":
 		return integration.Errorf(integration.CodeCredentialRejected, "hallpass's role lacks the privilege for the command (Snowflake error %s); it needs MANAGE GRANTS", f.Code)
 	case "390144", "390142", "390143", "390318":
 		return integration.Errorf(integration.CodeCredentialRejected, "Snowflake rejected the key-pair token (error %s)", f.Code)
@@ -337,15 +337,20 @@ func orEmpty(s, def string) string {
 
 // ResolveIdentity finds the user by email: first SHOW USERS LIKE the
 // address (SCIM-provisioned users are named by their address), then a scan
-// of SHOW USERS matching email and login_name. The identity's groups are
-// the roles granted directly to the user.
+// of SHOW USERS matching login_name and email. A match on name or
+// login_name, which only the user's owner can set, outranks a match on
+// email, which users may set on themselves. The identity's groups are the
+// roles granted directly to the user.
 func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (integration.Identity, error) {
 	email := strings.ToLower(strings.TrimSpace(u.Email))
 	if !integration.IsEmail(email) {
 		return integration.Identity{}, integration.Errorf(integration.CodeInvalidRequest, "user email %q is not an address", email)
 	}
+	strong := func(r row) bool {
+		return strings.EqualFold(r.get("name"), email) || strings.EqualFold(r.get("login_name"), email)
+	}
 	match := func(r row) bool {
-		return strings.EqualFold(r.get("name"), email) || strings.EqualFold(r.get("login_name"), email) || strings.EqualFold(r.get("email"), email)
+		return strong(r) || strings.EqualFold(r.get("email"), email)
 	}
 	rows, err := c.run(ctx, "SHOW USERS LIKE "+likeLiteral(email))
 	if err != nil {
@@ -382,6 +387,16 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 				break
 			}
 		}
+	}
+	// Owner-set identifiers outrank the self-service email column.
+	var strongMatches []row
+	for _, r := range found {
+		if strong(r) {
+			strongMatches = append(strongMatches, r)
+		}
+	}
+	if len(strongMatches) > 0 {
+		found = strongMatches
 	}
 	switch len(found) {
 	case 0:
@@ -437,11 +452,19 @@ func (c *Connection) userRoles(ctx context.Context, name string) ([]string, erro
 		if role == "" && strings.EqualFold(r.get("granted_on"), "ROLE") {
 			role = r.get("name")
 		}
-		if role == "" || seen[role] {
+		if role == "" {
 			continue
 		}
-		seen[role] = true
-		roles = append(roles, role)
+		// The output spells names unquoted (upper case) or quoted.
+		resolved, err := parseIdentifier(role)
+		if err != nil {
+			return nil, integration.Errorf(integration.CodeUpstreamError, "SHOW GRANTS TO USER returned a role name of an unexpected shape")
+		}
+		if seen[resolved] {
+			continue
+		}
+		seen[resolved] = true
+		roles = append(roles, resolved)
 	}
 	sort.Strings(roles)
 	return roles, nil
@@ -449,71 +472,82 @@ func (c *Connection) userRoles(ctx context.Context, name string) ([]string, erro
 
 // --- grants -----------------------------------------------------------------
 
-// grant is one SHOW GRANTS TO ROLE row.
+// grant is one SHOW GRANTS TO ROLE row, its object name parsed into
+// resolved parts.
 type grant struct {
-	privilege, grantedOn, name, grantedBy string
+	privilege, grantedOn string
+	name                 []string
+	grantedBy            string
 }
 
-// roleGrants reads SHOW GRANTS TO ROLE (or DATABASE ROLE), cached.
-func (c *Connection) roleGrants(ctx context.Context, role string, database bool) ([]grant, error) {
-	key := "R:" + role
-	stmt := "SHOW GRANTS TO ROLE " + quote(role)
-	if database {
-		parts, err := splitName(role)
-		if err != nil || len(parts) != 2 {
-			return nil, integration.Errorf(integration.CodeUpstreamError, "database role %q is not <database>.<role>", role)
-		}
-		key = "D:" + role
+// roleGrants reads SHOW GRANTS TO ROLE (or DATABASE ROLE) for a role given
+// as resolved name parts, cached.
+func (c *Connection) roleGrants(ctx context.Context, role []string) ([]grant, error) {
+	key := quoteName(role)
+	stmt := "SHOW GRANTS TO ROLE " + key
+	if len(role) == 2 {
 		// UNVERIFIED: the name column spells database roles as
-		// <database>.<role>; both parts are re-quoted.
-		stmt = "SHOW GRANTS TO DATABASE ROLE " + quote(parts[0]) + "." + quote(parts[1])
+		// <database>.<role>, each part unquoted or quoted.
+		stmt = "SHOW GRANTS TO DATABASE ROLE " + key
 	}
 	return c.grants.Do(ctx, key, func(ctx context.Context) ([]grant, time.Duration, error) {
 		rows, err := c.run(ctx, stmt)
 		if err != nil {
 			if errors.Is(err, errNotVisible) {
-				return nil, 0, integration.Errorf(integration.CodeResourceNotVisible, "role %s is granted but hallpass's role may not read its grants; it needs MANAGE GRANTS", quote(role))
+				return nil, 0, integration.Errorf(integration.CodeResourceNotVisible, "role %s is granted but hallpass's role may not read its grants; it needs MANAGE GRANTS", key)
 			}
 			return nil, 0, err
 		}
 		out := make([]grant, 0, len(rows))
 		for _, r := range rows {
-			out = append(out, grant{privilege: strings.ToUpper(r.get("privilege")), grantedOn: strings.ToUpper(r.get("granted_on")), name: r.get("name"), grantedBy: r.get("granted_by")})
+			g := grant{privilege: strings.ToUpper(r.get("privilege")), grantedOn: strings.ToUpper(r.get("granted_on")), grantedBy: r.get("granted_by")}
+			// Names the output spells in a shape hallpass cannot parse are
+			// kept unnamed: they match nothing, which fails closed.
+			if parts, err := splitName(r.get("name")); err == nil {
+				for _, p := range parts {
+					id, err := parseIdentifier(p)
+					if err != nil {
+						g.name = nil
+						break
+					}
+					g.name = append(g.name, id)
+				}
+			}
+			out = append(out, g)
 		}
 		return out, grantsTTL, nil
 	})
 }
 
-// holding is a privilege found on the object: which role holds it and by
+// holding is a privilege found on an object: which role holds it and by
 // which chain of roles the user reaches it.
 type holding struct {
-	privilege string
-	role      string
-	chain     []string
+	grant
+	role  string
+	chain []string
 }
 
 // walk collects the grants reachable from the user's roles through the
-// role hierarchy. It returns every grant with the role chain it came by.
+// role hierarchy, and the chain of quoted role names each role is reached
+// by (keyed by the role's quoted name).
 func (c *Connection) walk(ctx context.Context, roles []string) ([]holding, map[string][]string, error) {
 	type item struct {
-		role     string
-		database bool
-		chain    []string
+		role  []string
+		chain []string
 	}
-	queue := make([]item, 0, len(roles))
+	queue := make([]item, 0, len(roles)+1)
 	for _, r := range roles {
-		queue = append(queue, item{role: r, chain: []string{r}})
+		queue = append(queue, item{role: []string{r}, chain: []string{quote(r)}})
 	}
+	// Every user holds PUBLIC, which SHOW GRANTS TO USER does not list.
+	queue = append(queue, item{role: []string{"PUBLIC"}, chain: []string{quote("PUBLIC")}})
 	visited := map[string]bool{}
-	reach := map[string][]string{} // role -> chain
+	reach := map[string][]string{}
 	var holdings []holding
 	for len(queue) > 0 {
 		it := queue[0]
 		queue = queue[1:]
-		key := it.role
-		if it.database {
-			key = "DB:" + it.role
-		}
+		key := quoteName(it.role)
 		if visited[key] {
 			continue
 		}
@@ -522,46 +556,22 @@ func (c *Connection) walk(ctx context.Context, roles []string) ([]holding, map[s
 		}
 		visited[key] = true
 		reach[key] = it.chain
-		grants, err := c.roleGrants(ctx, it.role, it.database)
+		grants, err := c.roleGrants(ctx, it.role)
 		if err != nil {
 			return nil, nil, err
 		}
 		for _, g := range grants {
 			switch {
-			case g.grantedOn == "ROLE" && g.privilege == "USAGE":
-				queue = append(queue, item{role: g.name, chain: append(append([]string{}, it.chain...), g.name)})
-			case g.grantedOn == "DATABASE_ROLE" && g.privilege == "USAGE":
-				queue = append(queue, item{role: g.name, database: true, chain: append(append([]string{}, it.chain...), g.name)})
+			case g.grantedOn == "ROLE" && g.privilege == "USAGE" && len(g.name) == 1:
+				queue = append(queue, item{role: g.name, chain: append(append([]string{}, it.chain...), quote(g.name[0]))})
+			case g.grantedOn == "DATABASE_ROLE" && g.privilege == "USAGE" && len(g.name) == 2:
+				queue = append(queue, item{role: g.name, chain: append(append([]string{}, it.chain...), quoteName(g.name))})
 			default:
-				holdings = append(holdings, holding{privilege: g.privilege, role: it.role, chain: it.chain})
-				holdings[len(holdings)-1].chain = it.chain
-				// Keep the object with the holding.
-				holdings[len(holdings)-1] = holding{privilege: g.privilege + "\x00" + g.grantedOn + "\x00" + g.name, role: it.role, chain: it.chain}
+				holdings = append(holdings, holding{grant: g, role: key, chain: it.chain})
 			}
 		}
 	}
 	return holdings, reach, nil
-}
-
-// split unpacks the packed privilege/grantedOn/name of a holding.
-func (h holding) split() (privilege, grantedOn string, name []string) {
-	parts := strings.SplitN(h.privilege, "\x00", 3)
-	if len(parts) != 3 {
-		return h.privilege, "", nil
-	}
-	n, err := splitName(parts[2])
-	if err != nil {
-		return parts[0], parts[1], nil
-	}
-	resolved := make([]string, 0, len(n))
-	for _, p := range n {
-		id, err := parseIdentifier(p)
-		if err != nil {
-			return parts[0], parts[1], nil
-		}
-		resolved = append(resolved, id)
-	}
-	return parts[0], parts[1], resolved
 }
 
 // --- checks -----------------------------------------------------------------
@@ -581,15 +591,12 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	default:
 		return integration.Unsupported("SHOW USERS did not report whether %s is disabled", quote(id.ID)), nil
 	}
-	if len(id.Groups) == 0 {
-		return integration.Denied("no role is granted to user %s (%s)", quote(id.ID), who), nil
-	}
 	holdings, reach, err := c.walk(ctx, id.Groups)
 	if err != nil {
 		return integration.ToDecision(err), nil
 	}
 	if t.action.name == "role.use" {
-		if chain, ok := reach[t.name[0]]; ok {
+		if chain, ok := reach[quoteName(t.name)]; ok {
 			return integration.Allowed("role %s is granted to %s %s", quote(t.name[0]), who, via(chain)), nil
 		}
 		return integration.Denied("role %s is not granted to %s, directly or through the %d role(s) they hold", quote(t.name[0]), who, len(reach)), nil
@@ -612,38 +619,32 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 			return integration.Denied("%s holds %s on %s but no role holds USAGE on schema %s", who, found.privilege, t, quoteName(t.name[:2])), nil
 		}
 	}
-	return integration.Allowed("role %s holds %s on %s; %s has it %s", quote(found.role), found.privilege, t, who, via(found.chain)), nil
+	return integration.Allowed("role %s holds %s on %s; %s has it %s", found.role, found.privilege, t, who, via(found.chain)), nil
 }
 
 // find returns the first holding of one of the privileges (or OWNERSHIP)
-// on an object of one of the kinds with the name.
+// on an object of one of the kinds with the name; the returned holding's
+// privilege is the one that answered.
 func find(holdings []holding, grantedOn []string, name []string, privileges []string) *holding {
 	for i := range holdings {
-		priv, on, n := holdings[i].split()
+		h := holdings[i]
 		okKind := false
 		for _, k := range grantedOn {
-			if on == k {
+			if h.grantedOn == k {
 				okKind = true
 			}
 		}
 		if !okKind {
 			continue
 		}
-		if len(name) > 0 && !sameName(n, name) {
+		if len(name) > 0 && !sameName(h.name, name) {
 			continue
 		}
-		if len(name) == 0 && len(n) != 0 && on != "ACCOUNT" {
-			continue
-		}
-		if priv == "OWNERSHIP" {
-			h := holdings[i]
-			h.privilege = "OWNERSHIP"
+		if h.privilege == "OWNERSHIP" {
 			return &h
 		}
 		for _, p := range privileges {
-			if priv == p {
-				h := holdings[i]
-				h.privilege = p
+			if h.privilege == p {
 				return &h
 			}
 		}
@@ -651,16 +652,12 @@ func find(holdings []holding, grantedOn []string, name []string, privileges []st
 	return nil
 }
 
-// via words a role chain.
+// via words a role chain of quoted names.
 func via(chain []string) string {
 	if len(chain) <= 1 {
 		return "directly"
 	}
-	q := make([]string, len(chain))
-	for i, r := range chain {
-		q[i] = quote(r)
-	}
-	return "through " + strings.Join(q, " -> ")
+	return "through " + strings.Join(chain, " -> ")
 }
 
 // --- probe ------------------------------------------------------------------
@@ -672,6 +669,9 @@ func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error)
 		return integration.ProbeResult{}, err
 	}
 	res := integration.ProbeResult{Summary: fmt.Sprintf("authenticated as %s with roles %s", quote(c.user), strings.Join(roles, ", "))}
+	if len(roles) == 0 {
+		res.Summary = fmt.Sprintf("authenticated as %s with no role but PUBLIC", quote(c.user))
+	}
 	holdings, _, err := c.walk(ctx, roles)
 	if err != nil {
 		return integration.ProbeResult{}, err

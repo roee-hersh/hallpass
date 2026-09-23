@@ -83,6 +83,8 @@ func newFake(t *testing.T) *fake {
 			{"NOROLE", "norole", "none@example.com", false, nil},
 			{"DUP1", "dup1", "dup@example.com", false, nil},
 			{"DUP2", "dup@example.com", "other@example.com", false, nil},
+			{"TWICE1", "twice1", "twice@example.com", false, nil},
+			{"TWICE2", "twice2", "twice@example.com", false, nil},
 			// An email that contains another; matching is exact.
 			{"DANAAU", "danaau", "dana@example.com.au", false, []string{"OPS_ADMIN"}},
 		},
@@ -106,6 +108,10 @@ func newFake(t *testing.T) *fake {
 				{"USAGE", "DATABASE", "DEV", "SYSADMIN"},
 				{"USAGE", "SCHEMA", "DEV.PLAY", "SYSADMIN"},
 				{"SELECT", "TABLE", "DEV.PLAY.T", "SYSADMIN"},
+				{"USAGE", "ROLE", `"mixed role"`, "SECURITYADMIN"},
+			},
+			"mixed role": {
+				{"USAGE", "WAREHOUSE", "SMALL_WH", "SYSADMIN"},
 			},
 			"OPS_ADMIN": {
 				{"USAGE", "ROLE", "DEV", "SECURITYADMIN"},
@@ -117,6 +123,9 @@ func newFake(t *testing.T) *fake {
 			},
 			"SECADMIN": {
 				{"MANAGE GRANTS", "ACCOUNT", "MYORG-MYACCOUNT", "ACCOUNTADMIN"},
+			},
+			"PUBLIC": {
+				{"USAGE", "DATABASE", "PUB", "SYSADMIN"},
 			},
 		},
 		dbRoles: map[string][][4]string{
@@ -448,16 +457,18 @@ func TestAction_table_select_allow(t *testing.T) {
 	// Through the role hierarchy: bob -> DEV -> READER.
 	expect(t, check(t, c, bob, "table.select", "table:dev.play.t"), integration.CodeAllowed, `through "DEV" -> "READER"`)
 	// Through a database role: OPS -> OPS_ADMIN -> PROD.DBROLE.
-	expect(t, check(t, c, ops, "table.select", "table:prod.sales.orders"), integration.CodeAllowed, `"PROD.DBROLE"`)
+	expect(t, check(t, c, ops, "table.select", "table:prod.sales.orders"), integration.CodeAllowed, `through "OPS_ADMIN" -> "PROD"."DBROLE"`)
 }
 func TestAction_table_select_deny(t *testing.T) {
 	_, _, c := setup(t)
-	expect(t, check(t, c, dana, "table.select", "table:dev.play.t"), integration.CodeDenied, "none of the 1 role(s) dana@example.com holds carries SELECT")
+	// ANALYST and PUBLIC.
+	expect(t, check(t, c, dana, "table.select", "table:dev.play.t"), integration.CodeDenied, "none of the 2 role(s) dana@example.com holds carries SELECT")
 	// SELECT without USAGE on the schema.
 	expect(t, check(t, c, dana, "table.select", "table:prod.hr.salaries"), integration.CodeDenied, `no role holds USAGE on schema "PROD"."HR"`)
 	// Case matters for quoted names.
 	expect(t, check(t, c, dana, "table.select", `table:prod.sales."mixed case"`), integration.CodeDenied, "")
-	expect(t, check(t, c, none, "table.select", "table:prod.sales.orders"), integration.CodeDenied, "no role is granted")
+	// Only PUBLIC, which every user holds.
+	expect(t, check(t, c, none, "table.select", "table:prod.sales.orders"), integration.CodeDenied, "none of the 1 role(s)")
 }
 func TestAction_table_insert_allow(t *testing.T) {
 	_, _, c := setup(t)
@@ -541,6 +552,12 @@ func TestAction_database_usage_deny(t *testing.T) {
 	_, _, c := setup(t)
 	expect(t, check(t, c, dana, "database.usage", "database:dev"), integration.CodeDenied, "")
 }
+func TestPublicRole(t *testing.T) {
+	_, _, c := setup(t)
+	// A grant to PUBLIC reaches a user with no role of their own.
+	expect(t, check(t, c, none, "database.usage", "database:pub"), integration.CodeAllowed, `role "PUBLIC" holds USAGE`)
+	expect(t, check(t, c, none, "role.use", "role:public"), integration.CodeAllowed, "")
+}
 func TestAction_database_create_schema_allow(t *testing.T) {
 	_, f, c := setup(t)
 	f.mu.Lock()
@@ -582,6 +599,13 @@ func TestAction_role_use_allow(t *testing.T) {
 	expect(t, check(t, c, dana, "role.use", "role:analyst"), integration.CodeAllowed, "directly")
 	expect(t, check(t, c, ops, "role.use", "role:reader"), integration.CodeAllowed, `through "OPS_ADMIN" -> "DEV" -> "READER"`)
 }
+func TestQuotedRoleName(t *testing.T) {
+	_, _, c := setup(t)
+	expect(t, check(t, c, bob, "role.use", `role:"mixed role"`), integration.CodeAllowed, `"mixed role"`)
+	expect(t, check(t, c, bob, "warehouse.usage", "warehouse:small_wh"), integration.CodeAllowed, `role "mixed role"`)
+	expect(t, check(t, c, bob, "role.use", "role:mixed_role"), integration.CodeDenied, "")
+}
+
 func TestAction_role_use_deny(t *testing.T) {
 	_, _, c := setup(t)
 	expect(t, check(t, c, dana, "role.use", "role:dev"), integration.CodeDenied, "not granted")
@@ -614,6 +638,7 @@ func TestRawPrivileges(t *testing.T) {
 	expect(t, check(t, c, dana, "raw:REFERENCES", "table:prod.sales.orders"), integration.CodeAllowed, "REFERENCES")
 	expect(t, check(t, c, dana, "raw:CREATE_STAGE", "schema:prod.sales"), integration.CodeAllowed, "CREATE STAGE")
 	expect(t, check(t, c, dana, "raw:MONITOR", "warehouse:analytics_wh"), integration.CodeDenied, "")
+	expect(t, check(t, c, dana, "raw:USAGE", "role:analyst"), integration.CodeInvalidRequest, "role.use")
 	for _, bad := range []string{"raw:OWNERSHIP", "raw:select", "raw:CREATE__STAGE", "raw:CREATE STAGE", "raw:X", "raw:"} {
 		if _, ok := (Integration{}).MatchAction(bad); ok {
 			t.Errorf("%q accepted", bad)
@@ -626,7 +651,12 @@ func TestRawPrivileges(t *testing.T) {
 func TestIdentity(t *testing.T) {
 	_, _, c := setup(t)
 	expect(t, check(t, c, integration.User{Email: "nobody@example.com"}, "database.usage", "database:prod"), integration.CodeUserNotFound, "no Snowflake user")
-	expect(t, check(t, c, integration.User{Email: "dup@example.com"}, "database.usage", "database:prod"), integration.CodeUserAmbiguous, "2 Snowflake users")
+	// DUP2 has the address as login name, DUP1 only as email: the login
+	// name, set by the user's owner, wins.
+	if id, err := c.ResolveIdentity(context.Background(), integration.User{Email: "dup@example.com"}); err != nil || id.ID != "DUP2" {
+		t.Errorf("dup resolved to %+v, %v", id, err)
+	}
+	expect(t, check(t, c, integration.User{Email: "twice@example.com"}, "database.usage", "database:prod"), integration.CodeUserAmbiguous, "2 Snowflake users")
 	expect(t, check(t, c, integration.User{Email: "off@example.com"}, "database.usage", "database:prod"), integration.CodeDenied, "disabled")
 	expect(t, check(t, c, integration.User{Email: "not an email"}, "database.usage", "database:prod"), integration.CodeInvalidRequest, "")
 	// dana@example.com.au must not match dana@example.com.
@@ -755,9 +785,9 @@ func TestGrantsAreCached(t *testing.T) {
 			n++
 		}
 	}
-	// OPS_ADMIN, DEV, READER and PROD.DBROLE once each.
-	if n != 4 {
-		t.Errorf("%d role grant listings, want 4 (cached)", n)
+	// OPS_ADMIN, DEV, READER, "mixed role", PROD.DBROLE and PUBLIC once each.
+	if n != 6 {
+		t.Errorf("%d role grant listings, want 6 (cached)", n)
 	}
 }
 
@@ -839,6 +869,8 @@ func TestNewValidation(t *testing.T) {
 		{map[string]string{"account": "myorg-myaccount", "user": "hallpass", "role": "1bad"}, true},
 		{map[string]string{"account": "bad account", "user": "hallpass"}, true},
 		{map[string]string{"account": "myorg-myaccount", "user": "hallpass", "url": "ftp://x"}, true},
+		{map[string]string{"account": "myorg-myaccount", "user": "hallpass", "url": "http://proxy.internal"}, true},
+		{map[string]string{"account": "myorg-myaccount", "user": "hallpass", "url": "https://u:p@host"}, true},
 	} {
 		secrets := map[string]secret.Secret{}
 		if tc.secret {
