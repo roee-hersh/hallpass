@@ -65,10 +65,15 @@ func FuzzParseRef(f *testing.F) {
 		}
 		if strings.HasPrefix(action, "raw:") {
 			want := strings.TrimPrefix(action, "raw:")
-			if got := q.level; q.uc {
+			got := q.level
+			if q.uc {
 				got = q.privileges[0]
-			} else if got != want {
+			}
+			if got != want {
 				t.Fatalf("raw action %q became %q", action, got)
+			}
+			if !q.uc && !knownLevel(q.chains, got) {
+				t.Fatalf("unknown level %q accepted for %q", got, resource)
 			}
 		} else if _, ok := actionIndex[action]; !ok {
 			t.Fatalf("unknown action %q accepted", action)

@@ -50,7 +50,8 @@ workspace admins hold `CAN_MANAGE` on every object. Nothing is written.
 
 OAuth: `POST {token_url}` with `grant_type=client_credentials&scope=all-apis` and the client id and
 secret in an HTTP Basic header, as Databricks documents. The token is cached and refreshed five
-minutes before it expires. Every API call carries `Authorization: Bearer`.
+minutes before it expires; a 401 from the workspace drops it and retries the call once. Every API
+call carries `Authorization: Bearer`.
 
 ### Identity
 
@@ -90,7 +91,7 @@ names that need backtick quoting in SQL are not accepted. A workspace object id 
 | Action | Requires | Resources |
 |---|---|---|
 | `raw:<PRIVILEGE>` | that one Unity Catalog privilege (`raw:SELECT`, `raw:CREATE_VOLUME`) | any Unity Catalog resource |
-| `raw:<LEVEL>` | that permission level or one that implies it (`raw:CAN_RESTART`, `raw:IS_OWNER`) | any workspace object |
+| `raw:<LEVEL>` | that permission level or one that implies it (`raw:CAN_RESTART`, `raw:IS_OWNER`); a level the object type does not have is `invalid_request` | any workspace object |
 | `table.read` | `SELECT` + `USE_SCHEMA` + `USE_CATALOG` | table |
 | `table.write` | `MODIFY` + `USE_SCHEMA` + `USE_CATALOG` | table |
 | `table.create` | `CREATE_TABLE` + `USE_SCHEMA` + `USE_CATALOG` | schema |
@@ -110,8 +111,16 @@ Unity Catalog: `ALL_PRIVILEGES` covers every privilege, and the legacy `USAGE` c
 `USE_CATALOG` and `USE_SCHEMA`. Privileges are read from
 `GET /api/2.1/unity-catalog/effective-permissions/{type}/{name}?max_results=0`, every page, and
 unioned over the user and the user's groups. When they do not cover the action, the securable's
-`owner` is read (`GET /api/2.1/unity-catalog/{tables,schemas,...}/{name}`); an owner, directly or
-through a group, is allowed.
+`owner` is read (`GET /api/2.1/unity-catalog/{tables,schemas,...}/{name}`). Ownership, directly or
+through a group, stands for every privilege on the securable itself, but not for `USE_CATALOG` or
+`USE_SCHEMA` on its parents: a table owner without `USE_SCHEMA` is denied `table.read`, as Databricks
+would refuse the query.
+
+Unity Catalog shows a principal without `MANAGE`, ownership or metastore admin only its own grants,
+with a 200 rather than a 403. A listing in which no principal but hallpass itself appears is
+therefore not a deny: it is answered `resource_not_visible` ("either nobody else holds any, or
+hallpass may only see its own"). hallpass learns its own principal name from `GET
+/api/2.0/preview/scim/v2/Me`, once every ten minutes.
 
 Workspace objects: the ACL is `GET /api/2.0/permissions/{type}/{id}`. A level implies the weaker ones
 of its chain (`CAN_ATTACH_TO` < `CAN_RESTART` < `CAN_MANAGE`; `CAN_VIEW` < `CAN_MANAGE_RUN` <
@@ -126,7 +135,9 @@ under `CAN_MANAGE`), and `CAN_MANAGE` and `IS_OWNER` imply everything. `CAN_MONI
 |---|---|
 | the needed privileges are all held (directly, through a group, or inherited from a parent securable), or `ALL_PRIVILEGES` | allow, saying where they come from |
 | privileges missing but the user (or a group of theirs) owns the securable | allow ("owns ...") |
-| privileges missing, not the owner | deny, naming the missing privileges |
+| privileges missing, the owner, but `USE_CATALOG` / `USE_SCHEMA` on a parent missing | deny ("owns ... but lacks ... on its parents") |
+| privileges missing, not the owner, and the listing names a principal other than hallpass | deny, naming the missing privileges |
+| privileges missing, not the owner, and the listing names nobody but hallpass | unknown (`resource_not_visible`) |
 | a held level equals or implies the needed one | allow |
 | no matching level, user is a workspace admin, `admins_manage_all: true` | allow ("workspace admin") |
 | no matching level otherwise | deny, naming the levels held |
@@ -136,7 +147,8 @@ under `CAN_MANAGE`), and `CAN_MANAGE` and `IS_OWNER` imply everything. `CAN_MONI
 | record without `active` | unknown (`unsupported`) |
 | securable or object answers 404 | unknown (`resource_not_visible`) |
 | 403 `PERMISSION_DENIED` (hallpass lacks `CAN_MANAGE`, `MANAGE` or ownership) | unknown (`credential_rejected`) |
-| 401, token endpoint refuses the client | unknown (`credential_rejected`) |
+| 401 after one retry with a fresh token, token endpoint refuses the client | unknown (`credential_rejected`) |
+| the SCIM search endpoint itself answers 404 (wrong `url`, an account console URL) | unknown (`upstream_error`) |
 | 400 `INVALID_PARAMETER_VALUE` | unknown (`invalid_request`) |
 | 429, 5xx, timeout, too many pages of grants | unknown (`upstream_rate_limited` / `upstream_error` / `upstream_timeout`) |
 
@@ -153,7 +165,7 @@ workspace.
 - Metastore admins: their implicit privileges are not in SCIM or in the effective-permissions list,
   so a metastore admin without grants is denied Unity Catalog actions.
 - Ownership of a parent (a catalog owner acting on a table) is not modelled; only the securable's
-  own owner is.
+  own owner is, and only for privileges on that securable.
 - Account-level groups the workspace SCIM record does not list, row filters and column masks,
   Lakehouse Federation credentials, table ACLs on the legacy Hive metastore, and the entitlements
   (`workspace-access`, `databricks-sql-access`, `allow-cluster-create`) that gate features rather than

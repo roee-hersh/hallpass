@@ -547,6 +547,59 @@ func TestOwnerByGroupAndMissingObject(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, dana, "table.read", tableRN), integration.CodeAllowed)
 }
 
+func TestOwnerNeedsParentPrivileges(t *testing.T) {
+	_, f, c := setup(t, nil)
+	// dana owns the table but her group's USE_SCHEMA and USE_CATALOG are gone.
+	f.mu.Lock()
+	f.grants["table/main.sales.orders"] = []assignment{{"bob@example.com", []privilege{{name: "BROWSE"}}}}
+	f.mu.Unlock()
+	d := check(t, c, dana, "table.read", tableRN)
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "lacks USE_SCHEMA, USE_CATALOG on its parents") {
+		t.Error(d.Text)
+	}
+	// Owning the schema does stand for USE_SCHEMA, and the catalog's owner
+	// holds USE_CATALOG.
+	f.mu.Lock()
+	f.grants["schema/main.sales"] = []assignment{{"bob@example.com", []privilege{{name: "BROWSE"}}}}
+	f.owners["catalog/main"] = "data-readers"
+	f.grants["catalog/main"] = []assignment{{"bob@example.com", []privilege{{name: "BROWSE"}}}}
+	f.mu.Unlock()
+	itest.ExpectCode(t, check(t, c, dana, "table.create", "schema:main.sales"), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, dana, "schema.create", "catalog:main"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, dana, "uc.manage", "schema:main.sales"), integration.CodeAllowed)
+}
+
+func TestFilteredListingIsUnknown(t *testing.T) {
+	srv, f, c := setup(t, nil)
+	// Unity Catalog shows a non-owner only its own grants, with a 200.
+	f.mu.Lock()
+	f.grants["table/main.sales.orders"] = []assignment{{clientID, []privilege{{name: "BROWSE"}}}}
+	f.mu.Unlock()
+	d := check(t, c, bob, "table.read", tableRN)
+	itest.ExpectCode(t, d, integration.CodeResourceNotVisible)
+	if !strings.Contains(d.Text, "hallpass itself") {
+		t.Error(d.Text)
+	}
+	// The owner is still recognised through the metadata call.
+	itest.ExpectCode(t, check(t, c, dana, "uc.manage", tableRN), integration.CodeAllowed)
+	// An empty listing is the same story.
+	f.mu.Lock()
+	f.grants["table/main.sales.orders"] = nil
+	f.mu.Unlock()
+	itest.ExpectCode(t, check(t, c, bob, "table.read", tableRN), integration.CodeResourceNotVisible)
+	// hallpass's own name was read once and cached.
+	me := 0
+	for _, call := range srv.Calls() {
+		if call.Path == scimMe {
+			me++
+		}
+	}
+	if me != 1 {
+		t.Errorf("SCIM /Me read %d times, want 1", me)
+	}
+}
+
 // --- workspace object semantics ---------------------------------------------
 
 func TestAdminsRule(t *testing.T) {
@@ -569,6 +622,10 @@ func TestRawActions(t *testing.T) {
 	// The owner holds every privilege, raw ones included.
 	itest.ExpectCode(t, check(t, c, dana, "raw:CREATE_VOLUME", tableRN), integration.CodeAllowed)
 	itest.ExpectCode(t, check(t, c, dana, "raw:EXECUTE", "model:main.sales.churn"), integration.CodeAllowed)
+	// A level that does not exist for the type is a bad request, not a deny.
+	itest.ExpectCode(t, check(t, c, dana, "raw:CAN_FOO", "cluster:0123-456789-abcde1f2"), integration.CodeInvalidRequest)
+	itest.ExpectCode(t, check(t, c, dana, "raw:CAN_USE", "cluster:0123-456789-abcde1f2"), integration.CodeInvalidRequest)
+	itest.ExpectCode(t, check(t, c, dana, "raw:IS_OWNER", "cluster:0123-456789-abcde1f2"), integration.CodeDenied)
 	n := len(srv.Calls())
 	for _, bad := range []string{"raw:", "raw:select", "raw:SELECT x", "raw:S", "raw:1SELECT", "SELECT"} {
 		if _, ok := (Integration{}).MatchAction(bad); ok {
@@ -645,9 +702,15 @@ func TestNamesAreEscapedInPaths(t *testing.T) {
 func TestIdentity(t *testing.T) {
 	srv, _, c := setup(t, nil)
 	itest.ExpectCode(t, check(t, c, integration.User{Email: " Dana@Example.com "}, "catalog.use", "catalog:main"), integration.CodeAllowed)
-	last := srv.Calls()[len(srv.Calls())-2]
-	if last.Path != scimUsers || last.Query.Get("filter") != `userName eq "dana@example.com"` {
-		t.Errorf("SCIM lookup %s %v", last.Path, last.Query)
+	var lookup *itest.Call
+	for _, call := range srv.Calls() {
+		if call.Path == scimUsers {
+			c := call
+			lookup = &c
+		}
+	}
+	if lookup == nil || lookup.Query.Get("filter") != `userName eq "dana@example.com"` || lookup.Query.Get("attributes") != "id,userName,active,groups" {
+		t.Errorf("SCIM lookup %+v", lookup)
 	}
 	itest.ExpectCode(t, check(t, c, integration.User{Email: "nobody@example.com"}, "catalog.use", "catalog:main"), integration.CodeUserNotFound)
 	itest.ExpectCode(t, check(t, c, integration.User{Email: "dup@example.com"}, "catalog.use", "catalog:main"), integration.CodeUserAmbiguous)
@@ -685,7 +748,7 @@ func TestAPIErrors(t *testing.T) {
 	set(400, "INVALID_PARAMETER_VALUE")
 	itest.ExpectCode(t, check(t, c, dana, "catalog.use", "catalog:main"), integration.CodeInvalidRequest)
 	set(404, "RESOURCE_DOES_NOT_EXIST")
-	itest.ExpectCode(t, check(t, c, dana, "catalog.use", "catalog:main"), integration.CodeUserNotFound)
+	itest.ExpectCode(t, check(t, c, dana, "catalog.use", "catalog:main"), integration.CodeUpstreamError)
 	set(0, "")
 	itest.ExpectCode(t, check(t, c, dana, "catalog.use", "catalog:main"), integration.CodeAllowed)
 }
@@ -719,6 +782,29 @@ func TestTokenCachedAndBasicAuth(t *testing.T) {
 			t.Errorf("API call without the minted bearer: %q", call.Header.Get("Authorization"))
 		}
 	}
+}
+
+func TestTokenRefreshedOn401(t *testing.T) {
+	srv, f, c := setup(t, nil)
+	itest.ExpectCode(t, check(t, c, dana, "catalog.use", "catalog:main"), integration.CodeAllowed)
+	// The token is revoked server-side: the next call gets 401, hallpass
+	// mints a new one and retries once.
+	f.mu.Lock()
+	f.tokens = map[string]bool{}
+	f.mu.Unlock()
+	itest.ExpectCode(t, check(t, c, dana, "catalog.use", "catalog:main"), integration.CodeAllowed)
+	f.mu.Lock()
+	if f.minted != 2 {
+		t.Errorf("minted %d tokens, want 2", f.minted)
+	}
+	f.mu.Unlock()
+	// A token the endpoint keeps refusing is credential_rejected.
+	f.mu.Lock()
+	f.tokens = map[string]bool{}
+	f.status, f.errorCode = 401, "UNAUTHENTICATED"
+	f.mu.Unlock()
+	itest.ExpectCode(t, check(t, c, dana, "catalog.use", "catalog:main"), integration.CodeCredentialRejected)
+	_ = srv
 }
 
 func TestBadSecret(t *testing.T) {

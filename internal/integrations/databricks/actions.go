@@ -208,9 +208,12 @@ func parseRef(actionName string, r catalog.Resource) (ref, error) {
 		}
 		if out.uc {
 			out.privileges = []string{p}
-		} else {
-			out.level = p
+			return out, nil
 		}
+		if !knownLevel(out.chains, p) {
+			return ref{}, invalid("%s is not a permission level of %s; the levels are %s", p, r.Type, strings.Join(levelsOf(out.chains), ", "))
+		}
+		out.level = p
 		return out, nil
 	}
 	i, ok := actionIndex[actionName]
@@ -244,6 +247,25 @@ func resourceTypes() []string {
 		out = append(out, t)
 	}
 	slices.Sort(out)
+	return out
+}
+
+// knownLevel reports whether the level exists for an object with these
+// chains. CAN_MANAGE and IS_OWNER exist for every type.
+func knownLevel(chains [][]string, level string) bool {
+	return level == "CAN_MANAGE" || level == "IS_OWNER" || slices.Contains(levelsOf(chains), level)
+}
+
+// levelsOf lists the distinct levels of the chains, in chain order.
+func levelsOf(chains [][]string) []string {
+	var out []string
+	for _, chain := range chains {
+		for _, l := range chain {
+			if !slices.Contains(out, l) {
+				out = append(out, l)
+			}
+		}
+	}
 	return out
 }
 
