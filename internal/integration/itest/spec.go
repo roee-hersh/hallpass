@@ -216,13 +216,30 @@ func (t pathTemplate) match(path string) bool {
 
 // bestTemplate returns the matching template with the most literal segments.
 func bestTemplate(templates []pathTemplate, path string) (pathTemplate, bool) {
-	best, found := pathTemplate{}, false
+	best := bestTemplates(templates, path)
+	if len(best) == 0 {
+		return pathTemplate{}, false
+	}
+	return best[0], true
+}
+
+// bestTemplates returns every matching template with the most literal
+// segments, in a stable order.
+func bestTemplates(templates []pathTemplate, path string) []pathTemplate {
+	var best []pathTemplate
 	for _, t := range templates {
-		if t.match(path) && (!found || t.literals > best.literals) {
-			best, found = t, true
+		if !t.match(path) {
+			continue
+		}
+		switch {
+		case len(best) == 0 || t.literals > best[0].literals:
+			best = []pathTemplate{t}
+		case t.literals == best[0].literals:
+			best = append(best, t)
 		}
 	}
-	return best, found
+	sort.Slice(best, func(i, j int) bool { return best[i].raw < best[j].raw })
+	return best
 }
 
 func asMap(v any) map[string]any {
@@ -374,17 +391,34 @@ func (s *openAPI) Validate(r *http.Request, body []byte) error {
 			candidates = append(candidates, strings.TrimPrefix(path, pre))
 		}
 	}
-	var tpl pathTemplate
-	found := false
+	// Several templates can match with the same number of literals
+	// (Vault's /auth/{approle_mount_path}/login next to
+	// /auth/{alicloud_mount_path}/login); the request is accepted when it
+	// satisfies any of them.
+	var tpls []pathTemplate
 	for _, c := range candidates {
-		if t, ok := bestTemplate(s.templates, c); ok {
-			tpl, found = t, true
+		if tpls = bestTemplates(s.templates, c); len(tpls) > 0 {
 			break
 		}
 	}
-	if !found {
+	if len(tpls) == 0 {
 		return fmt.Errorf("%s: no operation for path %s", s.name, path)
 	}
+	var first error
+	for _, tpl := range tpls {
+		err := s.validateOp(r, body, tpl)
+		if err == nil {
+			return nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// validateOp checks the request against one path template's operation.
+func (s *openAPI) validateOp(r *http.Request, body []byte, tpl pathTemplate) error {
 	op, ok := s.ops[tpl.raw][r.Method]
 	if !ok {
 		var methods []string
