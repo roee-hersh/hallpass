@@ -12,8 +12,9 @@ Either of:
 
 1. A **token** (`auth_mode: token`, the default), for instance a periodic service token.
 2. An **AppRole** (`auth_mode: approle`): `role_id` and the `secret_id` as `credential`; hallpass
-   logs in at `auth/<approle_mount>/login` and renews the token by logging in again when it
-   expires or is revoked.
+   logs in at `auth/<approle_mount>/login` and logs in again when the token expires or is revoked
+   (at most once per token, so a permission denied on a path hallpass needs does not spend
+   `secret_id` uses on every check).
 
 Attach a policy with exactly these capabilities:
 
@@ -77,18 +78,21 @@ from configuration:
 | the auth method role's `token_policies` (the OIDC role, the LDAP group mapping) | **no**: declare them in `token_policies` |
 | `default` | assumed attached (UNVERIFIED for auth methods that exclude it) |
 
-A policy named `root` allows everything. A policy a token names but Vault does not have contributes
-nothing, as in Vault.
+A policy named `root` on an entity or group answers `unsupported`: Vault refuses `root` alongside
+other policies and never issues it through auth methods, so its presence is a misconfiguration
+hallpass does not turn into allow (`root` is rejected in `token_policies`). A policy a token names
+but Vault does not have contributes nothing, as in Vault.
 
 ## Resources
 
 | Resource | Meaning |
 |---|---|
-| `kv:<mount>/<key>` | a secret in a KV engine; the KV version comes from `sys/mounts` and the API path is derived (`<mount>/data/<key>`, `metadata`, `destroy` on v2; the logical path on v1) |
+| `kv:<mount>/<key>` | a secret in a KV engine; the mount is the longest `sys/mounts` prefix (mounts may span several segments), its KV version decides the API path (`<mount>/data/<key>`, `metadata`, `destroy` on v2; the logical path on v1) |
 | `path:<api path>` | any API path, checked as written (`sys/seal`, `pki/issue/web`, `secret/data/x`) |
 
 Paths are plain segments (letters, digits, `_ . - @ : ~ =`); wildcards and dot-only segments are
-rejected. `LIST` questions are matched with a trailing slash, the way Vault sanitizes list requests.
+rejected. `LIST` questions are evaluated both with the trailing slash Vault adds and without it, as
+Vault does; an explicit deny on either form wins.
 
 ## Actions
 
@@ -110,32 +114,34 @@ only if the secret does or does not exist yet).
 
 Vault's documented rules, applied to the union of the policies' stanzas:
 
-1. Stanzas whose path matches the request path are candidates: an exact path, `+` for any
-   characters within one segment, a trailing `*` for any suffix. `*` elsewhere is literal.
+1. Stanzas whose path matches the request path are candidates: an exact path, a segment that is
+   exactly `+` for any one segment, a trailing `*` for any suffix. `*` elsewhere and `+` inside a
+   segment are literal; one leading `/` is dropped, as Vault does.
 2. The highest-priority pattern wins: the one whose first wildcard comes latest, then one without a
    trailing glob, then fewer `+`, then longer, then lexicographically greater. The same pattern in
    several policies takes the union of its capabilities.
 3. `deny` in the winning stanza denies. Otherwise the needed capability must be present.
 4. `{{identity.entity.id}}`, `.name`, `.metadata.<k>`, `.aliases.<accessor>.id|name|metadata.<k>`,
    `{{identity.groups.ids.<id>.name}}` and `{{identity.groups.names.<name>.id}}` are resolved for
-   the user. A template that cannot be resolved makes the stanza match one segment there and, if it
-   wins or outranks the winner, the answer is `unsupported`.
-5. `allowed_parameters`, `denied_parameters` and `required_parameters` on a write, and
-   `min_wrapping_ttl` / `max_wrapping_ttl`, answer `unsupported`: hallpass does not see the request
-   body.
+   the user. From a template that cannot be resolved (another selector, an empty value, a value with
+   a slash or wildcard) the stanza matches everything under its literal prefix, and if such a stanza
+   matches the request at all the answer is `unsupported`.
+5. `allowed_parameters`, `denied_parameters`, `required_parameters`, `min_wrapping_ttl` and
+   `max_wrapping_ttl` on the winning stanza answer `unsupported`: hallpass does not see the request's
+   parameters (reads carry them too, such as KV's `version`).
 
-Policies in HCL (including the deprecated `policy = "read|write|sudo|deny"` attribute and
-`path = { ... }` maps) and in JSON (object and list forms) are parsed. Heredocs and other syntax
-answer `unsupported`.
+Policies in HCL (including the deprecated `policy = "read|write|sudo|deny"` attribute,
+`path = { ... }` maps and nested `control_group` blocks, which are skipped) and in JSON (object and
+list forms) are parsed. Heredocs and other syntax answer `unsupported`.
 
 ## Decisions
 
 | Code | When |
 |---|---|
-| `allowed` | the winning stanza grants the capability, or the entity holds `root` |
+| `allowed` | the winning stanza grants the capability |
 | `denied` | no stanza matches; the winning stanza denies or lacks the capability; the entity is disabled |
-| `unsupported` | a parameter or wrapping constraint; an unresolvable template; a policy hallpass cannot parse; a KV v2 question on a v1 mount; a non-KV mount asked with `kv:`; a mixed create/update write |
-| `resource_not_visible` | `kv:` names a mount `sys/mounts` does not list |
+| `unsupported` | a parameter or wrapping constraint; an unresolvable template; a policy hallpass cannot parse; the `root` policy; a KV v2 question on a v1 mount; a non-KV mount asked with `kv:`; a mixed create/update write |
+| `resource_not_visible` | `kv:` names no mount `sys/mounts` lists, or a mount without a key |
 | `user_not_found` | no entity has the alias |
 | `credential_rejected` | 403 permission denied on a read hallpass needs; the AppRole login fails |
 | `invalid_request` | a malformed path or resource; `alias_mount` is not an enabled auth method |

@@ -68,6 +68,7 @@ path "secret/data/dev/wrapped" {
   min_wrapping_ttl = "1s"
 }
 path "secret/data/dev/half" { capabilities = ["update"] }
+path "team/secrets/data/*" { capabilities = ["read"] }
 `
 
 const teamPolicy = `{"path": {"secret/data/shared/*": {"capabilities": ["read", "list"]}, "secret/metadata/shared/*": {"capabilities": ["list"]}}}`
@@ -121,9 +122,10 @@ func newFake(t *testing.T) *fake {
 		},
 		policies: map[string]string{"dev": devPolicy, "team-readers": teamPolicy, "ops": opsPolicy, "default": defaultPolicy, "root": ""},
 		mounts: map[string]map[string]any{
-			"secret/": {"type": "kv", "options": map[string]any{"version": "2"}, "description": itest.Canary},
-			"kv1/":    {"type": "kv", "options": map[string]any{"version": "1"}},
-			"pki/":    {"type": "pki", "options": nil},
+			"secret/":       {"type": "kv", "options": map[string]any{"version": "2"}, "description": itest.Canary},
+			"kv1/":          {"type": "kv", "options": map[string]any{"version": "1"}},
+			"team/secrets/": {"type": "kv", "options": map[string]any{"version": "2"}},
+			"pki/":          {"type": "pki", "options": nil},
 		},
 		forbidden: map[string]bool{},
 	}
@@ -302,10 +304,12 @@ func TestAction_secret_read_allow(t *testing.T) {
 	expect(t, check(t, c, dana, "secret.read", "kv:secret/teams/payments/db"), integration.CodeAllowed, "secret/data/teams/payments/*")
 	// KV v1 keeps the logical path; the legacy policy attribute maps to read.
 	expect(t, check(t, c, dana, "secret.read", "kv:kv1/legacy/x"), integration.CodeAllowed, `"kv1/legacy/*", covering kv1/legacy/x`)
-	// root allows everything.
-	expect(t, check(t, c, root, "secret.read", "kv:secret/prod/db"), integration.CodeAllowed, "root policy")
+	// root is not evaluated: Vault refuses it next to other policies.
+	expect(t, check(t, c, root, "secret.read", "kv:secret/prod/db"), integration.CodeUnsupported, "root policy")
 	// path: takes the API path as is.
 	expect(t, check(t, c, ops, "secret.read", "path:secret/data/dev/x"), integration.CodeAllowed, "ops")
+	// A mount spanning two segments.
+	expect(t, check(t, c, dana, "secret.read", "kv:team/secrets/app"), integration.CodeAllowed, "team/secrets/data/*")
 }
 func TestAction_secret_read_deny(t *testing.T) {
 	_, _, c := setup(t)
@@ -392,8 +396,98 @@ func TestUnknowns(t *testing.T) {
 	expect(t, check(t, c, dana, "secret.read", "kv:secret/x/anything/z"), integration.CodeUnsupported, "template hallpass could not resolve")
 	// A mount that is not KV.
 	expect(t, check(t, c, ops, "secret.read", "kv:pki/issue/web"), integration.CodeUnsupported, "not kv")
-	// A mount that does not exist.
+	// A mount that does not exist, and a mount without a key.
 	expect(t, check(t, c, ops, "secret.read", "kv:nope/x"), integration.CodeResourceNotVisible, "no secrets engine")
+	expect(t, check(t, c, ops, "secret.read", "kv:team/secrets"), integration.CodeResourceNotVisible, "")
+}
+
+func TestUnresolvedTemplateOutsideWinner(t *testing.T) {
+	_, f, c := setup(t)
+	f.mu.Lock()
+	// Rendered by Vault this may become secret/data/dev/* and add a deny.
+	f.policies["dev"] = devPolicy + `
+path "secret/data/{{identity.groups.names.team.metadata.region}}/*" { capabilities = ["deny"] }
+`
+	f.mu.Unlock()
+	expect(t, check(t, c, dana, "secret.read", "kv:secret/dev/app"), integration.CodeUnsupported, "template hallpass could not resolve")
+}
+
+func TestListDenyWithoutSlash(t *testing.T) {
+	_, f, c := setup(t)
+	f.mu.Lock()
+	f.policies["dev"] = `
+path "secret/metadata/*" { capabilities = ["list"] }
+path "secret/metadata/prod" { capabilities = ["deny"] }
+path "secret/metadata/+" { capabilities = ["deny"] }
+path "secret/metadata/dev/*" { capabilities = ["list"] }
+`
+	f.mu.Unlock()
+	// The exact deny is written without the trailing slash Vault adds.
+	expect(t, check(t, c, dana, "secret.list", "kv:secret/prod"), integration.CodeDenied, "denies")
+	// A + rule matches the slash-less form too.
+	expect(t, check(t, c, dana, "secret.list", "kv:secret/other"), integration.CodeDenied, "denies")
+	expect(t, check(t, c, dana, "secret.list", "kv:secret/dev/a"), integration.CodeAllowed, "")
+}
+
+func TestLeadingSlashInStanza(t *testing.T) {
+	_, f, c := setup(t)
+	f.mu.Lock()
+	f.policies["dev"] = `
+path "secret/*" { capabilities = ["read"] }
+path "/secret/data/prod/*" { capabilities = ["deny"] }
+`
+	f.mu.Unlock()
+	expect(t, check(t, c, dana, "secret.read", "kv:secret/prod/db"), integration.CodeDenied, "denies")
+	expect(t, check(t, c, dana, "secret.read", "kv:secret/dev/db"), integration.CodeAllowed, "")
+}
+
+func TestTemplateValueWithSlash(t *testing.T) {
+	_, f, c := setup(t)
+	f.mu.Lock()
+	f.policies["dev"] = `
+path "secret/*" { capabilities = ["read"] }
+path "secret/data/{{identity.entity.metadata.scope}}" { capabilities = ["deny"] }
+`
+	for i := range f.entities {
+		if f.entities[i].id == entDana {
+			f.entities[i].metadata = map[string]string{"scope": "a/b"}
+		}
+	}
+	f.mu.Unlock()
+	// Rendered, the deny is secret/data/a/b; a value with a slash cannot
+	// be placed, so anything under secret/data/ is unknown.
+	expect(t, check(t, c, dana, "secret.read", "kv:secret/a/b"), integration.CodeUnsupported, "template")
+	expect(t, check(t, c, dana, "secret.read", "kv:secret/zzz"), integration.CodeUnsupported, "template")
+	expect(t, check(t, c, dana, "raw:read", "path:secret/other"), integration.CodeAllowed, "")
+}
+
+func TestParametersOnRead(t *testing.T) {
+	_, f, c := setup(t)
+	f.mu.Lock()
+	f.policies["dev"] = `path "secret/data/dev/*" { capabilities = ["read"] required_parameters = ["version"] }`
+	f.mu.Unlock()
+	expect(t, check(t, c, dana, "secret.read", "kv:secret/dev/app"), integration.CodeUnsupported, "request parameters")
+}
+
+func TestControlGroupBlocksParse(t *testing.T) {
+	_, f, c := setup(t)
+	f.mu.Lock()
+	f.policies["dev"] = `
+path "secret/data/dev/*" {
+  capabilities = ["read"]
+  control_group = {
+    factor "managers" {
+      identity {
+        group_names = ["managers"]
+        approvals = 1
+      }
+    }
+  }
+}`
+	f.mu.Unlock()
+	// The control group itself is not modelled; the stanza still parses
+	// and grants read.
+	expect(t, check(t, c, dana, "secret.read", "kv:secret/dev/app"), integration.CodeAllowed, "")
 }
 
 func TestPolicySyntaxUnknown(t *testing.T) {
@@ -449,8 +543,11 @@ func TestMatchPattern(t *testing.T) {
 		{"secret/+/foo", "secret/a/foo", true},
 		{"secret/+/foo", "secret/a/b/foo", false},
 		{"secret/+/foo", "secret//foo", true},
-		{"secret/ab+/foo", "secret/abc/foo", true},
-		{"secret/ab+/foo", "secret/ac/foo", false},
+		{"secret/ab+/foo", "secret/abc/foo", false}, // + is a wildcard only as a whole segment
+		{"secret/ab+/foo", "secret/ab+/foo", true},
+		{"secret/+", "secret/a", true},
+		{"secret/+", "secret", false},
+		{"*", "anything/at/all", true},
 		{"secret/+/+/foo/*", "secret/a/b/foo/bar", true},
 		{"secret/+/+/foo/*", "secret/a/foo/bar", false},
 		{"a*b", "axb", false}, // * only globs at the end; elsewhere it is literal
@@ -560,6 +657,20 @@ func TestAppRole(t *testing.T) {
 	f.token = itest.Canary + "tok2"
 	f.mu.Unlock()
 	expect(t, check(t, c, dana, "secret.read", "kv:secret/dev/app"), integration.CodeAllowed, "")
+	// A path hallpass may not read: at most one re-login per token, not
+	// one per denied request.
+	f.mu.Lock()
+	f.forbidden["/identity/lookup/entity"] = true // never cached
+	before := f.logins
+	f.mu.Unlock()
+	expect(t, check(t, c, dana, "secret.read", "kv:secret/dev/app"), integration.CodeCredentialRejected, "")
+	expect(t, check(t, c, dana, "secret.read", "kv:secret/dev/app"), integration.CodeCredentialRejected, "")
+	f.mu.Lock()
+	extra := f.logins - before
+	f.mu.Unlock()
+	if extra > 1 {
+		t.Errorf("%d re-logins for a permission denial, want at most 1", extra)
+	}
 	// A wrong secret id.
 	_, _, c = setupValues(t, map[string]string{"auth_mode": "approle", "role_id": "r0le-id"}, "bad")
 	expect(t, check(t, c, dana, "secret.read", "kv:secret/dev/app"), integration.CodeCredentialRejected, "AppRole login")
@@ -614,6 +725,7 @@ func TestNewValidation(t *testing.T) {
 		{map[string]string{"url": srv.URL, "alias_mount": "oidc/", "auth_mode": "approle"}, true},
 		{map[string]string{"url": srv.URL, "alias_mount": "oidc/", "auth_mode": "magic"}, true},
 		{map[string]string{"url": srv.URL, "alias_mount": "oidc/", "token_policies": "a b"}, true},
+		{map[string]string{"url": srv.URL, "alias_mount": "oidc/", "token_policies": "root"}, true},
 		{map[string]string{"url": srv.URL, "alias_mount": "oidc/", "namespace": "a b"}, true},
 	} {
 		secrets := map[string]secret.Secret{}

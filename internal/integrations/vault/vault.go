@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/authx"
@@ -81,7 +82,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		aliasMount: strings.TrimSpace(s.Get("alias_mount")),
 		namespace:  strings.TrimSpace(s.Get("namespace")),
 		now:        d.Now,
-		policies:   cache.New[string, []rule](0),
+		policies:   cache.New[string, string](0),
 		groups:     cache.New[string, group](0),
 		misc:       cache.New[string, map[string]json.RawMessage](0),
 	}
@@ -103,8 +104,8 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		if p == "" {
 			continue
 		}
-		if !nameRe.MatchString(p) {
-			return nil, fmt.Errorf("token_policies: %q is not a policy name", p)
+		if !nameRe.MatchString(p) || p == "root" {
+			return nil, fmt.Errorf("token_policies: %q is not a policy name hallpass accepts", p)
 		}
 		c.tokenPolicies = append(c.tokenPolicies, p)
 	}
@@ -115,7 +116,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		c.tokens = &authx.TokenSource{Now: c.now, Fetch: func(context.Context) (authx.Token, error) {
 			t, err := cred.GetString()
 			if err != nil {
-				return authx.Token{}, err
+				return authx.Token{}, integration.Wrap(integration.CodeCredentialRejected, err, "the token could not be read")
 			}
 			return authx.Token{Value: strings.TrimSpace(t)}, nil
 		}}
@@ -136,7 +137,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		c.tokens = &authx.TokenSource{Now: c.now, Fetch: func(ctx context.Context) (authx.Token, error) {
 			secret, err := cred.GetString()
 			if err != nil {
-				return authx.Token{}, err
+				return authx.Token{}, integration.Wrap(integration.CodeCredentialRejected, err, "the AppRole secret_id could not be read")
 			}
 			var body struct {
 				Auth struct {
@@ -146,6 +147,9 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 			}
 			resp, err := plain.Do(ctx, &httpx.Request{Method: http.MethodPost, Path: loginPath, JSON: map[string]string{"role_id": roleID, "secret_id": strings.TrimSpace(secret)}})
 			if err != nil {
+				if httpx.Status(err) == 0 {
+					return authx.Token{}, err // transport: classified as such
+				}
 				return authx.Token{}, &authx.TokenError{Status: httpx.Status(err), Code: "approle_login_failed"}
 			}
 			if err := resp.JSON(&body); err != nil || body.Auth.ClientToken == "" {
@@ -178,14 +182,36 @@ type Connection struct {
 	aliasMount    string
 	namespace     string
 	tokenPolicies []string
-	// relogin is set in approle mode, where a 403 may mean an expired token.
-	relogin bool
-	now     func() time.Time
+	// relogin is set in approle mode, where a 403 may mean an expired
+	// token; deniedToken is the token a 403 already triggered a login for.
+	relogin     bool
+	mu          sync.Mutex
+	deniedToken string
+	now         func() time.Time
 
-	policies *cache.TTL[string, []rule]
+	// policies caches each policy's text; templates are resolved per
+	// identity when it is parsed for a check.
+	policies *cache.TTL[string, string]
 	groups   *cache.TTL[string, group]
 	// misc caches the sys/auth and sys/mounts listings under their paths.
 	misc *cache.TTL[string, map[string]json.RawMessage]
+}
+
+// firstDenial reports whether the current token has not yet been denied;
+// a token denied twice is a token that lacks the capability, not an
+// expired one, and a new login would only spend a secret_id use.
+func (c *Connection) firstDenial(ctx context.Context) bool {
+	tok, err := c.tokens.Get(ctx)
+	if err != nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deniedToken == tok {
+		return false
+	}
+	c.deniedToken = tok
+	return true
 }
 
 func (c *Connection) namespaceHeader(_ context.Context, r *http.Request) error {
@@ -205,11 +231,13 @@ type vaultError struct {
 // classify maps an API error. notFound builds the error for a 404, which
 // Vault also answers when the token may not see the path.
 func classify(err error, what string, notFound func() error) error {
+	var ie *integration.Error
+	if errors.As(err, &ie) {
+		return err
+	}
 	var te *authx.TokenError
 	if errors.As(err, &te) {
 		switch {
-		case te.Status == 0:
-			return integration.Wrap(integration.CodeCredentialRejected, err, "the credential could not be read")
 		case te.Status == 400 || te.Status == 403:
 			return integration.Wrap(integration.CodeCredentialRejected, err, "Vault rejected the AppRole login (HTTP %d)", te.Status)
 		case te.Status == 429:
@@ -245,8 +273,10 @@ func (c *Connection) data(ctx context.Context, method, path string, body any, ou
 		req.Idempotent = &idem
 	}
 	resp, err := c.api.Do(ctx, req)
-	if httpx.Status(err) == 403 && c.relogin {
-		// An AppRole token that expired or was revoked: log in again once.
+	if httpx.Status(err) == 403 && c.relogin && c.firstDenial(ctx) {
+		// An AppRole token that expired or was revoked answers permission
+		// denied like a missing capability does: log in again, once per
+		// token, and retry.
 		c.tokens.Invalidate()
 		resp, err = c.api.Do(ctx, req)
 	}
@@ -357,6 +387,8 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 	if !idRe.MatchString(found.ID) {
 		return integration.Identity{}, integration.Errorf(integration.CodeUpstreamError, "Vault returned an entity id of an unexpected shape")
 	}
+	// The lookup response carries most of the entity, but not disabled;
+	// the read does, and a disabled entity must be denied.
 	var e entity
 	if _, err := c.data(ctx, http.MethodGet, "/identity/entity/id/"+found.ID, nil, &e); err != nil {
 		return integration.Identity{}, classify(err, "read the entity", func() error {
@@ -431,17 +463,17 @@ func (c *Connection) policy(ctx context.Context, name string, tc *templateContex
 	if !nameRe.MatchString(name) {
 		return nil, false, integration.Errorf(integration.CodeUpstreamError, "policy name %q has an unexpected shape", name)
 	}
-	src, err := c.policies.Do(ctx, name, func(ctx context.Context) ([]rule, time.Duration, error) {
+	src, err := c.policies.Do(ctx, name, func(ctx context.Context) (string, time.Duration, error) {
 		var body struct {
 			Policy string `json:"policy"`
 			Rules  string `json:"rules"`
 		}
 		none, err := c.data(ctx, http.MethodGet, "/sys/policies/acl/"+name, nil, &body)
 		if err != nil {
-			return nil, 0, classify(err, "read policy "+name, func() error { return errMissingPolicy })
+			return "", 0, classify(err, "read policy "+name, func() error { return errMissingPolicy })
 		}
 		if none {
-			return nil, 0, errMissingPolicy
+			return "", 0, errMissingPolicy
 		}
 		// UNVERIFIED: the policy text sits under data.policy; the docs'
 		// sample shows it at the top level, which data() also reads.
@@ -452,9 +484,9 @@ func (c *Connection) policy(ctx context.Context, name string, tc *templateContex
 		// Parsed once without templates to validate; templates are
 		// resolved per identity below.
 		if _, err := parsePolicy(name, text, nil); err != nil {
-			return nil, 0, integration.Wrap(integration.CodeUnsupported, err, "policy %s uses syntax hallpass does not parse", name)
+			return "", 0, integration.Wrap(integration.CodeUnsupported, err, "policy %s uses syntax hallpass does not parse", name)
 		}
-		return []rule{{pattern: text}}, cacheTTL, nil
+		return text, cacheTTL, nil
 	})
 	if errors.Is(err, errMissingPolicy) {
 		return nil, false, nil
@@ -462,7 +494,7 @@ func (c *Connection) policy(ctx context.Context, name string, tc *templateContex
 	if err != nil {
 		return nil, false, err
 	}
-	rules, err := parsePolicy(name, src[0].pattern, tc)
+	rules, err := parsePolicy(name, src, tc)
 	if err != nil {
 		return nil, false, integration.Wrap(integration.CodeUnsupported, err, "policy %s uses syntax hallpass does not parse", name)
 	}
@@ -473,17 +505,24 @@ var errMissingPolicy = errors.New("policy does not exist")
 
 // --- checks -----------------------------------------------------------------
 
-// kvVersion reports the KV version of a mount from sys/mounts: 1, 2, or an
-// error when the mount is missing or not a KV engine.
-func (c *Connection) kvVersion(ctx context.Context, mount string) (int, error) {
+// kvMount finds the secrets engine a kv: path lives in by the longest
+// mount prefix in sys/mounts, and reports the mount (without the slash),
+// the key under it and the KV version. Mounts may span several segments.
+func (c *Connection) kvMount(ctx context.Context, path string) (mount, key string, version int, err error) {
 	mounts, err := c.listing(ctx, "/sys/mounts")
 	if err != nil {
-		return 0, err
+		return "", "", 0, err
 	}
-	raw, ok := mounts[mount+"/"]
-	if !ok {
-		return 0, integration.Errorf(integration.CodeResourceNotVisible, "no secrets engine is mounted at %s/ (or hallpass cannot list mounts)", mount)
+	for m := range mounts {
+		if strings.HasPrefix(path+"/", m) && len(m) > len(mount)+1 {
+			mount = strings.TrimSuffix(m, "/")
+		}
 	}
+	if mount == "" || len(path) <= len(mount)+1 {
+		return "", "", 0, integration.Errorf(integration.CodeResourceNotVisible, "no secrets engine is mounted above %s, or the path names a mount without a key (or hallpass cannot list mounts)", path)
+	}
+	key = path[len(mount)+1:]
+	raw := mounts[mount+"/"]
 	var m struct {
 		Type    string `json:"type"`
 		Options struct {
@@ -491,15 +530,15 @@ func (c *Connection) kvVersion(ctx context.Context, mount string) (int, error) {
 		} `json:"options"`
 	}
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return 0, integration.Wrap(integration.CodeUpstreamError, err, "sys/mounts entry for %s could not be decoded", mount)
+		return "", "", 0, integration.Wrap(integration.CodeUpstreamError, err, "sys/mounts entry for %s could not be decoded", mount)
 	}
 	if m.Type != "kv" && m.Type != "generic" {
-		return 0, integration.Errorf(integration.CodeUnsupported, "the engine at %s/ is %s, not kv; use path: with raw: capabilities", mount, m.Type)
+		return "", "", 0, integration.Errorf(integration.CodeUnsupported, "the engine at %s/ is %s, not kv; use path: with raw: capabilities", mount, m.Type)
 	}
 	if m.Options.Version == "2" {
-		return 2, nil
+		return mount, key, 2, nil
 	}
-	return 1, nil
+	return mount, key, 1, nil
 }
 
 // Check answers one question.
@@ -516,17 +555,20 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	// The API path the request goes to.
 	apiPath := t.path
 	if t.kind == "kv" {
-		version, err := c.kvVersion(ctx, t.mount)
+		mount, key, version, err := c.kvMount(ctx, t.path)
 		if err != nil {
 			return integration.ToDecision(err), nil
 		}
 		switch {
 		case version == 2 && t.action.kv2 != "":
-			apiPath = t.mount + "/" + t.action.kv2 + "/" + t.key
+			apiPath = mount + "/" + t.action.kv2 + "/" + key
 		case version == 1 && (t.action.name == "secret.destroy" || t.action.name == "secret.metadata"):
-			return integration.Unsupported("%s is a KV v2 question and %s/ is a KV v1 mount", t.action.name, t.mount), nil
+			return integration.Unsupported("%s is a KV v2 question and %s/ is a KV v1 mount", t.action.name, mount), nil
 		}
 	}
+	// Vault evaluates a LIST against the path with and without its
+	// trailing slash and lets the more specific rule win; both forms are
+	// evaluated and an explicit deny on either wins.
 	matchPath := apiPath
 	if t.action.list {
 		matchPath += "/"
@@ -544,7 +586,10 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		names[p] = true
 	}
 	if names["root"] {
-		return integration.Allowed("%s holds the root policy, which allows everything", who), nil
+		// Vault refuses root next to other policies and never issues it
+		// through auth methods; a root name on an entity is a
+		// misconfiguration hallpass does not turn into allow.
+		return integration.Unsupported("%s carries the root policy, which hallpass does not evaluate (Vault refuses root alongside other policies)", who), nil
 	}
 	tc := templateContextOf(id)
 	var rules []rule
@@ -561,6 +606,9 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 	}
 	need := strings.Join(t.action.need, "+")
 	ev := evaluate(rules, matchPath, t.action.need)
+	if t.action.list {
+		ev = combineList(ev, evaluate(rules, apiPath, t.action.need))
+	}
 	if len(t.action.need) == 2 {
 		// A write is create or update depending on whether the secret
 		// exists; both must agree for a definite answer.
@@ -589,6 +637,27 @@ func (c *Connection) Check(ctx context.Context, r integration.CheckRequest) (int
 		return integration.Denied("%s for %s: %s (policies %s)", need, who, ev.reason, strings.Join(ev.policies, ", ")), nil
 	}
 	return integration.Unsupported("%s for %s on %s: %s", need, who, apiPath, ev.reason), nil
+}
+
+// combineList merges the evaluations of a LIST path with and without its
+// trailing slash: unknown wins, then an explicit deny (a matching stanza
+// that denies), then an allow; two misses stay a miss.
+func combineList(a, b evaluation) evaluation {
+	switch {
+	case a.outcome == "unknown":
+		return a
+	case b.outcome == "unknown":
+		return b
+	case a.outcome == "deny" && a.pattern != "":
+		return a
+	case b.outcome == "deny" && b.pattern != "":
+		return b
+	case a.outcome == "allow":
+		return a
+	case b.outcome == "allow":
+		return b
+	}
+	return a
 }
 
 // granted, denied and exists word the mixed create/update answer.

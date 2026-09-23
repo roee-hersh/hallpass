@@ -17,7 +17,8 @@ type rule struct {
 	unresolved bool
 	// params is set when allowed_parameters, denied_parameters or
 	// required_parameters restrict the stanza; wrapping when a wrapping
-	// TTL is required. Both make write answers unknown.
+	// TTL is required. Both make the answer unknown: hallpass does not see
+	// the request's parameters, and reads carry them too (KV's version).
 	params, wrapping bool
 	policy           string
 }
@@ -69,7 +70,12 @@ func parsePolicy(name, src string, tc *templateContext) ([]rule, error) {
 	}
 	for i := range rules {
 		rules[i].policy = name
-		rules[i].pattern, rules[i].unresolved = resolveTemplates(rules[i].pattern, tc)
+		// Vault drops one leading slash: paths start after the / of the API.
+		pattern := strings.TrimPrefix(rules[i].pattern, "/")
+		if pattern == "" {
+			return nil, fmt.Errorf("policy %s: a path stanza has an empty path", name)
+		}
+		rules[i].pattern, rules[i].unresolved = resolveTemplates(pattern, tc)
 	}
 	return rules, nil
 }
@@ -310,10 +316,16 @@ func (p *hclParser) value() (nonEmpty bool, err error) {
 			if k.kind != 's' && k.kind != 'n' {
 				return false, fmt.Errorf("expected a key at %d", k.pos)
 			}
-			if !p.is('p', "=") && !p.is('p', ":") {
-				return false, fmt.Errorf("expected = after key %q", k.val)
+			// key = value, key : value, or a nested block with optional
+			// labels: factor "ops" { ... } (control groups).
+			for p.is('s', "") {
+				p.next()
 			}
-			p.next()
+			if p.is('p', "=") || p.is('p', ":") {
+				p.next()
+			} else if !p.is('p', "{") {
+				return false, fmt.Errorf("expected = or a block after key %q", k.val)
+			}
 			if _, err := p.value(); err != nil {
 				return false, err
 			}
@@ -476,39 +488,36 @@ func (p *hclParser) stanza(pattern string) (rule, error) {
 
 // --- templates --------------------------------------------------------------
 
-// resolveTemplates substitutes {{identity.*}} placeholders. Placeholders it
-// cannot resolve become "+" (one segment) and unresolved is reported.
+// resolveTemplates substitutes {{identity.*}} placeholders. From the first
+// placeholder it cannot resolve (unknown selector, empty value, or a value
+// with a slash or wildcard, whose rendering could take any shape) the
+// pattern becomes a glob of its literal prefix, so that it matches
+// everything Vault's rendering might, and unresolved is reported.
 func resolveTemplates(pattern string, tc *templateContext) (string, bool) {
 	if !strings.Contains(pattern, "{{") {
 		return pattern, false
 	}
-	unresolved := false
 	var b strings.Builder
 	rest := pattern
 	for {
 		i := strings.Index(rest, "{{")
 		if i < 0 {
 			b.WriteString(rest)
-			break
+			return b.String(), false
 		}
 		b.WriteString(rest[:i])
 		j := strings.Index(rest[i:], "}}")
 		if j < 0 {
-			b.WriteString("+")
-			unresolved = true
-			break
+			return b.String() + "*", true
 		}
 		key := strings.TrimSpace(rest[i+2 : i+j])
 		rest = rest[i+j+2:]
 		v, ok := tc.lookup(key)
 		if !ok || v == "" || strings.ContainsAny(v, "/*+") {
-			b.WriteString("+")
-			unresolved = true
-			continue
+			return b.String() + "*", true
 		}
 		b.WriteString(v)
 	}
-	return b.String(), unresolved
 }
 
 // lookup resolves one template key.
@@ -560,70 +569,75 @@ func (tc *templateContext) lookup(key string) (string, bool) {
 
 // --- matching ---------------------------------------------------------------
 
-// matchPattern reports whether a policy pattern covers path: "+" matches
-// any characters within one segment, a trailing "*" matches any suffix,
-// everything else is literal.
+// matchPattern reports whether a policy pattern covers path: a segment
+// that is exactly "+" matches any one segment, a trailing "*" matches any
+// suffix, everything else (a "+" inside a segment included) is literal.
 func matchPattern(pattern, path string) bool {
 	glob := strings.HasSuffix(pattern, "*")
 	if glob {
 		pattern = pattern[:len(pattern)-1]
 	}
-	return matchSegments(pattern, path, glob)
-}
-
-func matchSegments(pattern, path string, glob bool) bool {
-	pi, si := 0, 0
-	for pi < len(pattern) {
-		c := pattern[pi]
-		if c == '+' {
-			// "+" consumes any run of characters within the segment; try
-			// every length from the shortest up to the next "/".
-			for end := si; ; end++ {
-				if matchSegments(pattern[pi+1:], path[end:], glob) {
-					return true
-				}
-				if end >= len(path) || path[end] == '/' {
-					return false
-				}
-			}
-		}
-		if si >= len(path) || path[si] != c {
+	psegs, segs := strings.Split(pattern, "/"), strings.Split(path, "/")
+	for i, ps := range psegs {
+		if i >= len(segs) {
 			return false
 		}
-		pi++
-		si++
+		if glob && i == len(psegs)-1 {
+			// The partial last segment is a prefix of the rest of the path.
+			return strings.HasPrefix(strings.Join(segs[i:], "/"), ps)
+		}
+		if ps != "+" && ps != segs[i] {
+			return false
+		}
 	}
-	if glob {
-		return true
-	}
-	return si == len(path)
+	return len(segs) == len(psegs)
 }
 
 // lessPriority reports whether pattern a has lower priority than b under
 // Vault's rules: an earlier first wildcard, a trailing glob, more "+"
 // segments, a shorter length, then lexicographic order.
 func lessPriority(a, b string) bool {
-	first := func(s string) int {
-		i := strings.IndexAny(s, "+*")
-		if i < 0 {
-			return len(s) + 1
-		}
-		return i
-	}
-	if fa, fb := first(a), first(b); fa != fb {
+	if fa, fb := firstWildcard(a), firstWildcard(b); fa != fb {
 		return fa < fb
 	}
 	ga, gb := strings.HasSuffix(a, "*"), strings.HasSuffix(b, "*")
 	if ga != gb {
 		return ga
 	}
-	if pa, pb := strings.Count(a, "+"), strings.Count(b, "+"); pa != pb {
+	if pa, pb := plusSegments(a), plusSegments(b); pa != pb {
 		return pa > pb
 	}
 	if len(a) != len(b) {
 		return len(a) < len(b)
 	}
 	return a < b
+}
+
+// plusSegments counts the segments that are exactly "+".
+func plusSegments(pattern string) int {
+	n := 0
+	for _, seg := range strings.Split(strings.TrimSuffix(pattern, "*"), "/") {
+		if seg == "+" {
+			n++
+		}
+	}
+	return n
+}
+
+// firstWildcard is the index of the first "+" segment or the trailing
+// glob, or past the end when there is none.
+func firstWildcard(pattern string) int {
+	off := 0
+	for _, seg := range strings.Split(pattern, "/") {
+		if seg == "+" || seg == "*" {
+			return off
+		}
+		off += len(seg) + 1
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return len(pattern) - 1
+	}
+	return len(pattern) + 1
 }
 
 // evaluation is the outcome of matching a path and capability against a
@@ -679,13 +693,15 @@ func evaluate(rules []rule, path string, need []string) evaluation {
 		ev.outcome, ev.reason = "unknown", fmt.Sprintf("policy path %q carries a template hallpass could not resolve", winner)
 		return ev
 	}
-	// A higher-priority unresolved template could also have matched.
+	// Another matching stanza with an unresolved template could, once
+	// rendered by Vault, be the same pattern as the winner (and add a
+	// deny) or outrank it; either way the answer is unknown.
 	for pattern, rs := range byPattern {
 		if pattern == winner {
 			continue
 		}
 		for _, r := range rs {
-			if r.unresolved && lessPriority(winner, pattern) {
+			if r.unresolved {
 				ev.outcome, ev.reason = "unknown", fmt.Sprintf("policy path %q carries a template hallpass could not resolve", pattern)
 				return ev
 			}
@@ -705,13 +721,7 @@ func evaluate(rules []rule, path string, need []string) evaluation {
 		ev.outcome, ev.reason = "deny", fmt.Sprintf("policy path %q grants %s but not %s", winner, capList(caps), strings.Join(missing, ", "))
 		return ev
 	}
-	writes := false
-	for _, c := range need {
-		if c == "create" || c == "update" || c == "patch" {
-			writes = true
-		}
-	}
-	if writes && params {
+	if params {
 		ev.outcome, ev.reason = "unknown", fmt.Sprintf("policy path %q restricts the request parameters (allowed, denied or required parameters), which hallpass does not evaluate", winner)
 		return ev
 	}

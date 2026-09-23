@@ -82,9 +82,10 @@ type target struct {
 	action action
 	// kind is kv or path.
 	kind string
-	// mount is the KV mount (kv:), key the path under it; for path:, path
-	// is the whole API path.
-	mount, key, path string
+	// path is the logical path (kv:) or the whole API path (path:); the
+	// mount a kv: path lives in is resolved against sys/mounts at check
+	// time, since mounts may span several segments.
+	path string
 }
 
 // parseTarget validates the action and resource.
@@ -105,14 +106,12 @@ func parseTarget(actionName string, r catalog.Resource) (target, error) {
 	t := target{action: a, kind: r.Type, path: p}
 	switch r.Type {
 	case "kv":
-		mount, key, ok := strings.Cut(p, "/")
-		if !ok || key == "" {
+		if !strings.Contains(p, "/") {
 			return target{}, invalid("kv: takes <mount>/<key path>")
 		}
 		if strings.HasPrefix(actionName, "raw:") {
 			return target{}, invalid("raw: capabilities take a path: resource; kv: resolves the path from the action")
 		}
-		t.mount, t.key = mount, key
 	case "path":
 		if a.name == "secret.destroy" || a.name == "secret.metadata" {
 			return target{}, invalid("%s is a KV v2 question; use kv:<mount>/<key>", a.name)

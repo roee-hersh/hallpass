@@ -38,8 +38,8 @@ func FuzzParseTarget(f *testing.F) {
 				t.Fatalf("bad segment %q in %q", seg, p)
 			}
 		}
-		if tg.kind == "kv" && (tg.mount == "" || tg.key == "" || tg.mount+"/"+tg.key != p || strings.Contains(tg.mount, "/")) {
-			t.Fatalf("kv target %+v", tg)
+		if tg.kind == "kv" && !strings.Contains(p, "/") {
+			t.Fatalf("kv target without a key %+v", tg)
 		}
 		for _, c := range tg.action.need {
 			if !capabilities[c] || c == "deny" {
