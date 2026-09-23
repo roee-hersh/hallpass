@@ -17,11 +17,11 @@ from contextvars import ContextVar
 
 from langchain_core.tools import tool
 
-from hallpass_client import Hallpass, guarded
+from hallpass_client import Hallpass, current, guarded
 
 hp = Hallpass()
 current_user: ContextVar[str] = ContextVar("current_user")
-current_groups: ContextVar[list[str]] = ContextVar("current_groups", default=[])
+current_groups: ContextVar[tuple[str, ...]] = ContextVar("current_groups", default=())
 
 
 @tool
@@ -30,7 +30,7 @@ def check_permission(connection: str, action: str, resource: str) -> str:
     connection is a hallpass connection id (e.g. jira-main), action one
     of its actions (e.g. DELETE_ISSUES), resource the target (e.g.
     issue:PAY-123). Only 'allow' permits the action; 'unknown' is a deny."""
-    d = hp.check(current_user.get(), connection, action, resource, current_groups.get())
+    d = hp.check(current(current_user), connection, action, resource, current(current_groups, "groups"))
     return f"{d.decision}: {d.reason}"
 
 
@@ -45,7 +45,7 @@ def write_thing(thing_id: str, content: str) -> str:
     """Write content to a thing in the demo system. Refused unless the
     current user holds thing.write on it."""
     # The real action goes here, run with the agent's own credential.
-    return f"wrote {len(content)} bytes to thing:{thing_id} as {current_user.get()}"
+    return f"wrote {len(content)} bytes to thing:{thing_id} as {current(current_user)}"
 
 
 tools = [check_permission, write_thing]

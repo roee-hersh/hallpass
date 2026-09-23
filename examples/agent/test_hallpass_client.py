@@ -21,7 +21,7 @@ from contextvars import ContextVar
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from hallpass_client import Decision, Hallpass, PermissionDenied, guarded  # noqa: E402
+from hallpass_client import Decision, Hallpass, PermissionDenied, current, guarded  # noqa: E402
 
 API_KEY = "test-key"
 DANA = "dana@example.com"
@@ -178,7 +178,9 @@ class ClientTest(unittest.TestCase):
     def test_url_rules(self):
         for ok in ("https://hallpass.internal", "http://localhost:8080/", "http://127.0.0.1:1", "http://[::1]:8080"):
             Hallpass(ok, API_KEY)
-        for bad in ("http://hallpass.internal", "localhost:8080", "ftp://x", "http://10.0.0.5:8080"):
+        for bad in ("http://hallpass.internal", "localhost:8080", "ftp://x", "http://10.0.0.5:8080",
+                    "https://hallpass.internal/?debug=1", "https://hallpass.internal/#x",
+                    "https://user:pw@hallpass.internal", "https://hallpass.internal /"):
             with self.assertRaises(ValueError, msg=bad):
                 Hallpass(bad, API_KEY)
         self.assertEqual(Hallpass("http://localhost:8080/", API_KEY).url, "http://localhost:8080")
@@ -252,10 +254,17 @@ class GuardedTest(unittest.TestCase):
             write(thing_id="allowed", user="admin@example.com")  # not a parameter
         with self.assertRaises(TypeError):
             write("allowed")  # positional arguments could bypass the resource template
+        with self.assertRaises(TypeError):
+            write({"thing_id": "allowed"})  # a dict is not the shape of this function
         self.assertEqual(FakeHallpass.seen, [])
-        # In the dict shape an extra "user" key is ignored, not honoured.
-        write({"thing_id": "allowed", "user": "admin@example.com"})
-        self.assertEqual(last_request()["user"], DANA)
+
+    def test_defaults_fill_the_resource(self):
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
+        def write(content: str, thing_id: str = "allowed") -> str:
+            return "ok"
+
+        self.assertEqual(write(content="x"), "ok")
+        self.assertEqual(last_request()["resource"], "thing:allowed")
 
     def test_user_sources(self):
         seen = []
@@ -288,21 +297,36 @@ class GuardedTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             make("")(thing_id="allowed")
         with self.assertRaises(TypeError):
-            make(DANA, groups="platform-team")(thing_id="allowed")
+            make(DANA, groups="platform-team")(thing_id="allowed")  # a string is not a list of groups
         self.assertEqual(len(FakeHallpass.seen), 3)
 
     def test_dict_shape(self):
+        from typing import Any
+
         @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
-        def write(args: dict) -> str:
+        def write(args: dict[str, Any]) -> str:
             return "wrote " + args["thing_id"]
 
         self.assertEqual(write({"thing_id": "allowed", "content": "x"}), "wrote allowed")
         self.assertEqual(last_request()["resource"], "thing:allowed")
+        # An extra "user" key is ignored, not honoured.
+        write({"thing_id": "allowed", "user": "admin@example.com"})
+        self.assertEqual(last_request()["user"], DANA)
         with self.assertRaises(PermissionDenied):
             write({"thing_id": "denied"})
         with self.assertRaises(KeyError):
             write({"content": "no thing_id"})  # cannot form the resource: no request, no action
-        self.assertEqual(len(FakeHallpass.seen), 2)
+        with self.assertRaises(TypeError):
+            write(thing_id="allowed")  # keywords are not the shape of this function
+        self.assertEqual(len(FakeHallpass.seen), 3)
+
+    def test_current(self):
+        var: ContextVar[str] = ContextVar("session_user")
+        with self.assertRaises(RuntimeError) as cm:
+            current(var)
+        self.assertIn("session_user", str(cm.exception))
+        var.set("x")
+        self.assertEqual((current(var), current(lambda: "y"), current("z")), ("x", "y", "z"))
 
     def test_async(self):
         ran = []

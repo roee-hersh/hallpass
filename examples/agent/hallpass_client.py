@@ -31,6 +31,7 @@ import inspect
 import ipaddress
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -158,7 +159,12 @@ class Hallpass:
 
 
 def _validate_url(url: str) -> str:
+    """The rule hallpass applies to its own upstream URLs (ValidateHTTPSURL)."""
+    if any(c in url for c in " \t\r\n?#"):
+        raise ValueError(f"hallpass url {url!r} must not contain whitespace, '?' or '#'")
     u = urllib.parse.urlsplit(url)
+    if u.username is not None or u.password is not None:
+        raise ValueError(f"hallpass url {url!r} must not contain userinfo")
     if u.scheme == "https" and u.hostname:
         return url.rstrip("/")
     if u.scheme == "http" and u.hostname:
@@ -207,18 +213,42 @@ F = TypeVar("F", bound=Callable)
 # Where the acting user (or their groups) comes from: a fixed value, a
 # zero-argument callable, or a contextvars.ContextVar the application sets
 # for the current session or request.
-Source = Union[Any, Callable[[], Any], "contextvars.ContextVar[Any]"]
+UserSource = Union[str, Callable[[], str], "contextvars.ContextVar[str]"]
+GroupsSource = Union[Iterable[str], Callable[[], Iterable[str]], "contextvars.ContextVar[Iterable[str]]"]
 
 
-def _resolve(source: Source, what: str) -> Any:
+def current(source: Any, what: str = "user") -> Any:
+    """Resolve a user or groups source now.
+
+    A ``ContextVar`` with nothing set for this session raises ``RuntimeError``
+    naming it, rather than a bare ``LookupError`` from inside a framework.
+    """
     if isinstance(source, contextvars.ContextVar):
         try:
             return source.get()
         except LookupError:
-            raise RuntimeError(f"guarded: no {what} set in ContextVar {source.name!r}") from None
+            raise RuntimeError(f"no {what} set for this session in ContextVar {source.name!r}") from None
     if callable(source):
         return source()
     return source
+
+
+def _takes_one_dict(sig: inspect.Signature) -> bool:
+    """True for the Claude Agent SDK handler shape: one positional parameter
+    annotated as a dict or Mapping, which receives all the arguments."""
+    params = list(sig.parameters.values())
+    if len(params) != 1 or params[0].kind not in (params[0].POSITIONAL_ONLY, params[0].POSITIONAL_OR_KEYWORD):
+        return False
+    ann = params[0].annotation
+    if ann is inspect.Parameter.empty:
+        return False
+    name = ann if isinstance(ann, str) else getattr(ann, "__name__", None) or str(ann)
+    origin = getattr(ann, "__origin__", None)
+    if isinstance(origin, type) and issubclass(origin, Mapping):
+        return True
+    if isinstance(ann, type) and issubclass(ann, Mapping):
+        return True
+    return bool(re.match(r"(typing\.)?(dict|Dict|Mapping|MutableMapping)\b", name))
 
 
 def guarded(
@@ -227,8 +257,8 @@ def guarded(
     action: str,
     resource: str,
     *,
-    user: Source,
-    groups: Source | None = None,
+    user: UserSource,
+    groups: GroupsSource | None = None,
     deny: Callable[[PermissionDenied], Any] | None = None,
 ) -> Callable[[F], F]:
     """Decorate a function so it runs only after hallpass allowed it.
@@ -241,10 +271,13 @@ def guarded(
     original's. ``groups`` works the same way and must yield a list.
 
     ``resource`` is a format string over the call's arguments, e.g.
-    ``"issue:{key}"``. The function may be called with keyword arguments
-    (LangChain, Strands, MCP) or with one positional dict of arguments (the
-    Claude Agent SDK handler shape); ``async def`` is supported and the
-    check then runs in a worker thread.
+    ``"issue:{key}"``; a parameter left at its default is available too. A
+    function with ordinary parameters is called with keyword arguments
+    (LangChain, Strands, MCP); a function whose only parameter is a dict
+    (the Claude Agent SDK handler shape, ``async def f(args: dict)``)
+    receives all the arguments in that dict, and a ``user`` key in it is
+    ignored, never honoured. ``async def`` is supported and the check then
+    runs in a worker thread.
 
     Any answer other than ``allow`` raises ``PermissionDenied`` before the
     body runs. With ``deny`` given, its return value is returned instead of
@@ -258,19 +291,23 @@ def guarded(
 
     def wrap(fn: F) -> F:
         sig = inspect.signature(fn)
+        one_dict = _takes_one_dict(sig)
 
         def prepare(args: tuple, kwargs: dict):
-            if len(args) == 1 and not kwargs and isinstance(args[0], Mapping):
+            if one_dict:
+                if len(args) != 1 or kwargs or not isinstance(args[0], Mapping):
+                    raise TypeError(f"{fn.__name__} takes one dict of arguments")
                 fields, call = args[0], functools.partial(fn, args[0])
-            elif args:
-                raise TypeError(f"{fn.__name__} takes keyword arguments or one dict of arguments")
             else:
-                sig.bind(**kwargs)  # a stray or missing argument fails here, before any check
-                fields, call = kwargs, functools.partial(fn, **kwargs)
-            who = _resolve(user, "user")
+                if args:
+                    raise TypeError(f"{fn.__name__} takes keyword arguments only")
+                bound = sig.bind(**kwargs)  # a stray or missing argument fails here, before any check
+                bound.apply_defaults()
+                fields, call = bound.arguments, functools.partial(fn, **kwargs)
+            who = current(user, "user")
             if not isinstance(who, str) or not who:
                 raise RuntimeError("guarded: user must be a non-empty string")
-            grp = None if groups is None else _group_list(_resolve(groups, "groups"))
+            grp = None if groups is None else current(groups, "groups")
             return who, grp, resource.format(**fields), call
 
         def refused(e: PermissionDenied):
@@ -300,7 +337,7 @@ def guarded(
                     return refused(e)
                 return call()
 
-        inner.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
+        inner.__signature__ = sig  # type: ignore[attr-defined]
         return inner  # type: ignore[return-value]
 
     return wrap

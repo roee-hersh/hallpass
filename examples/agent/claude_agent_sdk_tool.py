@@ -21,11 +21,11 @@ from typing import Any
 
 from claude_agent_sdk import ToolAnnotations, create_sdk_mcp_server, tool
 
-from hallpass_client import Hallpass, guarded
+from hallpass_client import Hallpass, current, guarded
 
 hp = Hallpass()
 current_user: ContextVar[str] = ContextVar("current_user")
-current_groups: ContextVar[list[str]] = ContextVar("current_groups", default=[])
+current_groups: ContextVar[tuple[str, ...]] = ContextVar("current_groups", default=())
 
 
 def _text(text: str) -> dict[str, Any]:
@@ -42,7 +42,7 @@ def _text(text: str) -> dict[str, Any]:
     annotations=ToolAnnotations(readOnlyHint=True),
 )
 async def check_permission(args: dict[str, Any]) -> dict[str, Any]:
-    d = hp.check(current_user.get(), args["connection"], args["action"], args["resource"], current_groups.get())
+    d = hp.check(current(current_user), args["connection"], args["action"], args["resource"], current(current_groups, "groups"))
     return _text(f"{d.decision}: {d.reason}")
 
 
@@ -58,7 +58,7 @@ async def check_permission(args: dict[str, Any]) -> dict[str, Any]:
 @guarded(hp, "demo", "thing.write", "thing:{thing_id}", user=current_user, groups=current_groups)
 async def write_thing(args: dict[str, Any]) -> dict[str, Any]:
     # The real action goes here, run with the agent's own credential.
-    return _text(f"wrote {len(args['content'])} bytes to thing:{args['thing_id']} as {current_user.get()}")
+    return _text(f"wrote {len(args['content'])} bytes to thing:{args['thing_id']} as {current(current_user)}")
 
 
 server = create_sdk_mcp_server(name="hallpass", version="1.0.0", tools=[check_permission, write_thing])

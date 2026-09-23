@@ -84,15 +84,24 @@ current_user.set(request.user.email)
 What the decorator guarantees:
 
 - The decorated function's signature is exactly the original's. There is no
-  `user` parameter for a framework to expose in the tool schema, and a stray
-  `user` argument is a `TypeError` before any request is made.
+  `user` parameter for a framework to expose in the tool schema. A stray
+  `user` keyword argument is a `TypeError` before any request is made; a
+  `user` key in a dict of arguments is ignored.
 - The check happens before the body, on every call, with the user from the
   application. Any answer other than `allow` raises `PermissionDenied`
   (or returns what `deny` gives) and the body never runs.
-- Keyword arguments (LangChain, Strands, MCP) and one positional dict of
-  arguments (the Claude Agent SDK handler shape) both work.
+- A function with ordinary parameters is called with keyword arguments
+  (LangChain, Strands, MCP). A function whose only parameter is a dict, the
+  Claude Agent SDK handler shape, receives all the arguments in it. The
+  shape is fixed by the signature, so a call in the wrong shape is a
+  `TypeError`, not a check on one resource and an action on another.
 - `async def` is supported. The check then runs in a worker thread, so the
   event loop is not blocked by the HTTP call.
+
+`current(source)` resolves a user or groups source the same way `guarded`
+does, for code outside a guarded function such as a `check_permission` tool;
+a `ContextVar` with nothing set for the session gives a clear error naming
+it.
 
 ## What the model sees on a refusal
 
@@ -233,6 +242,24 @@ claude mcp add hallpass \
   -e HALLPASS_URL=http://localhost:8080 -e HALLPASS_API_KEY=change-me \
   -e AGENT_USER=dana@example.com \
   -- /path/to/.venv/bin/python /path/to/hallpass/examples/agent/mcp_server.py
+```
+
+Or in any host that takes an `mcpServers` JSON block:
+
+```json
+{
+  "mcpServers": {
+    "hallpass": {
+      "command": "/path/to/.venv/bin/python",
+      "args": ["/path/to/hallpass/examples/agent/mcp_server.py"],
+      "env": {
+        "HALLPASS_URL": "http://localhost:8080",
+        "HALLPASS_API_KEY": "change-me",
+        "AGENT_USER": "dana@example.com"
+      }
+    }
+  }
+}
 ```
 
 `AGENT_GROUPS` (comma-separated) passes group memberships.
