@@ -58,6 +58,10 @@ connections:
   #   api_key: env:DATADOG_API_KEY
   #   credential: env:DATADOG_APP_KEY                   # application key scoped to user_access_read, teams_read, *_read
   #   # url: https://api.datadoghq.eu                   # EU site
+  # - id: pagerduty-acme
+  #   integration: pagerduty
+  #   credential: env:PAGERDUTY_API_KEY                 # read-only General Access REST API key
+  #   # url: https://api.eu.pagerduty.com               # EU service region
   # - id: bitbucket-acme
   #   integration: bitbucket
   #   workspace: acme                                   # Cloud: the workspace slug
