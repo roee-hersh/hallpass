@@ -3,6 +3,7 @@ package integration
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -60,6 +61,15 @@ func (t Template) Render(email string) string {
 	local, domain, _ := strings.Cut(email, "@")
 	return strings.NewReplacer("{email}", email, "{local}", local, "{domain}", domain).Replace(string(t))
 }
+
+// emailRe is the shape of an address hallpass accepts as a user: a local
+// part of the RFC 5322 atom characters and a domain of letters, digits,
+// dots and hyphens. It admits no quote, backslash, space or control
+// character, so a validated address is safe inside a query filter.
+var emailRe = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+/=?^_{|}~.-]{1,64}@[A-Za-z0-9.-]{1,255}$`)
+
+// IsEmail reports whether s has the shape of an email address.
+func IsEmail(s string) bool { return emailRe.MatchString(s) }
 
 // EmailDomain returns the lowercased domain of an address, or "" when the
 // address has no domain.

@@ -16,6 +16,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/integrations/microsoft365"
 	"github.com/roee-hersh/hallpass/internal/integrations/salesforce"
 	"github.com/roee-hersh/hallpass/internal/integrations/slack"
+	"github.com/roee-hersh/hallpass/internal/integrations/vault"
 )
 
 // Registry returns a registry with every integration.
@@ -33,5 +34,6 @@ func Registry() *integration.Registry {
 	r.Register(salesforce.Integration{})
 	r.Register(microsoft365.Integration{})
 	r.Register(googleworkspace.Integration{})
+	r.Register(vault.Integration{})
 	return r
 }
