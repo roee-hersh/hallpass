@@ -107,8 +107,10 @@ names that need backtick quoting in SQL are not accepted. A workspace object id 
 | `pipeline.run` | `CAN_RUN` | pipeline |
 | `endpoint.query` | `CAN_QUERY` | endpoint |
 
-Unity Catalog: `ALL_PRIVILEGES` covers every privilege, and the legacy `USAGE` counts as both
-`USE_CATALOG` and `USE_SCHEMA`. Privileges are read from
+Unity Catalog: `ALL_PRIVILEGES` covers every privilege that lives on the securable it was granted on
+and below: granted on the catalog it carries `USE_CATALOG` and `USE_SCHEMA`, granted on a schema it
+carries `USE_SCHEMA` but not `USE_CATALOG`, granted on a table it carries neither. It never includes
+`MANAGE`. The legacy `USAGE` counts as both `USE_CATALOG` and `USE_SCHEMA`. Privileges are read from
 `GET /api/2.1/unity-catalog/effective-permissions/{type}/{name}?max_results=0`, every page, and
 unioned over the user and the user's groups. When they do not cover the action, the securable's
 `owner` is read (`GET /api/2.1/unity-catalog/{tables,schemas,...}/{name}`). Ownership, directly or
@@ -126,14 +128,15 @@ Workspace objects: the ACL is `GET /api/2.0/permissions/{type}/{id}`. A level im
 of its chain (`CAN_ATTACH_TO` < `CAN_RESTART` < `CAN_MANAGE`; `CAN_VIEW` < `CAN_MANAGE_RUN` <
 `IS_OWNER` < `CAN_MANAGE`; `CAN_READ` < `CAN_RUN` < `CAN_EDIT` < `CAN_MANAGE`; `CAN_VIEW` <
 `CAN_QUERY` < `CAN_MANAGE`; warehouses `CAN_VIEW` < `CAN_MONITOR` and `CAN_VIEW` < `CAN_USE`, both
-under `CAN_MANAGE`), and `CAN_MANAGE` and `IS_OWNER` imply everything. `CAN_MONITOR` does not imply
+under `CAN_MANAGE`), and `CAN_MANAGE` and `IS_OWNER` imply everything except `IS_OWNER` itself, which
+names the one owner and is matched exactly (workspace admins included). `CAN_MONITOR` does not imply
 `CAN_USE`. Entries for service principals never match a user.
 
 ## Decisions
 
 | Situation | hallpass answers |
 |---|---|
-| the needed privileges are all held (directly, through a group, or inherited from a parent securable), or `ALL_PRIVILEGES` | allow, saying where they come from |
+| the needed privileges are all held (directly, through a group, or inherited from a parent securable), or covered by an `ALL_PRIVILEGES` grant at the right level | allow, saying where they come from |
 | privileges missing but the user (or a group of theirs) owns the securable | allow ("owns ...") |
 | privileges missing, the owner, but `USE_CATALOG` / `USE_SCHEMA` on a parent missing | deny ("owns ... but lacks ... on its parents") |
 | privileges missing, not the owner, and the listing names a principal other than hallpass | deny, naming the missing privileges |

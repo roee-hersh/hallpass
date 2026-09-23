@@ -385,7 +385,7 @@ type effectiveGrant struct {
 
 // grantListing is what one effective-permissions read yields for the user.
 type grantListing struct {
-	held   map[string]bool
+	held   heldPrivileges
 	grants []effectiveGrant
 	// others is true when some principal other than hallpass itself
 	// appears in the listing: proof that hallpass sees more than its own
@@ -396,7 +396,7 @@ type grantListing struct {
 // readGrants reads every page of the securable's effective permissions and
 // keeps the privileges of the user and of the user's groups.
 func (c *Connection) readGrants(ctx context.Context, q ref, user string, groups []string, self string) (grantListing, error) {
-	out := grantListing{held: map[string]bool{}}
+	out := grantListing{held: newHeld()}
 	path := "/api/2.1/unity-catalog/effective-permissions/" + httpx.PathEscape(q.securable) + "/" + httpx.PathEscape(q.fullName)
 	// max_results=0 asks for the server's page size; every page is followed.
 	query := url.Values{"max_results": {"0"}}
@@ -426,10 +426,15 @@ func (c *Connection) readGrants(ctx context.Context, q ref, user string, groups 
 				continue
 			}
 			for _, p := range a.Privileges {
-				out.held[p.Privilege] = true
-				from := ""
+				from, scope := "", q.securable
 				if p.InheritedFromType != "" {
-					from = strings.ToLower(p.InheritedFromType) + " " + p.InheritedFromName
+					scope = strings.ToLower(p.InheritedFromType)
+					from = scope + " " + p.InheritedFromName
+				}
+				if p.Privilege == privAllPrivileges {
+					out.held.allOn = append(out.held.allOn, scope)
+				} else {
+					out.held.named[p.Privilege] = true
 				}
 				out.grants = append(out.grants, effectiveGrant{p.Privilege, a.Principal, from})
 			}
@@ -473,14 +478,15 @@ func (c *Connection) checkUnityCatalog(ctx context.Context, q ref, user string, 
 	}
 	if owner != "" && principalMatches(owner, user, id.Groups) {
 		// Ownership stands for every privilege on the securable itself,
-		// not for USE_CATALOG or USE_SCHEMA on its parents.
-		held := map[string]bool{}
-		for k := range listing.held {
-			held[k] = true
+		// MANAGE included, not for USE_CATALOG or USE_SCHEMA on its parents.
+		held := newHeld()
+		for k := range listing.held.named {
+			held.named[k] = true
 		}
+		held.allOn = append(held.allOn, listing.held.allOn...)
 		for _, p := range q.privileges {
-			if ownerCovers(q.securable, p) {
-				held[p] = true
+			if covers(q.securable, p, true) {
+				held.named[p] = true
 			}
 		}
 		if ok, _ := satisfiesPrivileges(held, q.privileges); ok {
@@ -498,20 +504,6 @@ func (c *Connection) checkUnityCatalog(ctx context.Context, q ref, user string, 
 	}
 	_, missing := satisfiesPrivileges(listing.held, q.privileges)
 	return integration.Denied("%s lacks %s on %s", user, strings.Join(missing, ", "), raw), nil
-}
-
-// ownerCovers reports whether owning a securable of this type stands for
-// the privilege: everything on the securable itself; USE_CATALOG only when
-// the securable is the catalog, USE_SCHEMA when it is the schema or its
-// catalog.
-func ownerCovers(securable, privilege string) bool {
-	switch privilege {
-	case privUseCatalog:
-		return securable == "catalog"
-	case privUseSchema:
-		return securable == "catalog" || securable == "schema"
-	}
-	return true
 }
 
 // describeGrants renders where the user's privileges come from, briefly.
@@ -607,7 +599,7 @@ func (c *Connection) checkWorkspaceObject(ctx context.Context, q ref, user strin
 		}
 		return integration.Allowed("%s holds %s, which implies %s (%s)", user, by, what, how), nil
 	}
-	if c.adminsRule && id.Attr("admin") == "true" {
+	if c.adminsRule && id.Attr("admin") == "true" && q.level != "IS_OWNER" {
 		return integration.Allowed("%s is a workspace admin, which carries CAN_MANAGE on every object, so %s", user, what), nil
 	}
 	if len(held) == 0 {

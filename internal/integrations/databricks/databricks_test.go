@@ -504,11 +504,32 @@ func TestAction_endpoint_query_deny(t *testing.T) {
 // --- Unity Catalog semantics ------------------------------------------------
 
 func TestAllPrivilegesAndUsage(t *testing.T) {
-	_, _, c := setup(t, nil)
+	_, f, c := setup(t, nil)
 	itest.ExpectCode(t, check(t, c, dana, "table.read", "table:legacy.s.t"), integration.CodeAllowed)
 	itest.ExpectCode(t, check(t, c, dana, "table.write", "table:legacy.s.t"), integration.CodeAllowed)
 	itest.ExpectCode(t, check(t, c, dana, "raw:CREATE_VOLUME", "table:legacy.s.t"), integration.CodeAllowed)
 	itest.ExpectCode(t, check(t, c, eve, "table.read", "table:legacy.s.t"), integration.CodeDenied)
+	// ALL_PRIVILEGES never includes MANAGE.
+	itest.ExpectCode(t, check(t, c, dana, "uc.manage", "table:legacy.s.t"), integration.CodeDenied)
+	// ALL_PRIVILEGES on the table itself, or on the schema, does not carry
+	// USE_CATALOG on the catalog.
+	f.mu.Lock()
+	f.grants["table/legacy.s.t"] = []assignment{{"dana@example.com", []privilege{{name: "ALL_PRIVILEGES"}}}}
+	f.mu.Unlock()
+	d := check(t, c, dana, "table.read", "table:legacy.s.t")
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "lacks USE_SCHEMA, USE_CATALOG") {
+		t.Error(d.Text)
+	}
+	itest.ExpectCode(t, check(t, c, dana, "raw:SELECT", "table:legacy.s.t"), integration.CodeAllowed)
+	f.mu.Lock()
+	f.grants["table/legacy.s.t"] = []assignment{{"dana@example.com", []privilege{{"ALL_PRIVILEGES", "SCHEMA", "legacy.s"}}}}
+	f.mu.Unlock()
+	d = check(t, c, dana, "table.read", "table:legacy.s.t")
+	itest.ExpectCode(t, d, integration.CodeDenied)
+	if !strings.Contains(d.Text, "lacks USE_CATALOG") || strings.Contains(d.Text, "USE_SCHEMA") {
+		t.Error(d.Text)
+	}
 	itest.ExpectCode(t, check(t, c, dana, "table.read", "table:old.s.t"), integration.CodeAllowed)
 	itest.ExpectCode(t, check(t, c, dana, "table.write", "table:old.s.t"), integration.CodeDenied)
 }
@@ -626,6 +647,10 @@ func TestRawActions(t *testing.T) {
 	itest.ExpectCode(t, check(t, c, dana, "raw:CAN_FOO", "cluster:0123-456789-abcde1f2"), integration.CodeInvalidRequest)
 	itest.ExpectCode(t, check(t, c, dana, "raw:CAN_USE", "cluster:0123-456789-abcde1f2"), integration.CodeInvalidRequest)
 	itest.ExpectCode(t, check(t, c, dana, "raw:IS_OWNER", "cluster:0123-456789-abcde1f2"), integration.CodeDenied)
+	// IS_OWNER names the one owner: CAN_MANAGE and admin status do not imply it.
+	itest.ExpectCode(t, check(t, c, dana, "raw:IS_OWNER", "job:43"), integration.CodeAllowed)
+	itest.ExpectCode(t, check(t, c, sam, "raw:IS_OWNER", "job:43"), integration.CodeDenied)
+	itest.ExpectCode(t, check(t, c, dana, "raw:CAN_MANAGE", "job:43"), integration.CodeAllowed)
 	n := len(srv.Calls())
 	for _, bad := range []string{"raw:", "raw:select", "raw:SELECT x", "raw:S", "raw:1SELECT", "SELECT"} {
 		if _, ok := (Integration{}).MatchAction(bad); ok {

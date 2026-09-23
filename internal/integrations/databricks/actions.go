@@ -271,10 +271,17 @@ func levelsOf(chains [][]string) []string {
 
 // satisfiesLevel reports whether one of the held permission levels implies
 // need for an object with the given chains. CAN_MANAGE and IS_OWNER imply
-// every level; within a chain a level implies the ones before it.
+// every level but IS_OWNER itself, which names the one owner; within a
+// chain a level implies the ones before it.
 func satisfiesLevel(held []string, need string, chains [][]string) (bool, string) {
 	for _, h := range held {
-		if h == need || h == "CAN_MANAGE" || h == "IS_OWNER" {
+		if h == need {
+			return true, h
+		}
+		if need == "IS_OWNER" {
+			continue
+		}
+		if h == "CAN_MANAGE" || h == "IS_OWNER" {
 			return true, h
 		}
 		for _, chain := range chains {
@@ -287,21 +294,49 @@ func satisfiesLevel(held []string, need string, chains [][]string) (bool, string
 	return false, ""
 }
 
-// satisfiesPrivileges reports whether the held Unity Catalog privileges
-// cover every needed one. ALL_PRIVILEGES covers everything; the legacy
-// USAGE covers USE_CATALOG and USE_SCHEMA.
-func satisfiesPrivileges(held map[string]bool, need []string) (bool, []string) {
-	if held[privAllPrivileges] {
-		return true, nil
+// heldPrivileges is what the user holds on a securable: named privileges,
+// and the securable types (the securable's own, or an ancestor's) on which
+// ALL_PRIVILEGES was granted.
+type heldPrivileges struct {
+	named map[string]bool
+	// allOn lists the securable types carrying an ALL_PRIVILEGES grant that
+	// reaches this securable: "table" for a grant on the table itself,
+	// "schema" or "catalog" for an inherited one.
+	allOn []string
+}
+
+func newHeld() heldPrivileges { return heldPrivileges{named: map[string]bool{}} }
+
+// covers reports whether a grant of everything on a securable of type scope
+// (ALL_PRIVILEGES there, or ownership of it) stands for the privilege when
+// asked about a descendant. USE_CATALOG lives on the catalog and USE_SCHEMA
+// on the schema, so a grant lower down never carries them. ALL_PRIVILEGES
+// does not include MANAGE; ownership does.
+func covers(scope, privilege string, owner bool) bool {
+	switch privilege {
+	case privUseCatalog:
+		return scope == "catalog"
+	case privUseSchema:
+		return scope == "catalog" || scope == "schema"
+	case privManage:
+		return owner
 	}
+	return true
+}
+
+// satisfiesPrivileges reports whether the held privileges cover every
+// needed one, and which are missing. The legacy USAGE covers USE_CATALOG
+// and USE_SCHEMA.
+func satisfiesPrivileges(held heldPrivileges, need []string) (bool, []string) {
 	var missing []string
 	for _, n := range need {
-		switch {
-		case held[n]:
-		case (n == privUseCatalog || n == privUseSchema) && held[privUsage]:
-		default:
-			missing = append(missing, n)
+		if held.named[n] || ((n == privUseCatalog || n == privUseSchema) && held.named[privUsage]) {
+			continue
 		}
+		if slices.ContainsFunc(held.allOn, func(scope string) bool { return covers(scope, n, false) }) {
+			continue
+		}
+		missing = append(missing, n)
 	}
 	return len(missing) == 0, missing
 }
