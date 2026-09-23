@@ -274,6 +274,7 @@ hallpass check -server https://hallpass.internal -connection jira-main \
 | googlecloud | ready |
 | microsoft365 | ready |
 | salesforce | ready (UNVERIFIED, see docs) |
+| databricks | ready |
 | fake | for smoke tests |
 
 Each integration is documented in `docs/integrations/<name>.md`: the credential to create, the
