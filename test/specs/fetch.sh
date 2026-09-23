@@ -40,6 +40,7 @@ AZ=https://raw.githubusercontent.com/Azure/azure-rest-api-specs/master/specifica
 fetch azure-RoleAssignmentsCalls  $AZ/authorization-RoleAssignmentsCalls.json
 fetch azure-RoleDefinitionsCalls  $AZ/authorization-RoleDefinitionsCalls.json
 fetch azure-DenyAssignmentCalls   $AZ/authorization-DenyAssignmentCalls.json
+fetch google-policytroubleshooter 'https://policytroubleshooter.googleapis.com/$discovery/rest?version=v3'
 # Jira, from the APIs.guru mirror, when the Atlassian host is unreachable.
 [ -f "$DIR/jira.spec" ] || fetch jira https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/atlassian.com/jira/1001.0.0-SNAPSHOT/openapi.yaml
 ls -la "$DIR"
