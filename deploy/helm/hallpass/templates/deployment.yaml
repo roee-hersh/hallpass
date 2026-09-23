@@ -19,7 +19,10 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- end }}
         {{- if .Values.apiKey.value }}
-        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        # Roll the pods when the chart-owned Secret may have changed. Not a
+        # hash of the Secret: that would put a value derived from the key on
+        # an object readable without `get secrets`.
+        release/revision: {{ .Release.Revision | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
