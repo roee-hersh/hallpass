@@ -2,7 +2,8 @@
 
     python3 -m unittest discover -s examples/agent -v
 
-The MCP test runs only when the ``mcp`` package is installed.
+The MCP, LangChain, Claude Agent SDK and Strands tests run only when their
+packages are installed.
 """
 
 from __future__ import annotations
@@ -236,12 +237,20 @@ except ImportError:
 REQUIRE_DEPS = os.environ.get("HALLPASS_EXAMPLE_REQUIRE_DEPS") == "1"
 
 
-def optional(have: bool, what: str):
+def optional(have: bool, what: str, required: bool = True):
+    """Skip a test class when its package is absent. CI requires the packages
+    from requirements.txt; those in requirements-frameworks.txt stay optional."""
     if have:
         return lambda cls: cls
-    if REQUIRE_DEPS:
+    if REQUIRE_DEPS and required:
         raise ImportError(what + " not installed but HALLPASS_EXAMPLE_REQUIRE_DEPS=1")
     return unittest.skip(what + " not installed")
+
+
+def fake_server():
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeHallpass)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, Hallpass("http://127.0.0.1:%d" % server.server_address[1], API_KEY, timeout=2)
 
 
 @optional(HAVE_MCP, "mcp package")
@@ -322,6 +331,67 @@ class LangChainToolTest(unittest.TestCase):
         for thing in ("denied", "timeout"):
             out = self.write.invoke({"thing_id": thing, "content": "hi"})
             self.assertTrue(out.startswith("refused:"), out)
+
+
+try:
+    import claude_agent_sdk  # noqa: F401
+    HAVE_CLAUDE_SDK = True
+except ImportError:
+    HAVE_CLAUDE_SDK = False
+
+try:
+    import strands  # noqa: F401
+    HAVE_STRANDS = True
+except ImportError:
+    HAVE_STRANDS = False
+
+
+@optional(HAVE_CLAUDE_SDK, "claude-agent-sdk package", required=False)
+class ClaudeAgentSDKToolTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server, hp = fake_server()
+        from claude_agent_sdk_tool import make_server, make_tools
+
+        cls.check, cls.write = make_tools("dana@example.com", groups=["platform-team"], hp=hp)
+        cls.config = make_server("dana@example.com", groups=["platform-team"], hp=hp)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_handlers(self):
+        import asyncio
+
+        self.assertEqual((self.check.name, self.write.name), ("check_permission", "write_thing"))
+        out = asyncio.run(self.check.handler({"connection": "demo", "action": "thing.write", "resource": "thing:timeout"}))
+        self.assertTrue(out["content"][0]["text"].startswith("unknown: upstream_timeout"), out)
+        self.assertEqual(FakeHallpass.seen[-1]["body"]["groups"], ["platform-team"])
+        out = asyncio.run(self.write.handler({"thing_id": "allowed", "content": "hi"}))
+        self.assertIn("wrote 2 bytes", out["content"][0]["text"])
+        self.assertNotIn("is_error", out)
+        for thing in ("denied", "timeout"):
+            out = asyncio.run(self.write.handler({"thing_id": thing, "content": "hi"}))
+            self.assertTrue(out["content"][0]["text"].startswith("refused:"), out)
+            self.assertTrue(out["is_error"])
+
+
+@optional(HAVE_STRANDS, "strands-agents package", required=False)
+class StrandsToolTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.hp = fake_server()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_tools_build(self):
+        from strands_tool import make_tools
+
+        check, write = make_tools("dana@example.com", groups=["platform-team"], hp=self.hp)
+        self.assertEqual(check.tool_name, "check_permission")
+        self.assertEqual(write.tool_name, "write_thing")
 
 
 if __name__ == "__main__":

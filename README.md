@@ -84,8 +84,39 @@ curl -X POST localhost:8080/check \
 {"decision":"deny","reason":"denied: dana@example.com is not an admin"}
 ```
 
-To call hallpass from an AI agent, see [`examples/agent`](examples/agent): an MCP server and a
-LangChain tool that check before they act and treat `unknown` as deny.
+## Use from an AI agent
+
+Wrap any tool that acts for a person so it runs only after hallpass said `allow`. The `guarded`
+decorator below lives in [`examples/agent/hallpass_client.py`](examples/agent/hallpass_client.py),
+a single standard-library file you can copy into your project:
+
+```python
+from hallpass_client import Hallpass, guarded
+
+hp = Hallpass()  # HALLPASS_URL and HALLPASS_API_KEY from the environment
+
+@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}")
+def delete_issue(*, user: str, key: str) -> str:
+    jira.delete_issue(key)  # the agent's own credential
+    return f"deleted {key}"
+
+delete_issue(user="dana@example.com", key="PAY-123")  # raises PermissionDenied unless allow
+```
+
+`deny`, `unknown`, an unreachable hallpass and a malformed answer all refuse before the body runs.
+The user is bound by your code when the tools are built, never taken from the model. The same
+directory has the pattern wired into the common agent frameworks, each with a `check_permission`
+tool and a guarded action:
+
+| Framework | Example |
+|---|---|
+| MCP, for any host (Claude Code, Claude Desktop, Cursor, ...) | [`mcp_server.py`](examples/agent/mcp_server.py) |
+| Claude Agent SDK | [`claude_agent_sdk_tool.py`](examples/agent/claude_agent_sdk_tool.py) |
+| Strands Agents | [`strands_tool.py`](examples/agent/strands_tool.py) |
+| LangChain | [`langchain_tool.py`](examples/agent/langchain_tool.py) |
+
+See [`examples/agent/README.md`](examples/agent/README.md) for how to run them against the demo
+connection.
 
 ## API
 

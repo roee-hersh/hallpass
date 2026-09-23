@@ -9,6 +9,8 @@ This directory shows the pattern in two flavours, with one shared client.
 | `hallpass_client.py` | `POST /check` wrapper, standard library only. `unknown`, errors and an unreachable hallpass all count as **not allowed**. |
 | `mcp_server.py` | An MCP server with a `check_permission` tool and a guarded `write_thing` action. |
 | `langchain_tool.py` | The same two tools as LangChain tools, provider-neutral. |
+| `claude_agent_sdk_tool.py` | The same two tools as an in-process MCP server for the Claude Agent SDK. |
+| `strands_tool.py` | The same two tools for Strands Agents. |
 | `test_hallpass_client.py` | Tests against a fake hallpass. `python3 -m unittest discover -s examples/agent` |
 
 ## The rules the code follows
@@ -26,8 +28,8 @@ This directory shows the pattern in two flavours, with one shared client.
    `Location` header names.
 3. **The model does not choose the user.** The person the agent acts for is
    bound when the tools are built (`AGENT_USER` for the MCP server, the
-   argument of `make_tools` for LangChain). A tool argument is text the model
-   produces; the identity behind the session is not.
+   argument of `make_tools` or `make_server` for the frameworks). A tool
+   argument is text the model produces; the identity behind the session is not.
 4. **hallpass only checks.** The action itself still runs with the agent's own
    credential. The `write_thing` bodies are where a real call to Jira, GitHub,
    Kubernetes and so on would go.
@@ -48,11 +50,13 @@ Run the tests (no dependencies):
 python3 -m unittest discover -s examples/agent -v
 ```
 
-Install the optional dependencies for the two agent flavours:
+Install the optional dependencies. `requirements.txt` covers MCP and
+LangChain and is what CI installs; `requirements-frameworks.txt` adds the
+Claude Agent SDK and Strands:
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-pip install -r examples/agent/requirements.txt
+pip install -r examples/agent/requirements.txt -r examples/agent/requirements-frameworks.txt
 ```
 
 ### LangChain
@@ -120,6 +124,42 @@ so `check_permission` and the guarded action always agree.
 
 The tests exercise the MCP and LangChain paths when their packages are
 installed and skip them otherwise; CI installs both.
+
+### Claude Agent SDK
+
+`claude_agent_sdk_tool.py` puts the two tools in an in-process MCP server.
+Build it once per session with the signed-in user and pass it to `query`:
+
+```python
+from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk_tool import make_server
+
+options = ClaudeAgentOptions(
+    mcp_servers={"hallpass": make_server("dana@example.com")},
+    allowed_tools=["mcp__hallpass__check_permission", "mcp__hallpass__write_thing"],
+)
+async for message in query(prompt="Write 'hello' to thing 1.", options=options):
+    ...
+```
+
+A refused `write_thing` comes back with `is_error` set, so the model knows the
+action did not happen. Running the file directly sends that prompt through
+Claude, which needs the Claude Code CLI the SDK drives.
+
+### Strands Agents
+
+`strands_tool.py` returns the two tools for `Agent(tools=...)`:
+
+```python
+from strands import Agent
+from strands_tool import make_tools
+
+agent = Agent(tools=make_tools("dana@example.com"))
+agent("Write 'hello' to thing 1.")
+```
+
+Running the file directly does exactly that with the Strands default model
+provider.
 
 ## Adapting to a real system
 
