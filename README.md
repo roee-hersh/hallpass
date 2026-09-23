@@ -24,7 +24,7 @@ Jira issue or scale a deployment, the bot can, even when Dana could not. Copying
 permission model into your own policy engine drifts out of date the day you write it.
 
 hallpass asks the source of truth instead: Kubernetes `SubjectAccessReview`, Jira's permission API,
-GitHub collaborator roles, AWS IAM policy simulation, and so on. One API, thirteen systems, no
+GitHub collaborator roles, AWS IAM policy simulation, and so on. One API, fourteen systems, no
 synced copy of anyone's permissions.
 
 ```mermaid
@@ -274,6 +274,7 @@ hallpass check -server https://hallpass.internal -connection jira-main \
 | microsoft365 | ready |
 | salesforce | ready (UNVERIFIED, see docs) |
 | zendesk | ready (UNVERIFIED, see docs) |
+| databricks | ready |
 | fake | for smoke tests |
 
 Each integration is documented in `docs/integrations/<name>.md`: the credential to create, the
