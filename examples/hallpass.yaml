@@ -60,6 +60,9 @@ connections:
   #   credential: env:VAULT_TOKEN                       # or auth_mode: approle with role_id and the secret_id as credential
   #   # token_policies: developers                      # policies the oidc role attaches at login
   #   # namespace: admin/
+  # - id: linear-acme
+  #   integration: linear
+  #   credential: env:LINEAR_API_KEY                   # personal API key of a workspace admin, or an OAuth token with auth_mode: oauth
   # - id: zendesk-acme
   #   integration: zendesk
   #   url: https://acme.zendesk.com
