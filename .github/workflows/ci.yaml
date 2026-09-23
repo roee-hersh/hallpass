@@ -29,6 +29,11 @@ jobs:
       - run: go test -race -count=1 ./...
       - run: go build -o /dev/null ./cmd/hallpass
         if: runner.os == 'Linux'
+      - name: agent example
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m pip install --quiet -r examples/agent/requirements.txt
+          HALLPASS_EXAMPLE_REQUIRE_DEPS=1 python3 -m unittest discover -s examples/agent -v
 
   specs:
     # Runs the integration suites with every fake upstream validating requests

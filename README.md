@@ -84,6 +84,9 @@ curl -X POST localhost:8080/check \
 {"decision":"deny","reason":"denied: dana@example.com is not an admin"}
 ```
 
+To call hallpass from an AI agent, see [`examples/agent`](examples/agent): an MCP server and a
+LangChain tool that check before they act and treat `unknown` as deny.
+
 ## API
 
 `POST /check` with a bearer token.
