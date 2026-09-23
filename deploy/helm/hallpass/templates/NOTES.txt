@@ -1,0 +1,26 @@
+hallpass is starting.
+
+  Service:  {{ include "hallpass.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+  Config:   ConfigMap {{ include "hallpass.configMapName" . }}, key hallpass.yaml
+  API key:  Secret {{ include "hallpass.apiKeySecretName" . }}, key {{ .Values.apiKey.key }}
+{{- if .Values.apiKey.value }}
+
+  apiKey.value is set, so the key sits in this release's stored values. For
+  anything beyond a try-out, create a Secret yourself and set
+  apiKey.existingSecret instead.
+{{- end }}
+
+Ask it a question from your machine:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "hallpass.fullname" . }} 8080:{{ .Values.service.port }} &
+  export HALLPASS_API_KEY="$(kubectl -n {{ .Release.Namespace }} get secret {{ include "hallpass.apiKeySecretName" . }} -o jsonpath='{.data.{{ .Values.apiKey.key }}}' | base64 -d)"
+  curl -X POST localhost:8080/check \
+    -H "Authorization: Bearer $HALLPASS_API_KEY" -H 'Content-Type: application/json' \
+    -d '{"user":"dana@example.com","connection":"demo","action":"thing.write","resource":"thing:1"}'
+
+Check the pod: helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+Then replace the demo connection in `config.connections` with your own systems.
+Every credential in the config is an env:NAME or file:/path reference; add the
+variable under extraEnv or mount the Secret under extraVolumes. See
+deploy/helm/hallpass/README.md.
