@@ -396,7 +396,10 @@ func TestDoFresh(t *testing.T) {
 
 	// A fresh caller does not join a fill in flight, and the older fill
 	// finishing later does not replace the fresh answer.
-	c.SetClock(func() time.Time { return time.Now() })
+	var clockMu sync.Mutex
+	clock := time.Now()
+	c.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
+	tick := func() { clockMu.Lock(); clock = clock.Add(time.Millisecond); clockMu.Unlock() }
 	started := make(chan struct{})
 	release := make(chan struct{})
 	slow := func(ctx context.Context) (int, time.Duration, error) {
@@ -407,7 +410,7 @@ func TestDoFresh(t *testing.T) {
 	slowDone := make(chan struct{})
 	go func() { defer close(slowDone); c.Do(ctx, "slow", slow) }()
 	<-started
-	time.Sleep(2 * time.Millisecond) // the clock must move past the slow fill's start
+	tick() // the fresh read begins after the slow fill's start
 	done := make(chan int, 1)
 	go func() {
 		v, _ := c.Do(evidence.WithFresh(ctx), "slow", func(context.Context) (int, time.Duration, error) { return 7, time.Minute, nil })
@@ -438,7 +441,7 @@ func TestDoFresh(t *testing.T) {
 	slowDone2 := make(chan struct{})
 	go func() { defer close(slowDone2); c.Do(ctx, "order", slow2) }()
 	<-started2
-	time.Sleep(2 * time.Millisecond)
+	tick()
 	fstarted2 := make(chan struct{})
 	frelease2 := make(chan struct{})
 	freshDone2 := make(chan struct{})
@@ -462,19 +465,20 @@ func TestDoFresh(t *testing.T) {
 		t.Fatalf("fresh answer lost to an older read that stored first: %v %v", v, ok)
 	}
 	// Store (the engine's decision cache) follows the same rule.
-	c.Store("order", 1, time.Minute, time.Now().Add(-time.Hour))
+	c.Store("order", 1, time.Minute, clock.Add(-time.Hour))
 	if v, _ := c.Get("order"); v != 7 {
 		t.Fatal("Store replaced a newer entry")
 	}
-	c.Store("order", 2, time.Minute, time.Now())
+	tick()
+	c.Store("order", 2, time.Minute, clock)
 	if v, _ := c.Get("order"); v != 2 {
 		t.Fatal("Store did not replace an older entry")
 	}
-	c.Store("order", 3, 0, time.Now().Add(-time.Hour))
+	c.Store("order", 3, 0, clock.Add(-time.Hour))
 	if _, ok := c.Get("order"); !ok {
 		t.Fatal("Store with ttl 0 dropped a newer entry")
 	}
-	c.Store("order", 3, 0, time.Now())
+	c.Store("order", 3, 0, clock)
 	if _, ok := c.Get("order"); ok {
 		t.Fatal("Store with ttl 0 kept an older entry")
 	}
@@ -483,9 +487,6 @@ func TestDoFresh(t *testing.T) {
 	// it runs joins it, a fresh one within the join window shares it, one
 	// arriving later reads again, and the ordinary fill's own waiter
 	// still gets that fill's answer.
-	var clockMu sync.Mutex
-	clock := time.Now()
-	c.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
 	var freshFills atomic.Int32
 	ostarted := make(chan struct{})
 	orelease := make(chan struct{})
@@ -541,9 +542,9 @@ func TestDoFresh(t *testing.T) {
 		t.Fatalf("an older read replaced the latest fresh answer: %d", v)
 	}
 
-	// A fresh fill drops the entry it supersedes as it starts, so an
-	// ordinary caller arriving while it runs waits for it rather than
-	// reading the old entry.
+	// While a fresh read is in flight an ordinary caller waits for it
+	// rather than taking the entry it supersedes; the entry stays for the
+	// case the fresh read fails.
 	c.Set("drop", 1, time.Minute)
 	dstarted := make(chan struct{})
 	drelease := make(chan struct{})
@@ -567,23 +568,45 @@ func TestDoFresh(t *testing.T) {
 	if v := <-got; v != 2 {
 		t.Fatalf("ordinary caller got %d, want the fresh read's 2", v)
 	}
+
+	// With a fresh max age, a fresh caller takes an entry younger than it
+	// and reads again past it.
+	aged := New[string, int](0)
+	aged.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
+	aged.SetFreshMaxAge(time.Minute)
+	var agedFills atomic.Int32
+	agedFill := func(context.Context) (int, time.Duration, error) { return int(agedFills.Add(1)), time.Hour, nil }
+	actx, arec := evidence.WithRecorder(evidence.WithFresh(ctx))
+	if v, _ := aged.Do(actx, "k", agedFill); v != 1 {
+		t.Fatal(v)
+	}
+	if v, _ := aged.Do(actx, "k", agedFill); v != 1 || agedFills.Load() != 1 {
+		t.Fatalf("young entry not taken by a fresh caller: v=%d fills=%d", v, agedFills.Load())
+	}
+	if calls := arec.Evidence().Calls(); len(calls) != 0 {
+		t.Fatalf("no calls were recorded, got %+v", calls)
+	}
+	clockMu.Lock()
+	clock = clock.Add(time.Minute)
+	clockMu.Unlock()
+	if v, _ := aged.Do(actx, "k", agedFill); v != 2 || agedFills.Load() != 2 {
+		t.Fatalf("aged entry served to a fresh caller: v=%d fills=%d", v, agedFills.Load())
+	}
 	// A panic in a fresh fill is a PanicError, like any other.
 	var pe *PanicError
 	if _, err := c.Do(evidence.WithFresh(ctx), "boom", func(context.Context) (int, time.Duration, error) { panic("x") }); !errors.As(err, &pe) {
 		t.Fatalf("fresh panic: %v", err)
 	}
 
-	// A fresh lookup drops the entry it supersedes as it starts, so a
-	// failed one leaves none (the next caller reads again rather than
-	// being served what the fresh caller doubted), and a fresh answer
-	// with ttl 0 stores none.
+	// A failed fresh lookup stores nothing and leaves the entry for
+	// ordinary callers; a fresh answer with ttl 0 removes it.
+	c.Set("k", 2, time.Minute)
 	if _, err := c.Do(evidence.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 0, time.Minute, errors.New("x") }); err == nil {
 		t.Fatal("no error")
 	}
-	if _, ok := c.Get("k"); ok {
-		t.Fatal("entry kept across a failed fresh lookup")
+	if v, ok := c.Get("k"); !ok || v != 2 {
+		t.Fatal("entry lost on a failed fresh lookup")
 	}
-	c.Set("k", 2, time.Minute)
 	if v, err := c.Do(evidence.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 9, 0, nil }); err != nil || v != 9 {
 		t.Fatal(v, err)
 	}

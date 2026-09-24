@@ -144,6 +144,7 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	}
 	c.saml = cache.New[struct{}, *samlIndex](1)
 	c.saml.SetClock(c.now)
+	c.saml.SetFreshMaxAge(samlFreshMaxAge)
 	if c.mode == "" {
 		c.mode = modeSAML
 	}

@@ -109,24 +109,24 @@ func (e *Evidence) flatten() ([]Call, bool) {
 	if e == nil {
 		return nil, false
 	}
-	var all []Call
-	truncated := e.walk(&all, Own)
-	excess := len(all) - MaxCalls
-	if excess <= 0 {
-		return all, truncated
-	}
-	// Drop the oldest cached calls first, then the oldest of the rest,
-	// in one pass.
-	cached := 0
-	for _, c := range all {
+	// A counting pass decides what the cap drops (the oldest cached calls
+	// first, then the oldest of the rest); the second pass keeps only the
+	// survivors, so nothing beyond the cap is ever materialized.
+	total, cached := 0, 0
+	truncated := e.walk(Own, func(c Call) {
+		total++
 		if c.Cached {
 			cached++
 		}
+	})
+	dropCached, dropLive := 0, 0
+	if excess := total - MaxCalls; excess > 0 {
+		truncated = true
+		dropCached = min(excess, cached)
+		dropLive = excess - dropCached
 	}
-	dropCached := min(excess, cached)
-	dropLive := excess - dropCached
-	out := make([]Call, 0, MaxCalls)
-	for _, c := range all {
+	out := make([]Call, 0, min(total, MaxCalls))
+	e.walk(Own, func(c Call) {
 		switch {
 		case c.Cached && dropCached > 0:
 			dropCached--
@@ -135,13 +135,13 @@ func (e *Evidence) flatten() ([]Call, bool) {
 		default:
 			out = append(out, c)
 		}
-	}
-	return out, true
+	})
+	return out, truncated
 }
 
-// walk appends e's calls to out with by applied, and reports whether any
+// walk visits e's calls in order with by applied, and reports whether any
 // segment on the way was truncated.
-func (e *Evidence) walk(out *[]Call, by Origin) bool {
+func (e *Evidence) walk(by Origin, visit func(Call)) bool {
 	if e == nil {
 		return false
 	}
@@ -154,7 +154,7 @@ func (e *Evidence) walk(out *[]Call, by Origin) bool {
 			} else if by == Shared && inner == Own {
 				inner = Shared
 			}
-			if it.src.walk(out, inner) {
+			if it.src.walk(inner, visit) {
 				truncated = true
 			}
 			continue
@@ -166,7 +166,7 @@ func (e *Evidence) walk(out *[]Call, by Origin) bool {
 		case Shared:
 			c.Shared = !c.Cached
 		}
-		*out = append(*out, c)
+		visit(c)
 	}
 	return truncated
 }

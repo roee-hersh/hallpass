@@ -16,11 +16,12 @@ import (
 // TTL is a bounded, time-limited map. Zero or negative TTLs disable storage
 // but Do still collapses concurrent fills.
 type TTL[K comparable, V any] struct {
-	mu       sync.Mutex
-	items    map[K]entry[V]
-	inflight map[K]*call[V]
-	max      int
-	now      func() time.Time
+	mu          sync.Mutex
+	items       map[K]entry[V]
+	inflight    map[K]*call[V]
+	max         int
+	now         func() time.Time
+	freshMaxAge time.Duration
 }
 
 type entry[V any] struct {
@@ -71,6 +72,16 @@ func New[K comparable, V any](max int) *TTL[K, V] {
 		max:      max,
 		now:      time.Now,
 	}
+}
+
+// SetFreshMaxAge lets a fresh check take an entry read less than d ago
+// instead of reading again. For a bulk listing (an organization's whole
+// identity index) that a fresh check has no business re-paging every
+// time; zero, the default, means a fresh check always reads again.
+func (c *TTL[K, V]) SetFreshMaxAge(d time.Duration) {
+	c.mu.Lock()
+	c.freshMaxAge = d
+	c.mu.Unlock()
 }
 
 // SetClock replaces the time source. Tests use it.
@@ -195,14 +206,14 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // cached lookup still shows what the upstream said when the lookup was
 // made.
 //
-// Under a fresh context (evidence.WithFresh) Do does not read the cache
-// and does not wait on an ordinary fill: it starts its own, which drops
-// the entry and takes over the key so ordinary callers arriving while it
-// runs join it, and its answer replaces the entry unless an even later
-// read stored one first. A fresh read that fails leaves no entry: the
-// next caller reads again rather than being served what the fresh caller
-// doubted. Fresh callers arriving within FreshJoinWindow of a fresh
-// fill's start share it; later ones read again.
+// Under a fresh context (evidence.WithFresh) Do does not take the entry
+// (unless SetFreshMaxAge allows an entry that young) and does not wait on
+// an ordinary fill: it starts its own, which takes over the key so
+// ordinary callers arriving while it runs join it rather than take the
+// entry, and its answer replaces the entry unless an even later read
+// stored one first. A fresh read that fails leaves the entry as it was
+// for ordinary callers. Fresh callers arriving within FreshJoinWindow of
+// a fresh fill's start share it; later ones read again.
 //
 // The fill runs in its own goroutine on a context detached from the first
 // caller's cancellation (see Detach) rather than on ctx itself: otherwise
@@ -214,27 +225,28 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
 	rec := evidence.RecorderFrom(ctx)
 	fresh := evidence.Fresh(ctx)
-	if !fresh {
-		if v, ev, ok := c.get(k); ok {
-			rec.Add(ev, evidence.Cached)
-			return v, nil
-		}
-	}
 	c.mu.Lock()
 	now := c.now()
 	cl, ok := c.inflight[k]
+	// The entry answers an ordinary caller unless a fresh read is in
+	// flight, which it joins instead; a fresh caller takes an entry only
+	// while it is younger than the cache's fresh max age.
+	if !(ok && cl.fresh) {
+		if e, hit := c.getLocked(k); hit && (!fresh || (c.freshMaxAge > 0 && now.Sub(e.started) < c.freshMaxAge)) {
+			c.mu.Unlock()
+			rec.Add(e.ev, evidence.Cached)
+			return e.v, nil
+		}
+	}
 	leader := !ok || (fresh && !(cl.fresh && now.Sub(cl.started) < FreshJoinWindow))
 	if leader {
 		// A fresh caller does not wait on an ordinary fill, which may have
 		// begun long before it, nor on a fresh one older than the window;
-		// its own fill takes over the key and drops the entry, so callers
-		// after it join a read at least as new as the fresh one. The
-		// earlier fill's waiters keep their call.
+		// its own fill takes over the key, so callers after it join a
+		// read at least as new as the fresh one. The earlier fill's
+		// waiters keep their call.
 		cl = &call[V]{done: make(chan struct{}), started: now, fresh: fresh}
 		c.inflight[k] = cl
-		if fresh {
-			delete(c.items, k)
-		}
 		fctx, cancel := Detach(ctx, DefaultFillTimeout)
 		fctx, cl.rec = evidence.WithRecorder(fctx)
 		go func() {
@@ -269,15 +281,25 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 func (c *TTL[K, V]) get(k K) (V, *evidence.Evidence, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	e, ok := c.getLocked(k)
+	if !ok {
+		var zero V
+		return zero, nil, false
+	}
+	return e.v, e.ev, true
+}
+
+// getLocked returns k's entry when present and not expired, dropping an
+// expired one.
+func (c *TTL[K, V]) getLocked(k K) (entry[V], bool) {
 	e, ok := c.items[k]
 	if !ok || !c.now().Before(e.exp) {
 		if ok {
 			delete(c.items, k)
 		}
-		var zero V
-		return zero, nil, false
+		return entry[V]{}, false
 	}
-	return e.v, e.ev, true
+	return e, true
 }
 
 // fill runs one fill for k, then always removes the inflight entry and

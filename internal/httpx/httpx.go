@@ -388,10 +388,11 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 	if max <= 0 {
 		max = MaxBody
 	}
-	// The body is hashed as it is read, only when someone will record it.
+	// The body is hashed as it is read, only when someone will record it
+	// and the response carries no ETag to stand for its version.
 	var rd io.Reader = io.LimitReader(res.Body, max+1)
 	var digest hash.Hash
-	if evidence.RecorderFrom(ctx) != nil {
+	if evidence.RecorderFrom(ctx) != nil && !validETag(strings.TrimSpace(res.Header.Get("ETag"))) {
 		digest = sha256.New()
 		rd = io.TeeReader(rd, digest)
 	}
@@ -484,7 +485,7 @@ func evidenceOf(r *Response) evidence.Call {
 // validETag accepts an entity tag of printable ASCII (RFC 9110 etagc plus
 // the W/ prefix and quotes) of a sane length.
 func validETag(s string) bool {
-	if len(s) > maxETag {
+	if s == "" || len(s) > maxETag {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
