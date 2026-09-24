@@ -139,6 +139,8 @@ describe("client", () => {
     });
     await hp.check(DANA, "demo", "thing.write", "thing:allowed", null, false);
     assert.equal("fresh" in fake.lastRequest(), false);
+    // fresh in the groups slot is a clear error, not a request.
+    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", true as unknown as string[]), /fresh is the argument after groups/);
   });
 
   test("require and allowed", async () => {

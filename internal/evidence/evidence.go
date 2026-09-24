@@ -1,14 +1,24 @@
 // Package evidence ties a decision to the upstream state it was computed
 // from: what each check asked the upstream and what the upstream answered,
 // carried on the context so httpx and the caches can record and replay it.
+// It also holds the other per-check context marks (fresh) and the one
+// predicate for a context having ended, so the packages on a check's way
+// share them without depending on each other.
 package evidence
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"sync"
 )
+
+// ContextEnded reports whether err is a context ending (cancelled or past
+// its deadline), as opposed to a failure of the work itself.
+func ContextEnded(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
 
 // Call is one completed upstream request.
 type Call struct {

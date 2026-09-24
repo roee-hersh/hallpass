@@ -28,7 +28,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -362,8 +361,10 @@ func (c *Client) do(ctx context.Context, r *Request) (*Response, error) {
 		}
 		if err := c.sleep(ctx, wait); err != nil {
 			// The response that was going to be retried is what the
-			// caller is told about, so it is what the evidence records.
-			return resp, lastErr
+			// caller is told about, so it is what the evidence records;
+			// the context's end travels with it, so a cache waiter can
+			// tell a spent deadline from an upstream failure.
+			return resp, errors.Join(err, lastErr)
 		}
 	}
 }
@@ -528,7 +529,7 @@ func retryable(err error) bool {
 		}
 		return false
 	}
-	if cache.ContextEnded(err) || errors.Is(err, ErrBodyTooLarge) {
+	if evidence.ContextEnded(err) || errors.Is(err, ErrBodyTooLarge) {
 		return false
 	}
 	var te *transportError

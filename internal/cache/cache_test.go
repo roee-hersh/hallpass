@@ -309,7 +309,7 @@ func TestDoEvidence(t *testing.T) {
 	for c.inflightCount() != 1 {
 		time.Sleep(time.Millisecond)
 	}
-	time.Sleep(20 * time.Millisecond) // let the waiter reach Do's select
+	c.awaitWaiters(t, "slow", 1, 0)
 	close(release)
 	wg.Wait()
 	// The leader made the call; the waiter joined it: shared, not cached.
@@ -357,7 +357,47 @@ func TestDoEvidence(t *testing.T) {
 func (c *TTL[K, V]) inflightCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.inflight)
+	return len(c.inflight) + len(c.fresh)
+}
+
+// awaitWaiters spins until k's ordinary and fresh fills have that many
+// waiters each, so a test releases a fill only once the callers it wants
+// on it have joined.
+func (c *TTL[K, V]) awaitWaiters(t *testing.T, k K, ordinary, fresh int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		o, f := 0, 0
+		if cl, ok := c.inflight[k]; ok {
+			o = cl.waiters
+		}
+		if cl, ok := c.fresh[k]; ok {
+			f = cl.waiters
+		}
+		c.mu.Unlock()
+		if o >= ordinary && f >= fresh {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("waiters on %v did not arrive", k)
+}
+
+// awaitFresh spins until k has (or no longer has) a fresh fill in flight.
+func (c *TTL[K, V]) awaitFresh(t *testing.T, k K, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		_, ok := c.fresh[k]
+		c.mu.Unlock()
+		if ok == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("fresh fill on %v: in flight = %v, want %v", k, !want, want)
 }
 
 // Under a fresh context Do looks the value up again, ignoring the entry
@@ -483,10 +523,10 @@ func TestDoFresh(t *testing.T) {
 		t.Fatal("Store with ttl 0 kept an older entry")
 	}
 
-	// A fresh fill takes over the key: an ordinary caller arriving while
-	// it runs joins it, a fresh one within the join window shares it, one
-	// arriving later reads again, and the ordinary fill's own waiter
-	// still gets that fill's answer.
+	// Fresh fills are kept apart from ordinary ones: an ordinary caller
+	// joins the ordinary fill in flight, a fresh one within the join
+	// window shares the fresh fill, one arriving later reads again, and
+	// the latest read's answer is what the cache keeps.
 	var freshFills atomic.Int32
 	ostarted := make(chan struct{})
 	orelease := make(chan struct{})
@@ -517,7 +557,7 @@ func TestDoFresh(t *testing.T) {
 	go func() { v, _ := c.Do(ctx, "join", another); joined <- v }()
 	freshJoined := make(chan int, 1)
 	go func() { v, _ := c.Do(evidence.WithFresh(ctx), "join", another); freshJoined <- v }()
-	time.Sleep(20 * time.Millisecond) // let both reach Do's select
+	c.awaitWaiters(t, "join", 1, 1)
 	clockMu.Lock()
 	clock = clock.Add(FreshJoinWindow)
 	clockMu.Unlock()
@@ -525,9 +565,6 @@ func TestDoFresh(t *testing.T) {
 		t.Fatalf("late fresh caller joined a fill older than the window: v=%d fills=%d", v, freshFills.Load())
 	}
 	close(frelease)
-	if v := <-joined; v != 11 {
-		t.Fatalf("ordinary caller did not join the fresh fill: %d", v)
-	}
 	if v := <-freshJoined; v != 11 {
 		t.Fatalf("fresh caller within the window did not share the fresh fill: %d", v)
 	}
@@ -535,48 +572,43 @@ func TestDoFresh(t *testing.T) {
 		t.Fatalf("fresh fill: v=%d", v)
 	}
 	close(orelease)
+	if v := <-joined; v != 10 {
+		t.Fatalf("ordinary caller did not join the ordinary fill: %d", v)
+	}
 	if v := <-ordinaryDone; v != 10 {
-		t.Fatalf("ordinary waiter lost its fill: %d", v)
+		t.Fatalf("ordinary leader lost its fill: %d", v)
 	}
 	if v, _ := c.Get("join"); v != 12 {
 		t.Fatalf("an older read replaced the latest fresh answer: %d", v)
 	}
 
-	// While a fresh read is in flight an ordinary caller waits for it
-	// rather than taking the entry it supersedes; the entry stays for the
-	// case the fresh read fails.
-	c.Set("drop", 1, time.Minute)
+	// An ordinary caller with a valid entry takes it even while a fresh
+	// read is in flight, and never waits on it.
+	c.Set("keep", 1, time.Minute)
 	dstarted := make(chan struct{})
 	drelease := make(chan struct{})
-	go c.Do(evidence.WithFresh(ctx), "drop", func(context.Context) (int, time.Duration, error) {
+	go c.Do(evidence.WithFresh(ctx), "keep", func(context.Context) (int, time.Duration, error) {
 		close(dstarted)
 		<-drelease
 		return 2, time.Minute, nil
 	})
 	<-dstarted
-	got := make(chan int, 1)
-	go func() {
-		v, _ := c.Do(ctx, "drop", func(context.Context) (int, time.Duration, error) { return 3, time.Minute, nil })
-		got <- v
-	}()
-	select {
-	case v := <-got:
-		t.Fatalf("ordinary caller answered %d while a fresh read was in flight", v)
-	case <-time.After(30 * time.Millisecond):
+	if v, _ := c.Do(ctx, "keep", func(context.Context) (int, time.Duration, error) { return 3, time.Minute, nil }); v != 1 {
+		t.Fatalf("ordinary caller got %d while a fresh read was in flight, want the entry's 1", v)
 	}
 	close(drelease)
-	if v := <-got; v != 2 {
-		t.Fatalf("ordinary caller got %d, want the fresh read's 2", v)
+	c.awaitFresh(t, "keep", false)
+	if v, _ := c.Get("keep"); v != 2 {
+		t.Fatalf("fresh answer not stored: %d", v)
 	}
-	// When the fresh read it joined fails, the ordinary caller takes the
-	// entry, which the failure left in place; the fresh caller gets the
-	// error.
-	c.Set("dropfail", 1, time.Minute)
+	// With no entry and no ordinary fill, an ordinary caller joins the
+	// fresh read (shared); when that read fails it gets the failure,
+	// unless an entry has landed meanwhile.
 	fstart := make(chan struct{})
 	ffail := make(chan struct{})
 	ferr := make(chan error, 1)
 	go func() {
-		_, err := c.Do(evidence.WithFresh(ctx), "dropfail", func(context.Context) (int, time.Duration, error) {
+		_, err := c.Do(evidence.WithFresh(ctx), "joinfail", func(context.Context) (int, time.Duration, error) {
 			close(fstart)
 			<-ffail
 			return 0, 0, errors.New("upstream")
@@ -585,21 +617,42 @@ func TestDoFresh(t *testing.T) {
 	}()
 	<-fstart
 	octx, orec := evidence.WithRecorder(ctx)
-	ogot := make(chan int, 1)
+	ogot := make(chan error, 1)
 	go func() {
-		v, _ := c.Do(octx, "dropfail", func(context.Context) (int, time.Duration, error) { return 3, time.Minute, nil })
-		ogot <- v
+		_, err := c.Do(octx, "joinfail", func(context.Context) (int, time.Duration, error) { return 3, time.Minute, nil })
+		ogot <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
+	c.awaitWaiters(t, "joinfail", 0, 1)
 	close(ffail)
 	if err := <-ferr; err == nil {
 		t.Fatal("fresh caller did not get the error")
 	}
-	if v := <-ogot; v != 1 {
-		t.Fatalf("ordinary caller got %d after the fresh read failed, want the entry's 1", v)
+	if err := <-ogot; err == nil {
+		t.Fatal("ordinary caller that joined the failed fresh read got no error")
 	}
 	if ev := orec.Evidence(); ev != nil && len(ev.Calls()) != 0 {
 		t.Fatalf("ordinary caller's evidence: %+v", ev.Calls())
+	}
+	// Same, but an entry lands (from an ordinary fill) before the fresh
+	// read fails: the ordinary caller takes the entry.
+	fstart2 := make(chan struct{})
+	ffail2 := make(chan struct{})
+	go c.Do(evidence.WithFresh(ctx), "landed", func(context.Context) (int, time.Duration, error) {
+		close(fstart2)
+		<-ffail2
+		return 0, 0, errors.New("upstream")
+	})
+	<-fstart2
+	got2 := make(chan int, 1)
+	go func() {
+		v, _ := c.Do(ctx, "landed", func(context.Context) (int, time.Duration, error) { return 3, time.Minute, nil })
+		got2 <- v
+	}()
+	c.awaitWaiters(t, "landed", 0, 1)
+	c.Set("landed", 4, time.Minute)
+	close(ffail2)
+	if v := <-got2; v != 4 {
+		t.Fatalf("ordinary caller got %d, want the entry that landed", v)
 	}
 
 	// With a fresh max age, a fresh caller takes an entry younger than it
@@ -641,7 +694,7 @@ func TestDoFresh(t *testing.T) {
 	clockMu.Unlock()
 	shared := make(chan int, 1)
 	go func() { v, _ := aged.Do(evidence.WithFresh(ctx), "share", agedFill); shared <- v }()
-	time.Sleep(20 * time.Millisecond)
+	aged.awaitWaiters(t, "share", 0, 1)
 	close(arelease)
 	if v := <-shared; v != 10 || agedFills.Load() != 3 {
 		t.Fatalf("fresh caller within the max age did not share the fill: v=%d fills=%d", v, agedFills.Load())

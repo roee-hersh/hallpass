@@ -244,6 +244,9 @@ function isLoopback(hostname: string): boolean {
 }
 
 function groupList(groups: readonly string[]): string[] {
+  if (typeof groups === "boolean") {
+    throw new TypeError("groups must be an array of strings; fresh is the argument after groups (pass null for no groups)");
+  }
   if (typeof groups === "string" || !Array.isArray(groups) || !groups.every((g) => typeof g === "string")) {
     throw new TypeError("groups must be an array of strings");
   }
