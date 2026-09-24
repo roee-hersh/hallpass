@@ -14,7 +14,7 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    files: [LICENSE, README.md, examples/hallpass.yaml]
+    files: [LICENSE, README.md, docs/operating.md, docs/testing.md, examples/hallpass.yaml]
 
 checksum:
   name_template: checksums.txt

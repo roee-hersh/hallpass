@@ -18,7 +18,7 @@ go vet ./...
 ```
 
 CI also runs contract tests against vendor OpenAPI descriptions, a Kubernetes end-to-end run on
-kind and an Argo CD differential test. See the Testing section of the README to run them locally.
+kind and an Argo CD differential test. See [docs/testing.md](docs/testing.md) to run them locally.
 
 ## Adding an integration
 
