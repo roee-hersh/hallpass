@@ -493,8 +493,13 @@ func TestEvidence(t *testing.T) {
 	if _, err := oc.Do(octx, &Request{Path: srv.URL + "/empty"}); err != nil {
 		t.Fatal(err)
 	}
-	if ev := orec.Evidence(); len(ev.Calls()) != 2 || ev.Calls()[0].Host != strings.TrimPrefix(other.URL, "https://") || ev.Calls()[1].Host != "" {
-		t.Fatalf("host evidence: %+v", ev)
+	// A client with no base names no host: the call is the connection's.
+	oc.Base = ""
+	if _, err := oc.Do(octx, &Request{Path: other.URL + "/elsewhere"}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := orec.Evidence(); len(ev.Calls()) != 3 || ev.Calls()[0].Host != strings.TrimPrefix(other.URL, "https://") || ev.Calls()[1].Host != "" || ev.Calls()[2].Host != "" {
+		t.Fatalf("host evidence: %+v", ev.Calls())
 	}
 	// The base host in another spelling (case, an explicit default port)
 	// is still the base host.

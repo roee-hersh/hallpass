@@ -929,4 +929,44 @@ func TestDoWaiterRefillsAfterLeaderDeadline(t *testing.T) {
 	if got, ok := c.Get("k"); !ok || got != 2 {
 		t.Fatal("waiter's answer not stored")
 	}
+
+	// The refill runs on the waiter's own fill: a third caller's short
+	// deadline in flight at that moment does not fail it.
+	c2 := New[string, int](0)
+	var fills2 atomic.Int32
+	slowFill := func(ctx context.Context) (int, time.Duration, error) {
+		n := int(fills2.Add(1))
+		select {
+		case <-ctx.Done():
+			return 0, 0, ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+			return n, time.Minute, nil
+		}
+	}
+	shortCtx, cancel2 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel2()
+	go c2.Do(shortCtx, "k", slowFill)
+	for c2.inflightCount() != 1 {
+		time.Sleep(time.Millisecond)
+	}
+	// Another short-deadline leader keeps starting fills the waiter would
+	// otherwise join on its refill.
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			sctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			c2.Do(sctx, "k", slowFill)
+			cancel()
+		}
+	}()
+	v2, err2 := c2.Do(context.Background(), "k", slowFill)
+	close(stop)
+	if err2 != nil || v2 == 0 {
+		t.Fatalf("waiter failed by a stranger's deadline: v=%d err=%v", v2, err2)
+	}
 }

@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"log/slog"
 	"math/rand/v2"
@@ -187,10 +186,8 @@ type Response struct {
 	Header http.Header
 	Body   []byte
 	// method, path and host describe the request, for the evidence
-	// record; host is empty for a call to the client's own base host, and
-	// digest is the body's SHA-256 when a recorder was listening.
+	// record; host is empty for a call to the client's own base host.
 	method, path, host string
-	digest             []byte
 }
 
 // JSON decodes the body into v.
@@ -389,15 +386,7 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 	if max <= 0 {
 		max = MaxBody
 	}
-	// The body is hashed as it is read, only when someone will record it
-	// and the response carries no ETag to stand for its version.
-	var rd io.Reader = io.LimitReader(res.Body, max+1)
-	var digest hash.Hash
-	if evidence.RecorderFrom(ctx) != nil && !validETag(strings.TrimSpace(res.Header.Get("ETag"))) {
-		digest = sha256.New()
-		rd = io.TeeReader(rd, digest)
-	}
-	body, err := io.ReadAll(rd)
+	body, err := io.ReadAll(io.LimitReader(res.Body, max+1))
 	if err != nil {
 		c.logCall(req, res.StatusCode, start, err)
 		return nil, &transportError{err: err}
@@ -408,9 +397,6 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 	}
 	c.logCall(req, res.StatusCode, start, nil)
 	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body, method: req.Method, path: req.URL.EscapedPath()}
-	if digest != nil && len(body) > 0 {
-		out.digest = digest.Sum(nil)
-	}
 	if absolute(r.Path) {
 		out.host = c.foreignHost(req.URL)
 	}
@@ -433,14 +419,12 @@ func absolute(p string) bool {
 
 // foreignHost returns u's host when it is not the client's base host, for
 // the evidence record of a request made with a full URL, and "" when it is
-// the base host. A relative path is always the base host, so this is not
-// on that path's way.
+// the base host or the client has no base (a plain client an integration
+// points at its own connection's URL). A relative path is always the base
+// host, so this is not on that path's way.
 func (c *Client) foreignHost(u *url.URL) string {
 	base := c.baseURL()
-	if base == nil {
-		return u.Host
-	}
-	if sameHost(base, u) {
+	if base == nil || sameHost(base, u) {
 		return ""
 	}
 	return u.Host
@@ -471,14 +455,15 @@ const maxETag = 128
 
 // evidenceOf describes one completed response for the decision log: method,
 // path (no query), the host when it is not the client's own, status, and
-// the ETag or the body's SHA-256, computed while the body was read. The
-// body itself and every other header stay out.
+// the ETag or the body's SHA-256. The body itself and every other header
+// stay out. Only the response Do returns is hashed, once.
 func evidenceOf(r *Response) evidence.Call {
 	c := evidence.Call{Method: r.method, Path: r.path, Host: r.host, Status: r.Status}
-	if etag := strings.TrimSpace(r.Header.Get("ETag")); etag != "" && validETag(etag) {
+	if etag := strings.TrimSpace(r.Header.Get("ETag")); validETag(etag) {
 		c.ETag = etag
-	} else if len(r.digest) > 0 {
-		c.SHA256 = hex.EncodeToString(r.digest)
+	} else if len(r.Body) > 0 {
+		sum := sha256.Sum256(r.Body)
+		c.SHA256 = hex.EncodeToString(sum[:])
 	}
 	return c
 }
@@ -634,9 +619,6 @@ func Classify(err error) *integration.Error {
 	}
 	if errors.Is(err, ErrBodyTooLarge) {
 		return integration.Wrap(integration.CodeUpstreamError, err, "upstream response too large")
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return integration.Wrap(integration.CodeUpstreamTimeout, err, "upstream call timed out")
 	}
 	var te *transportError
 	if errors.As(err, &te) {

@@ -233,18 +233,21 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
 	rec := evidence.RecorderFrom(ctx)
 	fresh := evidence.Fresh(ctx)
-	v, err, again := c.do(ctx, k, fill, rec, fresh, true)
+	v, err, again := c.do(ctx, k, fill, rec, fresh, false)
 	if again {
 		// The fill this caller waited on ended with its leader's
-		// deadline; one round more, on the caller's own.
-		v, err, _ = c.do(ctx, k, fill, rec, fresh, false)
+		// deadline; one round more, on a fill of the caller's own.
+		v, err, _ = c.do(ctx, k, fill, rec, fresh, true)
 	}
 	return v, err
 }
 
 // do is one round of Do. again asks for another round: the caller waited
 // on a fill that ended with its leader's deadline and may refill, once.
-func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error), rec *evidence.Recorder, fresh, mayRefill bool) (v V, err error, again bool) {
+// On that round, own makes the caller run its own fill rather than join
+// one in flight, which may be running on another short deadline; the
+// fill is not registered, so no one else waits on it.
+func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error), rec *evidence.Recorder, fresh, own bool) (v V, err error, again bool) {
 	c.mu.Lock()
 	now := c.now()
 	// The entry answers an ordinary caller; a fresh caller takes it only
@@ -268,23 +271,29 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 	// its own. An ordinary caller joins the ordinary fill in flight, or,
 	// when there is none, a fresh one.
 	var cl *call[V]
-	if fresh {
+	switch {
+	case own:
+	case fresh:
 		if fc, ok := c.fresh[k]; ok && now.Sub(fc.started) < c.freshWindow() {
 			cl = fc
 		} else if oc, ok := c.inflight[k]; ok && now.Sub(oc.started) < c.freshMaxAge {
 			cl = oc
 		}
-	} else if oc, ok := c.inflight[k]; ok {
-		cl = oc
-	} else if fc, ok := c.fresh[k]; ok {
-		cl = fc
+	default:
+		if oc, ok := c.inflight[k]; ok {
+			cl = oc
+		} else if fc, ok := c.fresh[k]; ok {
+			cl = fc
+		}
 	}
 	leader := cl == nil
 	if leader {
 		cl = &call[V]{done: make(chan struct{}), started: now, fresh: fresh}
-		if fresh {
+		switch {
+		case own:
+		case fresh:
 			c.fresh[k] = cl
-		} else {
+		default:
 			c.inflight[k] = cl
 		}
 		fctx, cancel := Detach(ctx, DefaultFillTimeout)
@@ -318,7 +327,7 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 					return e.v, nil, false
 				}
 			}
-			if !leader && mayRefill && ctx.Err() == nil && evidence.ContextEnded(cl.err) {
+			if !leader && !own && ctx.Err() == nil && evidence.ContextEnded(cl.err) {
 				// The fill ran on the leader's remaining deadline and
 				// ended because of it; this caller still has time, so it
 				// fills again with its own. What the ended fill did
@@ -327,7 +336,13 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 				return v, nil, true
 			}
 		}
-		rec.AddAt(cl.ev, by, cl.readAt)
+		// A fresh caller that joined a read accepted it as current, like
+		// an entry it takes under the window: dated by its arrival.
+		readAt := cl.readAt
+		if fresh && !leader {
+			readAt = now
+		}
+		rec.AddAt(cl.ev, by, readAt)
 		return cl.v, cl.err, false
 	case <-ctx.Done():
 		return v, ctx.Err(), false
