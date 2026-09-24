@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -64,13 +63,16 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	if !ok {
 		return nil, fmt.Errorf("kubernetes_connection %q is not a kubernetes connection", s.Get("kubernetes_connection"))
 	}
-	return &Connection{
+	c := &Connection{
 		k8s:         k8s,
 		namespace:   s.Get("namespace"),
 		rbacCM:      s.Get("rbac_configmap"),
 		userSubject: s.Get("user_subject"),
 		now:         d.Now,
-	}, nil
+		policies:    cache.New[struct{}, *bundle](1),
+	}
+	c.policies.SetClock(c.now)
+	return c, nil
 }
 
 // Connection is one Argo CD installation.
@@ -81,10 +83,8 @@ type Connection struct {
 	userSubject string
 	now         func() time.Time
 
-	mu      sync.Mutex
-	bundle  *bundle
-	loaded  time.Time
-	loading *loadCall
+	// policies holds the one policy bundle under the empty key.
+	policies *cache.TTL[struct{}, *bundle]
 }
 
 // bundle is everything read from the cluster, parsed once.
@@ -123,71 +123,19 @@ type projectList struct {
 	} `json:"items"`
 }
 
-// loadCall is one shared fetch; done closes once b and err are set.
-type loadCall struct {
-	done chan struct{}
-	b    *bundle
-	err  error
-}
-
-// defaultLoadTimeout bounds a policy fetch whose caller's context has no
-// deadline.
-const defaultLoadTimeout = 30 * time.Second
-
 // load returns the cached policy bundle or fetches it once, sharing the
-// result with concurrent callers.
-//
-// The shared fetch runs in its own goroutine on a context detached from the
-// first caller's cancellation (cache.Detach): otherwise that caller going
-// away would abort the fetch and hand every waiter a context.Canceled that
-// is not theirs. Each caller stops waiting when its own ctx is done. A
-// panic in fetch becomes a *cache.PanicError for everyone waiting on it.
+// result with concurrent callers (cache.TTL.Do: a fetch runs on a context
+// detached from the first caller's cancellation, a panic in it becomes a
+// *cache.PanicError for everyone waiting, and its evidence is replayed to
+// every check the bundle serves).
 func (c *Connection) load(ctx context.Context) (*bundle, error) {
-	c.mu.Lock()
-	if c.bundle != nil && c.now().Sub(c.loaded) < policyCacheTTL {
-		b := c.bundle
-		c.mu.Unlock()
-		return b, nil
-	}
-	lc := c.loading
-	if lc == nil {
-		lc = &loadCall{done: make(chan struct{})}
-		c.loading = lc
-		fctx, cancel := cache.Detach(ctx, defaultLoadTimeout)
-		go func() {
-			defer cancel()
-			c.runLoad(lc, fctx)
-		}()
-	}
-	c.mu.Unlock()
-	select {
-	case <-lc.done:
-		return lc.b, lc.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return c.policies.Do(ctx, struct{}{}, c.fillBundle)
 }
 
-// runLoad runs one fetch for lc, then always clears the inflight call and
-// closes lc.done, whether fetch returned, panicked or called runtime.Goexit.
-func (c *Connection) runLoad(lc *loadCall, ctx context.Context) {
-	returned := false
-	defer func() {
-		if r := recover(); r != nil {
-			lc.b, lc.err = nil, &cache.PanicError{Value: r, Stack: debug.Stack()}
-		} else if !returned {
-			lc.b, lc.err = nil, errors.New("policy fetch exited without returning")
-		}
-		c.mu.Lock()
-		c.loading = nil
-		if lc.err == nil {
-			c.bundle, c.loaded = lc.b, c.now()
-		}
-		c.mu.Unlock()
-		close(lc.done)
-	}()
-	lc.b, lc.err = c.fetch(ctx)
-	returned = true
+// fillBundle is the cache fill: one fetch, kept for policyCacheTTL.
+func (c *Connection) fillBundle(ctx context.Context) (*bundle, time.Duration, error) {
+	b, err := c.fetch(ctx)
+	return b, policyCacheTTL, err
 }
 
 func (c *Connection) fetch(ctx context.Context) (*bundle, error) {
@@ -370,10 +318,10 @@ func who(subject string, groups []string) string {
 
 // Probe reads the policy and reports what it found.
 func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error) {
-	c.mu.Lock()
-	c.bundle = nil
-	c.mu.Unlock()
-	b, err := c.load(ctx)
+	// The probe reads the cluster itself, whatever the cache holds: what
+	// it finds replaces the bundle, evidence included, and a failure
+	// leaves the bundle checks are being answered from.
+	b, err := c.policies.Refresh(ctx, struct{}{}, c.fillBundle)
 	if err != nil {
 		return integration.ProbeResult{}, err
 	}

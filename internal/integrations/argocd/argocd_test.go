@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/cache"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integration/itest"
 	"github.com/roee-hersh/hallpass/internal/integrations/kubernetes"
@@ -244,6 +245,21 @@ func TestPolicyCacheAndFailures(t *testing.T) {
 	check(t, c, dev, "app.sync", "applications:dev/web")
 	if cl.reads != reads {
 		t.Fatal("policy re-read within the cache window")
+	}
+	// A fresh check re-reads the policy inside the window (once it is
+	// more than a second old) and the next check is served from what it
+	// read.
+	*now = now.Add(2 * time.Second)
+	if _, err := c.(*Connection).load(evidence.WithFresh(context.Background())); err != nil {
+		t.Fatal(err)
+	}
+	if cl.reads == reads {
+		t.Fatal("policy not re-read for a fresh check")
+	}
+	reads = cl.reads
+	check(t, c, dev, "app.sync", "applications:dev/web")
+	if cl.reads != reads {
+		t.Fatal("fresh read not stored")
 	}
 	*now = now.Add(policyCacheTTL + time.Second)
 	check(t, c, dev, "app.sync", "applications:dev/web")

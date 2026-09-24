@@ -49,6 +49,39 @@ hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
 decision with the code `client_error`. Pass `groups=[...]` for systems that
 grant by group, such as Kubernetes.
 
+Pass `fresh=True` for an answer straight from the upstream system. hallpass
+caches allow and deny answers for 30 seconds by default; a fresh check
+skips its caches for that one request and asks now, then stores what it
+learned so reads keep using the cache. Make it the default for destructive
+actions (delete, merge, scale):
+
+```python
+hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", fresh=True)
+jira.delete_issue("PAY-123")
+```
+
+A fresh check narrows the window between the check and the action to the
+time between the two; it does not close it. Closing it needs a conditional
+write in the upstream system (for example `If-Match` with an ETag), which
+only some APIs support. A hallpass built before `fresh` existed rejects a
+request that carries it, which the clients report as `unknown`: upgrade the
+service before turning `fresh` on.
+
+hallpass never sees the write itself, so `guarded` records it: after the
+body has run it logs one line on the Python logger `hallpass` (INFO) with
+the decision and reason, the time the check was made, whether it was fresh,
+and that the write was unconditional, with no `If-Match` on the state
+hallpass saw. Nobody reading the logs later should take check and write for
+one atomic step. A refused call logs nothing; a body that raises still
+logs, since the write may have happened.
+
+```
+unconditional write: dana@example.com ran DELETE_ISSUES on issue:PAY-123 in jira-main;
+hallpass said allow (allowed: dana may delete issues in PAY) at 2026-09-24T10:00:00.412+00:00,
+fresh=True; the write was not conditioned on the state hallpass saw (no If-Match),
+so check and write were not atomic
+```
+
 ## The `guarded` decorator
 
 `guarded` wraps a function so that its body runs only after hallpass allowed
@@ -62,11 +95,14 @@ hp = Hallpass()
 current_user: ContextVar[str] = ContextVar("current_user")
 
 @tool  # LangChain, Strands, MCPServer, ...
-@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user)
+@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
 def delete_issue(key: str) -> str:
     jira.delete_issue(key)  # the agent's own credential
     return f"deleted {key}"
 ```
+
+`fresh=True` is right for a destructive tool like this one: the check asks
+the upstream system now instead of a cached answer.
 
 Your application sets `current_user` for the session before the agent runs:
 
@@ -82,6 +118,7 @@ current_user.set(request.user.email)
 | `user` | Where the acting user comes from: a string, a zero-argument callable, or a `ContextVar`. Resolved on every call. Never read from the arguments. |
 | `groups` | The user's groups, from the same kinds of source. Must yield a list. |
 | `deny` | Optional. Called with the `PermissionDenied`; its return value is returned instead of raising. For frameworks that hide an exception's text from the model. |
+| `fresh` | Optional. `True` makes every check skip hallpass's caches and ask the upstream system now. Use it for delete, merge and scale-type actions. |
 
 What the decorator guarantees:
 
@@ -343,7 +380,14 @@ d.allowed;  // true only for allow
 
 await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123");
 // rejects with PermissionDenied unless the answer is allow
+
+await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", { fresh: true });
+// fresh: skips hallpass's caches and asks Jira now, for a destructive action
 ```
+
+The fifth argument of `check`, `allowed` and `require` is the user's groups
+or an options object, `{ groups, fresh }`, with the meaning described for
+the Python client above.
 
 Every Node agent framework calls a tool with one object of arguments, so
 `guarded` wraps a function of that shape and returns one with the same
@@ -358,7 +402,7 @@ const session = new AsyncLocalStorage<{ user: string; groups?: string[] }>();
 const user = () => current(session).user;
 const groups = () => current(session).groups ?? [];
 
-const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user })(
+const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user, fresh: true })(
   async ({ key }: { key: string }) => {
     await jira.deleteIssue(key); // the agent's own credential
     return `deleted ${key}`;
@@ -372,6 +416,8 @@ app.post("/chat", auth, (req, res) =>
 
 A `user` key the model puts in the arguments is ignored; a call whose
 arguments cannot fill the template makes no request and runs nothing.
+`fresh: true` in the options makes every check ask the upstream system now,
+right for a destructive tool like this one.
 
 ### Vercel AI SDK
 

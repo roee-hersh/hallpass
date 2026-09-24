@@ -61,13 +61,16 @@ decides anything. The rules, and where each is enforced:
 - **Per resource, from the source of truth.** Each check names one resource (`issue:PAY-123`,
   `namespace:payments`) and is answered live by the system that owns it, with a read-only credential.
 - **Every decision is logged** as a JSON line: user, connection, action, resource, decision, reason,
-  and whether it came from the cache.
+  whether it came from the cache, and the evidence: the upstream calls the decision was based on,
+  each with its ETag or a hash of the response. See [Decision log](#decision-log).
 
 Not goals, on purpose:
 
 - **Human approval.** For destructive actions, add a confirmation step in the agent *after* an `allow`.
 - **Atomicity.** It is a check before the action, not a transaction; permissions can change in
-  between. Answers are cached for 30 seconds by default (`decision_cache_seconds: 0` disables it).
+  between. Answers are cached for 30 seconds by default (`decision_cache_seconds: 0` disables it);
+  a check with `"fresh": true` skips the caches and asks the upstream system now, which narrows
+  the window but does not close it.
 - **Proving who the user is.** hallpass answers "may *this* user…"; authenticating the user is your
   agent's job.
 
@@ -178,7 +181,60 @@ it acts as. [docs/agents.md](docs/agents.md) explains the pattern; [`examples/ag
 `deny` means the third-party system positively said no. Anything hallpass could not evaluate is
 `unknown`. Callers should treat `unknown` as deny.
 
+The request also accepts `"fresh": true`. A fresh check skips every cache for that one request,
+the decision cache, the identity cache and the lookups an integration caches itself (role
+definitions, policies), and asks the upstream system now; what it learns replaces the cached
+entries, so reads keep using the cache. Use it for destructive actions (delete, merge, scale),
+where a 30-second-old answer is not good enough, and not for reads: a fresh check costs every
+upstream call an uncached check makes (for Argo CD, the policy config maps and the project list;
+for Vault, the policies involved; for Snowflake, the grants of every role in the hierarchy).
+Lookups that are not permission state are reused for as long as any check reuses them: GitHub's
+organization-wide SAML identity listing (the permission read after it is live anyway), AWS
+Identity Center's role inventory and permission set names, Salesforce's object and field
+describes, and hallpass's own principal name in Databricks. Fresh checks share
+a lookup one of them has in flight (an identity, a role's permissions, a policy) and one read
+less than a second ago; a fresh answer is one from reads in flight when the caller asked or begun
+no more than a second before. Maps hallpass reads from a local file
+(`role_map_file`, `user_map_file`) are re-read on their own schedule, not per fresh check. A fresh
+check narrows the window between the check and the action to the time between the two; it does
+not close it. Closing it needs a conditional write in the upstream system (for example `If-Match`
+with an ETag), which only some APIs support. A hallpass built before `fresh` existed rejects a
+request that carries it (`invalid_request: unknown field "fresh"`, which the clients report as
+`unknown`), so upgrade the service before turning it on in agents.
+
 `GET /healthz` returns `{"status":"ok"}` without authentication.
+
+## Decision log
+
+Every answered check is one JSON line in `decision_log` (a path, `stderr`, `stdout` or `none`):
+
+```json
+{"time":"2026-09-23T10:00:00Z","connection":"github-acme","user":"dana@example.com",
+ "action":"repo.create","resource":"org:acme","decision":"allow","code":"allowed",
+ "reason":"dana is a member of organization acme, whose members may create repositories",
+ "cached":false,"duration_ms":212,"status":200,"remote":"10.0.3.7",
+ "evidence":{"upstream":[
+   {"method":"GET","path":"/users/dana","status":200,"etag":"W/\"a1b2c3\"","cached":true},
+   {"method":"GET","path":"/orgs/acme/memberships/dana","status":200,"etag":"W/\"d4e5f6\""},
+   {"method":"GET","path":"/orgs/acme","status":200,"sha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}]}}
+```
+
+`reason` says what the decision was based on; `evidence` ties it to the exact upstream state. Each
+entry under `upstream` is one call the decision was computed from: the method and path (never the
+query string, which may carry user data), the host only when the call went to a host other than the
+connection's own base URL or to an instance the vendor named at login (some vendors spread an API
+over several hosts), the HTTP status, and the
+response's `ETag` when the upstream sent one, else the SHA-256 of the response body.
+Response bodies, other headers and credentials are never logged; the token exchange an integration
+makes to authenticate is not evidence and is left out. A call marked `cached` was not made for this
+check: its result was served from a stored cache entry (the identity cache, or a lookup the
+integration keeps such as a role definition or a policy), and the entry shows the evidence recorded
+when the call was made. A call marked `shared` was made by a concurrent check whose lookup this one
+joined: live during this check, but not asked for by it. A decision served from the decision cache
+has `cached: true` and carries the evidence of the check that produced it, every call marked
+`cached`. `fresh: true` marks a check that skipped the caches on the caller's
+request. The list is capped at 100 calls; past it the oldest calls are dropped, replayed ones
+first, so the calls that decided the check are kept, and `truncated: true` says some were dropped.
 
 ## Configuration
 
@@ -227,7 +283,7 @@ carries a commented example for every integration.
 | `hallpass validate -config FILE` | Check the file, credential references and certificates. No network |
 | `hallpass probe -config FILE [-connection ID]` | Call each system with its credential and report |
 | `hallpass check -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]` | Answer one question from the command line |
-| `hallpass check -server URL [-api-key REF] [-ca-file PEM] [-timeout D] ...` | Ask a running hallpass the same question |
+| `hallpass check -server URL [-api-key REF] [-ca-file PEM] [-timeout D] [-fresh] ...` | Ask a running hallpass the same question; `-fresh` skips its caches |
 | `hallpass catalog [INTEGRATION]` | List integrations, config keys and actions |
 
 At startup `serve` probes every connection and logs warnings. A broken connection never stops the
@@ -345,9 +401,11 @@ made only of validated pieces before it reaches a URL or query; CI runs them nig
 - hallpass's credential should be read-only wherever the product allows it. The per-integration
   docs say exactly what to grant and where a product forces a broader grant.
 - Request and response bodies of upstream calls are never logged. Secrets print as `[REDACTED]`.
-- The decision log is JSON lines, one per answered check.
+- The decision log is JSON lines, one per answered check, each with the evidence (path, status,
+  ETag or body hash) of the upstream calls the decision was computed from.
 - Allow and deny answers are cached for 30 seconds by default; unknown answers are never cached.
-  Both caches key on the connection, the user and the exact list of groups the caller sent.
+  Both caches key on the connection, the user and the exact list of groups the caller sent. A
+  request with `"fresh": true` bypasses every cache for itself and refreshes their entries.
 
 ## License
 

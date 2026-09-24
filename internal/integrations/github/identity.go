@@ -3,15 +3,12 @@ package github
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
-	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -26,6 +23,10 @@ const (
 const (
 	// samlCacheTTL is how long the full external-identity map is reused.
 	samlCacheTTL = 10 * time.Minute
+	// A fresh check uses the map for as long as anyone: it is an
+	// organization's whole identity listing, paged, and a link between an
+	// address and a login is not what a fresh check is about; the
+	// permission read that follows is always live.
 	// mapFileTTL is the shortest interval between two reads of user_map_file.
 	mapFileTTL = 60 * time.Second
 )
@@ -217,73 +218,18 @@ type samlIndex struct {
 	total     int
 }
 
-// samlLoad is one in-flight listing shared by every caller that arrives
-// while it runs. done is closed once idx and err are set.
-type samlLoad struct {
-	done chan struct{}
-	idx  *samlIndex
-	err  error
-}
-
 // samlMap returns the index of every external identity, loading it at most
-// every samlCacheTTL. Concurrent callers share one fetch and its outcome;
-// only when that fetch ended because the loader's own context ended do the
-// waiters fetch again with theirs.
+// every samlCacheTTL. Concurrent callers share one fetch (cache.TTL.Do: it
+// runs on a context detached from the first caller's cancellation, so a
+// waiter is never failed by the leader going away). A panic in the listing
+// becomes an unknown decision for everyone waiting on it rather than
+// unwinding through the engine, which logs it with its stack.
 func (c *Connection) samlMap(ctx context.Context) (*samlIndex, error) {
-	c.samlMu.Lock()
-	if c.samlIndex != nil && c.now().Sub(c.samlLoaded) < samlCacheTTL {
-		idx := c.samlIndex
-		c.samlMu.Unlock()
-		return idx, nil
-	}
-	if ld := c.samlLoading; ld != nil {
-		c.samlMu.Unlock()
-		select {
-		case <-ld.done:
-			if ld.err != nil && (errors.Is(ld.err, context.Canceled) || errors.Is(ld.err, context.DeadlineExceeded)) {
-				return c.samlMap(ctx)
-			}
-			return ld.idx, ld.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	ld := &samlLoad{done: make(chan struct{})}
-	c.samlLoading = ld
-	c.samlMu.Unlock()
-	c.runSAMLLoad(ctx, ld)
-	return ld.idx, ld.err
-}
-
-// runSAMLLoad performs the fetch for ld and publishes its outcome. The
-// deferred block runs whether the fetch returned, panicked or called
-// runtime.Goexit: it records the result, clears the in-flight marker and
-// closes done, so a panic can never leave later callers waiting on a load
-// that will not finish. The panic becomes a *cache.PanicError (wrapped as
-// an unknown decision) for this caller and the waiters rather than
-// unwinding through the engine. The log line names the panic's type, not
-// its value, which may quote upstream data.
-func (c *Connection) runSAMLLoad(ctx context.Context, ld *samlLoad) {
-	returned := false
-	defer func() {
-		if r := recover(); r != nil {
-			c.logger.Error("github: SAML identity listing panicked", "organization", c.org, "type", fmt.Sprintf("%T", r), "stack", string(debug.Stack()))
-			ld.idx, ld.err = nil, integration.Wrap(integration.CodeUpstreamError, &cache.PanicError{Value: r, Stack: debug.Stack()}, "the SAML identity listing failed unexpectedly")
-		} else if !returned {
-			ld.idx, ld.err = nil, integration.Errorf(integration.CodeUpstreamError, "the SAML identity listing exited without returning")
-		}
-		c.samlMu.Lock()
-		if c.samlLoading == ld {
-			c.samlLoading = nil
-		}
-		if ld.err == nil && ld.idx != nil {
-			c.samlIndex, c.samlLoaded = ld.idx, c.now()
-		}
-		c.samlMu.Unlock()
-		close(ld.done)
-	}()
-	ld.idx, ld.err = c.fetchSAMLMap(ctx)
-	returned = true
+	idx, err := c.saml.Do(ctx, struct{}{}, func(ctx context.Context) (*samlIndex, time.Duration, error) {
+		idx, err := c.fetchSAMLMap(ctx)
+		return idx, samlCacheTTL, err
+	})
+	return idx, err
 }
 
 // fetchSAMLMap lists every external identity. Two linked identities that

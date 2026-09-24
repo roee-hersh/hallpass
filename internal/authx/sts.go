@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/cache"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 )
 
@@ -158,7 +159,9 @@ func (p *CachedProvider) Credentials(ctx context.Context) (AWSCredentials, error
 	if cc == nil {
 		cc = &credsCall{done: make(chan struct{})}
 		p.inflight = cc
-		fctx, cancel := cache.Detach(ctx, defaultFetchTimeout)
+		// Credentials are not evidence for a decision: never record the
+		// calls that fetch them.
+		fctx, cancel := cache.Detach(evidence.WithoutRecorder(ctx), defaultFetchTimeout)
 		go func() {
 			defer cancel()
 			p.fetch(cc, fctx)

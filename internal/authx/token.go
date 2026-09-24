@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/cache"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 )
 
 // Token is a bearer token with its expiry.
@@ -66,7 +67,9 @@ func (s *TokenSource) Get(ctx context.Context) (string, error) {
 	if fc == nil {
 		fc = &fetchCall{done: make(chan struct{})}
 		s.inflght = fc
-		fctx, cancel := cache.Detach(ctx, defaultFetchTimeout)
+		// A token exchange is not evidence for a decision and its
+		// response carries the credential: never record it.
+		fctx, cancel := cache.Detach(evidence.WithoutRecorder(ctx), defaultFetchTimeout)
 		go func() {
 			defer cancel()
 			s.fetch(fc, fctx, now)

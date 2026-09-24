@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/authx"
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/catalog"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
@@ -176,6 +177,14 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	if c.now == nil {
 		c.now = time.Now
 	}
+	c.desc = cache.New[struct{}, map[string]bool](1)
+	c.desc.SetClock(c.now)
+	c.objects = cache.New[string, bool](0)
+	c.objects.SetClock(c.now)
+	// Describes are schema, not permission state: a fresh check does not
+	// re-read them.
+	c.desc.SetFreshMaxAge(describeTTL)
+	c.objects.SetFreshMaxAge(describeTTL)
 	if c.url == "" {
 		return nil, errors.New("url is required")
 	}
@@ -230,18 +239,11 @@ type Connection struct {
 	instMu      sync.Mutex
 	instanceURL string
 
-	descMu     sync.Mutex
-	descFields map[string]bool
-	descAt     time.Time
-
-	objMu   sync.Mutex
-	objects map[string]objectState // sObject describe results, by API name
-}
-
-// objectState is one cached answer of the sObject describe.
-type objectState struct {
-	exists bool
-	at     time.Time
+	// desc is the PermissionSet describe's PermissionsXxx field names,
+	// under the empty key; objects is whether each sObject exists, by API
+	// name. Both are kept for describeTTL.
+	desc    *cache.TTL[struct{}, map[string]bool]
+	objects *cache.TTL[string, bool]
 }
 
 // --- authentication ---------------------------------------------------------
@@ -582,32 +584,28 @@ func queryInto[T any](ctx context.Context, c *Connection, soql string) ([]T, err
 // permissionFields returns the PermissionsXxx field names of PermissionSet
 // from its describe, cached for an hour.
 func (c *Connection) permissionFields(ctx context.Context) (map[string]bool, error) {
-	c.descMu.Lock()
-	defer c.descMu.Unlock()
-	if c.descFields != nil && c.now().Before(c.descAt.Add(describeTTL)) {
-		return c.descFields, nil
-	}
-	var desc struct {
-		Fields []struct {
-			Name string `json:"name"`
-		} `json:"fields"`
-	}
-	// UNVERIFIED: the describe lists one boolean field per system or app
-	// permission, named PermissionsXxx.
-	if err := c.get(ctx, "/services/data/"+c.version+"/sobjects/PermissionSet/describe", nil, &desc); err != nil {
-		return nil, classify(err, "the PermissionSet describe")
-	}
-	fields := map[string]bool{}
-	for _, f := range desc.Fields {
-		if permNameRe.MatchString(f.Name) {
-			fields[f.Name] = true
+	return c.desc.Do(ctx, struct{}{}, func(ctx context.Context) (map[string]bool, time.Duration, error) {
+		var desc struct {
+			Fields []struct {
+				Name string `json:"name"`
+			} `json:"fields"`
 		}
-	}
-	if len(fields) == 0 {
-		return nil, integration.Errorf(integration.CodeUpstreamError, "the PermissionSet describe listed no PermissionsXxx fields")
-	}
-	c.descFields, c.descAt = fields, c.now()
-	return fields, nil
+		// UNVERIFIED: the describe lists one boolean field per system or app
+		// permission, named PermissionsXxx.
+		if err := c.get(ctx, "/services/data/"+c.version+"/sobjects/PermissionSet/describe", nil, &desc); err != nil {
+			return nil, 0, classify(err, "the PermissionSet describe")
+		}
+		fields := map[string]bool{}
+		for _, f := range desc.Fields {
+			if permNameRe.MatchString(f.Name) {
+				fields[f.Name] = true
+			}
+		}
+		if len(fields) == 0 {
+			return nil, 0, integration.Errorf(integration.CodeUpstreamError, "the PermissionSet describe listed no PermissionsXxx fields")
+		}
+		return fields, describeTTL, nil
+	})
 }
 
 // --- identity ---------------------------------------------------------------
@@ -992,29 +990,23 @@ func queryAssigned[T any](ctx context.Context, c *Connection, uid string, build 
 // hour. A 404 is reported as an unknown decision; any other failure is an
 // error.
 func (c *Connection) objectExists(ctx context.Context, name string) (integration.Decision, bool, error) {
-	c.objMu.Lock()
-	if c.objects == nil {
-		c.objects = map[string]objectState{}
-	}
-	st, ok := c.objects[name]
-	c.objMu.Unlock()
-	if !ok || !c.now().Before(st.at.Add(describeTTL)) {
+	exists, err := c.objects.Do(ctx, name, func(ctx context.Context) (bool, time.Duration, error) {
 		// UNVERIFIED: the describe of an object that does not exist, or that
 		// the integration user cannot see at all, is a 404 NOT_FOUND.
 		err := c.get(ctx, "/services/data/"+c.version+"/sobjects/"+httpx.PathEscape(name)+"/describe", nil, nil)
 		switch {
 		case err == nil:
-			st = objectState{exists: true, at: c.now()}
+			return true, describeTTL, nil
 		case apiStatus(err) == http.StatusNotFound:
-			st = objectState{exists: false, at: c.now()}
+			return false, describeTTL, nil
 		default:
-			return integration.Decision{}, false, classify(err, "the describe of "+name)
+			return false, 0, classify(err, "the describe of "+name)
 		}
-		c.objMu.Lock()
-		c.objects[name] = st
-		c.objMu.Unlock()
+	})
+	if err != nil {
+		return integration.Decision{}, false, err
 	}
-	if !st.exists {
+	if !exists {
 		return integration.UnknownDecision(integration.CodeResourceNotVisible, "object %s does not exist or is not visible to the integration user", name), false, nil
 	}
 	return integration.Decision{}, true, nil

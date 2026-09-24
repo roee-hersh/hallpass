@@ -3,6 +3,9 @@ package httpx
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -15,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
 
@@ -382,5 +386,178 @@ func TestSlowHeadersWithinTimeout(t *testing.T) {
 		if !tc.ok && Classify(err).Code != integration.CodeUpstreamTimeout {
 			t.Errorf("timeout %v: got %v, want upstream_timeout", tc.timeout, Classify(err))
 		}
+	}
+}
+
+// Every completed response is recorded as evidence on the context's
+// recorder: method, path, status and the ETag or the body's hash. The
+// query, the headers and the body stay out, and a token exchange made from
+// Auth is not recorded at all.
+func TestEvidence(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Write([]byte(`{"access_token":"` + canary + `-token"}`))
+		case "/etag":
+			w.Header().Set("ETag", `W/"v7"`)
+			w.Write([]byte(`{"a":1}`))
+		case "/badetag":
+			w.Header().Set("ETag", strings.Repeat("x", 200))
+			w.Write([]byte(`{"a":1}`))
+		case "/plain":
+			w.Write([]byte(`{"secret":"` + canary + `-body"}`))
+		case "/empty":
+			w.WriteHeader(204)
+		case "/denied":
+			w.WriteHeader(403)
+			w.Write([]byte(`{"message":"no"}`))
+		}
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv, &bytes.Buffer{})
+	// Auth fetches a token through a plain client, as integrations do.
+	plain := newTestClient(t, srv, &bytes.Buffer{})
+	c.Auth = BearerAuth(func(ctx context.Context) (string, error) {
+		var tok struct {
+			AccessToken string `json:"access_token"`
+		}
+		if _, err := plain.PostJSON(ctx, "/token", map[string]string{}, &tok, true); err != nil {
+			return "", err
+		}
+		return tok.AccessToken, nil
+	})
+	ctx, rec := evidence.WithRecorder(context.Background())
+	for _, p := range []string{"/etag", "/badetag", "/plain", "/empty"} {
+		if _, err := c.Do(ctx, &Request{Path: p + "?token=" + canary + "-q", Header: http.Header{"X-Secret": {canary + "-h"}}}); err != nil {
+			t.Fatal(p, err)
+		}
+	}
+	if _, err := c.Do(ctx, &Request{Path: "/denied"}); Status(err) != 403 {
+		t.Fatal(err)
+	}
+	ev := rec.Evidence()
+	if ev == nil || len(ev.Calls()) != 5 {
+		t.Fatalf("%+v", ev)
+	}
+	sum := sha256.Sum256([]byte(`{"a":1}`))
+	want := []evidence.Call{
+		{Method: "GET", Path: "/etag", Status: 200, ETag: `W/"v7"`},
+		{Method: "GET", Path: "/badetag", Status: 200, SHA256: hex.EncodeToString(sum[:])},
+		{Method: "GET", Path: "/plain", Status: 200, SHA256: func() string {
+			s := sha256.Sum256([]byte(`{"secret":"` + canary + `-body"}`))
+			return hex.EncodeToString(s[:])
+		}()},
+		{Method: "GET", Path: "/empty", Status: 204},
+		{Method: "GET", Path: "/denied", Status: 403, SHA256: func() string {
+			s := sha256.Sum256([]byte(`{"message":"no"}`))
+			return hex.EncodeToString(s[:])
+		}()},
+	}
+	for i, w := range want {
+		if ev.Calls()[i] != w {
+			t.Errorf("call %d:\n got %+v\nwant %+v", i, ev.Calls()[i], w)
+		}
+	}
+	b, _ := json.Marshal(ev)
+	if strings.Contains(string(b), canary) || strings.Contains(string(b), "token") {
+		t.Fatalf("evidence leaked: %s", b)
+	}
+	// Only the response Do returns is evidence: a retried 503 is not.
+	var flaps atomic.Int32
+	flaky := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if flaps.Add(1) == 1 {
+			w.WriteHeader(503)
+			return
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer flaky.Close()
+	fc := newTestClient(t, flaky, &bytes.Buffer{})
+	fctx, frec := evidence.WithRecorder(context.Background())
+	if _, err := fc.Do(fctx, &Request{Path: "/flaky"}); err != nil || flaps.Load() != 2 {
+		t.Fatal(err, flaps.Load())
+	}
+	if ev := frec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Status != 200 {
+		t.Fatalf("retried attempt recorded: %+v", ev)
+	}
+	// A call to a host other than the client's own names the host; one to
+	// the base host does not.
+	other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
+	defer other.Close()
+	oc := newTestClient(t, srv, &bytes.Buffer{})
+	oc.HTTP = other.Client()
+	octx, orec := evidence.WithRecorder(context.Background())
+	if _, err := oc.Do(octx, &Request{Path: other.URL + "/elsewhere"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oc.Do(octx, &Request{Path: srv.URL + "/empty"}); err != nil {
+		t.Fatal(err)
+	}
+	// A client with no base names the host too: it may be an instance
+	// learned at login, and the record must say which answered.
+	oc.Base = ""
+	if _, err := oc.Do(octx, &Request{Path: other.URL + "/elsewhere"}); err != nil {
+		t.Fatal(err)
+	}
+	otherHost := strings.TrimPrefix(other.URL, "https://")
+	if ev := orec.Evidence(); len(ev.Calls()) != 3 || ev.Calls()[0].Host != otherHost || ev.Calls()[1].Host != "" || ev.Calls()[2].Host != otherHost {
+		t.Fatalf("host evidence: %+v", ev.Calls())
+	}
+	// The base host in another spelling (case, an explicit default port)
+	// is still the base host.
+	for _, pair := range [][2]string{
+		{"https://api.example.com", "https://API.example.com/x"},
+		{"https://api.example.com", "https://api.example.com:443/x"},
+		{"https://api.example.com:443", "https://api.example.com/x"},
+		{"http://localhost:8080", "http://LOCALHOST:8080/x"},
+	} {
+		u, _ := url.Parse(pair[1])
+		if h := (&Client{Base: pair[0]}).foreignHost(u); h != "" {
+			t.Errorf("%s under %s: foreign host %q", pair[1], pair[0], h)
+		}
+	}
+	for _, pair := range [][2]string{
+		{"https://api.example.com", "https://api.example.com:8443/x"},
+		{"https://api.example.com", "http://api.example.com/x"},
+		{"https://api.example.com", "https://iam.example.com/x"},
+	} {
+		u, _ := url.Parse(pair[1])
+		if h := (&Client{Base: pair[0]}).foreignHost(u); h == "" {
+			t.Errorf("%s under %s: not foreign", pair[1], pair[0])
+		}
+	}
+	// A next-page link on the base host with its default port spelled
+	// out is within the base, by the same rule.
+	wc := &Client{Base: "https://api.example.com/v1"}
+	if !wc.Within("https://api.example.com:443/v1/users?page=2") || !wc.Within("https://API.example.com/v1/x") {
+		t.Error("within: the base host in another spelling was rejected")
+	}
+	if wc.Within("https://api.example.com:8443/v1/x") || wc.Within("http://api.example.com/v1/x") {
+		t.Error("within: another port or scheme was accepted")
+	}
+	// A retry cut short by the caller's context still records the
+	// response the caller is told about.
+	var attempts atomic.Int32
+	always503 := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(503)
+		w.Write([]byte(`{"down":true}`))
+	}))
+	defer always503.Close()
+	ic := newTestClient(t, always503, &bytes.Buffer{})
+	ic.Sleep = func(ctx context.Context, _ time.Duration) error { return context.Canceled }
+	ictx, irec := evidence.WithRecorder(context.Background())
+	if _, err := ic.Do(ictx, &Request{Path: "/x"}); Status(err) != 503 || attempts.Load() != 1 {
+		t.Fatal(err, attempts.Load())
+	}
+	if ev := irec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Status != 503 {
+		t.Fatalf("interrupted retry not recorded: %+v", ev)
+	}
+	// A request that never got a response leaves no evidence.
+	srv.Close()
+	rec2ctx, rec2 := evidence.WithRecorder(context.Background())
+	c.Do(rec2ctx, &Request{Path: "/plain"})
+	if rec2.Evidence() != nil {
+		t.Fatalf("evidence for a failed transport: %+v", rec2.Evidence())
 	}
 }

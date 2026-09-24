@@ -9,7 +9,39 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/cache"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 )
+
+// A token fetch is never evidence: the Fetch runs without the caller's
+// Recorder, whether the caller is the one that triggered it or a waiter.
+func TestTokenSourceFetchIsNotEvidence(t *testing.T) {
+	var sawRecorder atomic.Bool
+	src := &TokenSource{Fetch: func(ctx context.Context) (Token, error) {
+		if evidence.RecorderFrom(ctx) != nil {
+			sawRecorder.Store(true)
+		}
+		return Token{Value: "t"}, nil
+	}}
+	ctx, rec := evidence.WithRecorder(context.Background())
+	if _, err := src.Get(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sawRecorder.Load() || rec.Evidence() != nil {
+		t.Fatal("token fetch ran with the check's recorder")
+	}
+	p := &CachedProvider{Fetch: func(ctx context.Context) (AWSCredentials, error) {
+		if evidence.RecorderFrom(ctx) != nil {
+			sawRecorder.Store(true)
+		}
+		return AWSCredentials{AccessKeyID: "a", SecretAccessKey: "s"}, nil
+	}}
+	if _, err := p.Credentials(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sawRecorder.Load() {
+		t.Fatal("credential fetch ran with the check's recorder")
+	}
+}
 
 func TestTokenSourceCachesAndRefreshesEarly(t *testing.T) {
 	now := time.Unix(1_000_000, 0)

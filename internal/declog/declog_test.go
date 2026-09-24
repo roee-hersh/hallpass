@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/roee-hersh/hallpass/internal/evidence"
 )
 
 func TestLogWritesJSONLines(t *testing.T) {
@@ -26,6 +28,19 @@ func TestLogWritesJSONLines(t *testing.T) {
 	}
 	if e.Decision != "allow" || e.Time.Unix() != 0 {
 		t.Fatalf("%+v", e)
+	}
+	// fresh and evidence appear only when set, and evidence round-trips.
+	if strings.Contains(lines[0], "fresh") || strings.Contains(lines[0], "evidence") {
+		t.Fatalf("empty fields written: %s", lines[0])
+	}
+	buf.Reset()
+	l.Log(Entry{Decision: "deny", Fresh: true, Evidence: evidence.Of(
+		evidence.Call{Method: "GET", Path: "/users/u", Status: 200, ETag: `"v1"`, Cached: true},
+		evidence.Call{Method: "GET", Path: "/perm", Status: 200, SHA256: "ab"},
+	)})
+	line := strings.TrimSpace(buf.String())
+	if !strings.Contains(line, `"fresh":true`) || !strings.Contains(line, `"evidence":{"upstream":[{"method":"GET","path":"/users/u","status":200,"etag":"\"v1\"","cached":true},{"method":"GET","path":"/perm","status":200,"sha256":"ab"}]}`) {
+		t.Fatalf("%s", line)
 	}
 }
 

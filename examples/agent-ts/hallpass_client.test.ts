@@ -132,12 +132,36 @@ describe("client", () => {
     await assert.rejects(check("allowed", "platform-team" as unknown as string[]), TypeError);
     await assert.rejects(check("allowed", ["ok", 1] as unknown as string[]), TypeError);
     assert.equal(fake.seen.length, 3);
+    assert.equal("fresh" in fake.lastRequest(), false, "fresh omitted when not asked");
+    await hp.check(DANA, "demo", "thing.write", "thing:allowed", { fresh: true });
+    assert.deepEqual(fake.lastRequest(), {
+      user: DANA, connection: "demo", action: "thing.write", resource: "thing:allowed", fresh: true,
+    });
+    await hp.check(DANA, "demo", "thing.write", "thing:allowed", { groups: ["a"], fresh: true });
+    assert.deepEqual(fake.lastRequest(), {
+      user: DANA, groups: ["a"], connection: "demo", action: "thing.write", resource: "thing:allowed", fresh: true,
+    });
+    await hp.check(DANA, "demo", "thing.write", "thing:allowed", { fresh: false });
+    assert.equal("fresh" in fake.lastRequest(), false);
+    await hp.check(DANA, "demo", "thing.write", "thing:allowed", {});
+    assert.equal("groups" in fake.lastRequest(), false);
+    // A bare boolean in the options slot is a clear error, not a request;
+    // so are a Set of groups and an unknown option.
+    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", true as unknown as string[]), /pass \{ fresh: true \}/);
+    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", new Set(["a"]) as unknown as string[]), /array of strings/);
+    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", { group: ["a"] } as unknown as string[]), /unknown check option "group"/);
+    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", { fresh: "true" } as unknown as string[]), /fresh must be a boolean/);
   });
 
   test("require and allowed", async () => {
     assert.equal(await hp.allowed("u", "demo", "thing.write", "thing:allowed"), true);
     assert.equal(await hp.allowed("u", "demo", "thing.write", "thing:timeout"), false);
     await hp.require("u", "demo", "thing.write", "thing:allowed");
+    assert.equal("fresh" in fake.lastRequest(), false);
+    await hp.require("u", "demo", "thing.write", "thing:allowed", { fresh: true });
+    assert.equal(fake.lastRequest().fresh, true);
+    assert.equal(await hp.allowed("u", "demo", "thing.write", "thing:allowed", { fresh: true }), true);
+    assert.equal(fake.lastRequest().fresh, true);
     await assert.rejects(hp.require("u", "demo", "thing.write", "thing:timeout"), (e: unknown) => {
       assert.ok(e instanceof PermissionDenied);
       assert.equal(e.decision.code, "upstream_timeout");
@@ -183,6 +207,18 @@ describe("guarded", () => {
     assert.deepEqual(fake.lastRequest(), {
       user: DANA, groups: ["platform-team"], connection: "demo", action: "thing.write", resource: "thing:badline",
     });
+  });
+
+  test("fresh", async () => {
+    const remove = guarded(hp, "demo", "thing.write", "thing:{thing_id}", { user: DANA, fresh: true })(
+      async (_: WriteArgs) => "gone",
+    );
+    assert.equal(await remove({ thing_id: "allowed" }), "gone");
+    assert.deepEqual(fake.lastRequest(), {
+      user: DANA, connection: "demo", action: "thing.write", resource: "thing:allowed", fresh: true,
+    });
+    await assert.rejects(remove({ thing_id: "denied" }), PermissionDenied);
+    assert.equal(fake.lastRequest().fresh, true);
   });
 
   test("user is never an argument", async () => {

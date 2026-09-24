@@ -23,10 +23,10 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/authx"
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -122,6 +122,10 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	if c.now == nil {
 		c.now = time.Now
 	}
+	c.self = cache.New[struct{}, string](1)
+	c.self.SetClock(c.now)
+	// hallpass's own principal name is not what a fresh check is about.
+	c.self.SetFreshMaxAge(selfTTL)
 	c.plain = &httpx.Client{HTTP: hc, Logger: d.Logger}
 	c.tokens = &authx.TokenSource{Now: c.now, Fetch: c.mint}
 	c.api = &httpx.Client{HTTP: hc, Base: base, Logger: d.Logger, Auth: httpx.BearerAuth(c.bearer)}
@@ -143,10 +147,9 @@ type Connection struct {
 	tokens *authx.TokenSource
 
 	// self is hallpass's own principal name (a service principal's
-	// application id, or a user's email), read once from SCIM /Me.
-	selfMu      sync.Mutex
-	self        string
-	selfFetched time.Time
+	// application id, or a user's email), read from SCIM /Me and kept
+	// for selfTTL under the empty key.
+	self *cache.TTL[struct{}, string]
 }
 
 // --- authentication ---------------------------------------------------------
@@ -328,20 +331,16 @@ func (c *Connection) me(ctx context.Context) (scimUser, error) {
 // for selfTTL. It is needed to tell an empty grant listing from one Unity
 // Catalog has filtered down to hallpass's own grants.
 func (c *Connection) selfName(ctx context.Context) (string, error) {
-	c.selfMu.Lock()
-	defer c.selfMu.Unlock()
-	if c.self != "" && c.now().Sub(c.selfFetched) < selfTTL {
-		return c.self, nil
-	}
-	me, err := c.me(ctx)
-	if err != nil {
-		return "", err
-	}
-	if me.UserName == "" {
-		return "", integration.Errorf(integration.CodeUpstreamError, "the workspace did not report hallpass's own principal name")
-	}
-	c.self, c.selfFetched = strings.ToLower(me.UserName), c.now()
-	return c.self, nil
+	return c.self.Do(ctx, struct{}{}, func(ctx context.Context) (string, time.Duration, error) {
+		me, err := c.me(ctx)
+		if err != nil {
+			return "", 0, err
+		}
+		if me.UserName == "" {
+			return "", 0, integration.Errorf(integration.CodeUpstreamError, "the workspace did not report hallpass's own principal name")
+		}
+		return strings.ToLower(me.UserName), selfTTL, nil
+	})
 }
 
 // --- checks -----------------------------------------------------------------

@@ -284,6 +284,10 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	c.roles.SetClock(now)
 	c.psNames = cache.New[string, string](0)
 	c.psNames.SetClock(now)
+	// The account's role inventory and permission set names are not the
+	// assignment a fresh check is about: a fresh check reuses them.
+	c.roles.SetFreshMaxAge(roleListTTL)
+	c.psNames.SetFreshMaxAge(roleListTTL)
 	return c, nil
 }
 

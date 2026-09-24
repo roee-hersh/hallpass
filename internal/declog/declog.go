@@ -8,6 +8,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/roee-hersh/hallpass/internal/evidence"
 )
 
 // Entry is one logged decision.
@@ -22,9 +24,16 @@ type Entry struct {
 	Code       string    `json:"code"`
 	Reason     string    `json:"reason"`
 	Cached     bool      `json:"cached"`
-	DurationMS int64     `json:"duration_ms"`
-	Status     int       `json:"status"`
-	Remote     string    `json:"remote,omitempty"`
+	// Fresh is set when the caller asked for an answer straight from the
+	// upstream system, bypassing the caches.
+	Fresh      bool   `json:"fresh,omitempty"`
+	DurationMS int64  `json:"duration_ms"`
+	Status     int    `json:"status"`
+	Remote     string `json:"remote,omitempty"`
+	// Evidence is what the upstream system said when the decision was
+	// computed. A cached decision carries the evidence of the calls that
+	// produced it.
+	Evidence *evidence.Evidence `json:"evidence,omitempty"`
 }
 
 // Logger writes entries. It is safe for concurrent use.

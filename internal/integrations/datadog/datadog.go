@@ -19,9 +19,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -66,10 +66,11 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 		base = defaultURL
 	}
 	apiKey, appKey := s.Secret("api_key"), s.Secret("credential")
-	c := &Connection{now: d.Now, perms: map[string]cachedPermissions{}}
+	c := &Connection{now: d.Now, perms: cache.New[string, map[string]bool](0)}
 	if c.now == nil {
 		c.now = time.Now
 	}
+	c.perms.SetClock(c.now)
 	c.api = &httpx.Client{HTTP: hc, Base: base, Logger: d.Logger, Auth: func(_ context.Context, r *http.Request) error {
 		a, err := apiKey.GetString()
 		if err != nil {
@@ -86,19 +87,13 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	return c, nil
 }
 
-// cachedPermissions is one role's permission names.
-type cachedPermissions struct {
-	names   map[string]bool
-	fetched time.Time
-}
-
 // Connection is one Datadog organization.
 type Connection struct {
 	api *httpx.Client
 	now func() time.Time
 
-	mu    sync.Mutex
-	perms map[string]cachedPermissions // role id -> permissions
+	// perms is each role's permission names, kept for permissionsTTL.
+	perms *cache.TTL[string, map[string]bool]
 }
 
 // --- API transport ----------------------------------------------------------
@@ -202,36 +197,30 @@ func (c *Connection) ResolveIdentity(ctx context.Context, u integration.User) (i
 }
 
 // rolePermissions reads a role's permission names, cached for permissionsTTL.
+// The map is shared with every caller the entry serves: read-only.
 func (c *Connection) rolePermissions(ctx context.Context, role string) (map[string]bool, error) {
 	if !uuidRe.MatchString(role) {
 		return nil, integration.Errorf(integration.CodeUpstreamError, "role id %q is not an id", role)
 	}
-	c.mu.Lock()
-	if p, ok := c.perms[role]; ok && c.now().Sub(p.fetched) < permissionsTTL {
-		c.mu.Unlock()
-		return p.names, nil
-	}
-	c.mu.Unlock()
-	var body struct {
-		Data []struct {
-			Attributes struct {
-				Name string `json:"name"`
-			} `json:"attributes"`
-		} `json:"data"`
-	}
-	if err := c.getJSON(ctx, "/api/v2/roles/"+httpx.PathEscape(role)+"/permissions", nil, &body); err != nil {
-		return nil, err
-	}
-	names := map[string]bool{}
-	for _, p := range body.Data {
-		if p.Attributes.Name != "" {
-			names[p.Attributes.Name] = true
+	return c.perms.Do(ctx, role, func(ctx context.Context) (map[string]bool, time.Duration, error) {
+		var body struct {
+			Data []struct {
+				Attributes struct {
+					Name string `json:"name"`
+				} `json:"attributes"`
+			} `json:"data"`
 		}
-	}
-	c.mu.Lock()
-	c.perms[role] = cachedPermissions{names: names, fetched: c.now()}
-	c.mu.Unlock()
-	return names, nil
+		if err := c.getJSON(ctx, "/api/v2/roles/"+httpx.PathEscape(role)+"/permissions", nil, &body); err != nil {
+			return nil, 0, err
+		}
+		names := map[string]bool{}
+		for _, p := range body.Data {
+			if p.Attributes.Name != "" {
+				names[p.Attributes.Name] = true
+			}
+		}
+		return names, permissionsTTL, nil
+	})
 }
 
 // --- checks -----------------------------------------------------------------

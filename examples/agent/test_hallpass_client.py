@@ -197,13 +197,26 @@ class ClientTest(unittest.TestCase):
         )
         self.check("allowed")
         self.assertNotIn("groups", last_request(), "groups omitted when not given")
+        self.assertNotIn("fresh", last_request(), "fresh omitted when not asked")
         with self.assertRaises(TypeError):
             self.check("allowed", groups="platform-team")  # a string is not a list of groups
+        self.check("allowed", fresh=True)
+        self.assertEqual(last_request(), {"user": DANA, "connection": "demo", "action": "thing.write",
+                                          "resource": "thing:allowed", "fresh": True})
+        self.check("allowed", fresh=False)
+        self.assertNotIn("fresh", last_request())
+        with self.assertRaisesRegex(TypeError, "fresh is keyword-only"):
+            self.hp.check(DANA, "demo", "thing.write", "thing:allowed", True)  # fresh in the groups slot
 
     def test_require_and_allowed(self):
         self.assertTrue(self.hp.allowed("u", "demo", "thing.write", "thing:allowed"))
         self.assertFalse(self.hp.allowed("u", "demo", "thing.write", "thing:timeout"))
         self.hp.require("u", "demo", "thing.write", "thing:allowed")
+        self.assertNotIn("fresh", last_request())
+        self.hp.require("u", "demo", "thing.write", "thing:allowed", fresh=True)
+        self.assertTrue(last_request()["fresh"])
+        self.assertTrue(self.hp.allowed("u", "demo", "thing.write", "thing:allowed", fresh=True))
+        self.assertTrue(last_request()["fresh"])
         with self.assertRaises(PermissionDenied) as cm:
             self.hp.require("u", "demo", "thing.write", "thing:timeout")
         self.assertEqual(cm.exception.decision.code, "upstream_timeout")
@@ -241,6 +254,59 @@ class GuardedTest(unittest.TestCase):
         self.assertEqual(ran, ["allowed"])
         self.assertEqual(last_request(), {"user": DANA, "groups": ["platform-team"], "connection": "demo",
                                           "action": "thing.write", "resource": "thing:badline"})
+
+    def test_logs_unconditional_write(self):
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA, fresh=True)
+        def write(thing_id: str) -> str:
+            return "ok"
+
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
+        def broken(thing_id: str) -> str:
+            raise ValueError("boom")
+
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
+        async def awrite(thing_id: str) -> str:
+            return "ok"
+
+        with self.assertLogs("hallpass", level="INFO") as logs:
+            self.assertEqual(write(thing_id="allowed"), "ok")
+        line = logs.output[0]
+        for part in ("unconditional write", DANA, "ran thing.write on thing:allowed in demo",
+                     "hallpass said allow (allowed: admin)", "fresh=True", "no If-Match", "not atomic"):
+            self.assertIn(part, line)
+        self.assertRegex(line, r"at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}\+00:00")
+        # A body that raises still logs: the write may have happened.
+        with self.assertLogs("hallpass", level="INFO") as logs:
+            with self.assertRaises(ValueError):
+                broken(thing_id="allowed")
+        self.assertIn("raised ValueError from thing.write", logs.output[0])
+        self.assertIn("fresh=False", logs.output[0])
+        with self.assertLogs("hallpass", level="INFO") as logs:
+            self.assertEqual(asyncio.run(awrite(thing_id="allowed")), "ok")
+        self.assertIn("ran thing.write on thing:allowed", logs.output[0])
+        # A refused call writes nothing, so it logs nothing.
+        with self.assertNoLogs("hallpass", level="INFO"):
+            with self.assertRaises(PermissionDenied):
+                write(thing_id="denied")
+
+    def test_fresh(self):
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA, fresh=True)
+        def delete(thing_id: str) -> str:
+            return "gone"
+
+        self.assertEqual(delete(thing_id="allowed"), "gone")
+        self.assertEqual(last_request(), {"user": DANA, "connection": "demo", "action": "thing.write",
+                                          "resource": "thing:allowed", "fresh": True})
+        with self.assertRaises(PermissionDenied):
+            delete(thing_id="denied")
+        self.assertTrue(last_request()["fresh"])
+
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA, fresh=True)
+        async def adelete(thing_id: str) -> str:
+            return "gone"
+
+        self.assertEqual(asyncio.run(adelete(thing_id="allowed")), "gone")
+        self.assertTrue(last_request()["fresh"])
 
     def test_user_is_never_an_argument(self):
         @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)

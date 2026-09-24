@@ -196,6 +196,10 @@ func TestCheck(t *testing.T) {
 	if code, out, _ := ask("dana@example.com"); code != 1 || !strings.HasPrefix(out, "deny\n") || !strings.Contains(out, "denied:") {
 		t.Errorf("deny: %d %q", code, out)
 	}
+	// -fresh is accepted in-process too, where there is no cache to skip.
+	if code, out, errs := ask("admin@example.com", "-fresh"); code != 0 || !strings.HasPrefix(out, "allow\n") || errs != "" {
+		t.Errorf("fresh: %d %q %q", code, out, errs)
+	}
 	if code, out, _ := ask("nobody@example.com"); code != 1 || !strings.Contains(out, "user_not_found") {
 		t.Errorf("not found: %d %q", code, out)
 	}
@@ -326,6 +330,15 @@ func TestCheckServer(t *testing.T) {
 	if code, out, _ := ask("dana@example.com", "-json"); code != 1 || strings.TrimSpace(out) != `{"decision":"deny","reason":"denied: no"}` {
 		t.Errorf("deny json: %d %q", code, out)
 	}
+	// -fresh is sent as the request's fresh field, and only then.
+	if code, _, errs := ask("admin@example.com", "-fresh"); code != 0 || errs != "" {
+		t.Errorf("fresh: %d %q", code, errs)
+	}
+	mu.Lock()
+	if !strings.HasSuffix(got.body, `,"resource":"thing:1","fresh":true}`) {
+		t.Errorf("fresh body: %s", got.body)
+	}
+	mu.Unlock()
 
 	// A wrong key is an unknown decision from the server, not a CLI error.
 	t.Setenv("HALLPASS_API_KEY", "wrong")

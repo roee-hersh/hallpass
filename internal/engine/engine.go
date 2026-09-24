@@ -3,6 +3,10 @@
 //	validate request -> find connection -> find action -> decision cache ->
 //	resolve identity (cached) -> Check under a timeout -> cache allow/deny ->
 //	decision log.
+//
+// A fresh request skips both cache lookups and stores what it learns as
+// usual. Every upstream call httpx completes during identity resolution and
+// Check is recorded as evidence on the decision and in the log.
 package engine
 
 import (
@@ -19,6 +23,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/catalog"
 	"github.com/roee-hersh/hallpass/internal/config"
 	"github.com/roee-hersh/hallpass/internal/declog"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -30,6 +35,12 @@ type Request struct {
 	Connection string
 	Action     string
 	Resource   string
+	// Fresh asks for an answer straight from the upstream system: the
+	// decision cache, the identity cache and the lookups integrations
+	// cache themselves are not consulted, and what the request learns
+	// replaces their entries. For a caller about to do something
+	// destructive.
+	Fresh bool
 	// Remote is the caller's address, for the decision log only.
 	Remote string
 }
@@ -90,16 +101,15 @@ func Build(ctx context.Context, cfg *config.Config, o Options) (*Engine, error) 
 		o.NegativeIdentityCache = time.Minute
 	}
 	e := &Engine{
-		logger:  o.Logger,
-		declog:  o.DecisionLog,
-		conns:   map[string]*conn{},
-		idCache: cache.New[string, idEntry](0),
-		decs:    cache.New[string, integration.Decision](0),
-		idTTL:   o.IdentityCache,
-		negTTL:  o.NegativeIdentityCache,
-		decTTL:  o.DecisionCache,
-		now:     o.Now,
+		logger: o.Logger,
+		declog: o.DecisionLog,
+		conns:  map[string]*conn{},
+		idTTL:  o.IdentityCache,
+		negTTL: o.NegativeIdentityCache,
+		decTTL: o.DecisionCache,
+		now:    o.Now,
 	}
+	e.Flush()
 	for _, s := range cfg.Connections {
 		integ := cfg.Integrations[s.ID]
 		if integ == nil {
@@ -188,6 +198,7 @@ func (e *Engine) Probe(ctx context.Context, ids ...string) []ProbeReport {
 		pctx, cancel := context.WithTimeout(ctx, 2*c.settings.EffectiveTimeout())
 		r, err := c.c.Probe(pctx)
 		cancel()
+		e.logPanic(id, "probe", err)
 		out = append(out, ProbeReport{ID: id, Integration: c.settings.Integration, Result: r, Err: err})
 	}
 	return out
@@ -262,9 +273,11 @@ func (e *Engine) Check(ctx context.Context, req Request) Result {
 			Code:       string(d.Code),
 			Reason:     d.Text,
 			Cached:     res.Cached,
+			Fresh:      req.Fresh,
 			DurationMS: e.now().Sub(start).Milliseconds(),
 			Status:     res.Status,
 			Remote:     req.Remote,
+			Evidence:   d.Evidence,
 		})
 	}
 	return res
@@ -299,18 +312,29 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	groups := normalizeGroups(req.Groups)
 	user := integration.User{Email: req.User, Groups: groups}
 	decKey := strings.Join([]string{req.Connection, req.User, groupsKey(groups), req.Action, req.Resource}, "\x00")
-	if e.decTTL > 0 {
+	started := e.now() // the check's own start
+	if e.decTTL > 0 && !req.Fresh {
 		if d, ok := e.decs.Get(decKey); ok {
+			d.Evidence = d.Evidence.AsCached()
 			return Result{Decision: d, Status: http.StatusOK, Cached: true}
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.settings.EffectiveTimeout())
 	defer cancel()
+	ctx, rec := evidence.WithRecorder(ctx)
+	if req.Fresh {
+		// Every cache.TTL on the way, the identity cache and the ones
+		// integrations keep, looks up again under a fresh context.
+		ctx = evidence.WithFresh(ctx)
+	}
 
 	identity, err := e.identity(ctx, c, user)
 	if err != nil {
-		return Result{Decision: integration.ToDecision(err), Status: http.StatusOK}
+		e.logPanic(req.Connection, req.Action, err)
+		d := integration.ToDecision(err)
+		d.Evidence = rec.Evidence()
+		return Result{Decision: d, Status: http.StatusOK}
 	}
 	d, err := c.c.Check(ctx, integration.CheckRequest{
 		User:       user,
@@ -320,6 +344,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 		Resource:   resource,
 	})
 	if err != nil {
+		e.logPanic(req.Connection, req.Action, err)
 		d = integration.ToDecision(err)
 		e.logger.Debug("check failed", "connection", req.Connection, "action", req.Action, "code", d.Code, "error", err.Error())
 	}
@@ -327,10 +352,31 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 		d = integration.Unsupported("integration returned no reason code")
 	}
 	d.Outcome = integration.OutcomeOf(d.Code)
+	d.Evidence = rec.Evidence()
 	if e.decTTL > 0 && d.Outcome != integration.Unknown {
-		e.decs.Set(decKey, d, e.decTTL)
+		// Store, not Set: a decision is as old as the oldest read it
+		// rests on (a cached identity, a cached policy), and one built on
+		// older reads must not replace the answer of a later one (a fresh
+		// check's, in particular).
+		inputs := started
+		if o, ok := rec.Oldest(); ok && o.Before(inputs) {
+			inputs = o
+		}
+		e.decs.Store(decKey, d, e.decTTL, inputs, started)
 	}
 	return Result{Decision: d, Status: http.StatusOK}
+}
+
+// logPanic logs, once per panic and with its stack, a panic that a
+// cache.TTL fill turned into a *cache.PanicError, whether a check or a
+// probe got it; the outcome is unknown or a failed probe either way, and
+// the operator needs the stack. The panic's type is logged, not its value,
+// which may quote upstream data.
+func (e *Engine) logPanic(connection, action string, err error) {
+	var pe *cache.PanicError
+	if errors.As(err, &pe) && pe.FirstReport() {
+		e.logger.Error("lookup panicked", "connection", connection, "action", action, "type", fmt.Sprintf("%T", pe.Value), "stack", string(pe.Stack))
+	}
 }
 
 // groupsKey encodes a normalized group list for a cache key. Groups are
@@ -363,6 +409,9 @@ func identityKey(connID string, u integration.User) string {
 	return strings.Join(parts, "\x00")
 }
 
+// identity resolves u through the identity cache, which also carries the
+// evidence of the lookup to every check it serves and looks up again under
+// a fresh context.
 func (e *Engine) identity(ctx context.Context, c *conn, u integration.User) (integration.Identity, error) {
 	key := identityKey(c.settings.ID, u)
 	fill := func(ctx context.Context) (idEntry, time.Duration, error) {
@@ -392,8 +441,12 @@ func (e *Engine) identity(ctx context.Context, c *conn, u integration.User) (int
 	return ent.id, nil
 }
 
-// Flush empties both caches. Tests and future admin endpoints use it.
+// Flush empties both caches. Tests and future admin endpoints use it. The
+// caches run on the engine's clock, since the engine dates decisions
+// against the reads they rest on.
 func (e *Engine) Flush() {
 	e.idCache = cache.New[string, idEntry](0)
+	e.idCache.SetClock(e.now)
 	e.decs = cache.New[string, integration.Decision](0)
+	e.decs.SetClock(e.now)
 }

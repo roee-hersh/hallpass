@@ -9,8 +9,10 @@ package httpx
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
 
@@ -147,6 +150,18 @@ type Client struct {
 	UserAgent string
 }
 
+// baseURL returns Base parsed, or nil when it is empty or does not parse.
+// It is called only for a request made with a full URL (a next-page link,
+// a vendor's second host), never for the relative paths most calls use,
+// and parsing a short string costs nothing next to the call itself.
+func (c *Client) baseURL() *url.URL {
+	u, err := url.Parse(c.Base)
+	if err != nil || u.Host == "" {
+		return nil
+	}
+	return u
+}
+
 // Request is one call.
 type Request struct {
 	Method string
@@ -170,6 +185,9 @@ type Response struct {
 	Status int
 	Header http.Header
 	Body   []byte
+	// method, path and host describe the request, for the evidence
+	// record; host is empty for a call to the client's own base host.
+	method, path, host string
 }
 
 // JSON decodes the body into v.
@@ -219,7 +237,7 @@ func (c *Client) sleep(ctx context.Context, d time.Duration) error {
 
 func (c *Client) build(ctx context.Context, r *Request) (*http.Request, error) {
 	u := r.Path
-	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+	if !absolute(u) {
 		if c.Base == "" {
 			return nil, fmt.Errorf("relative path %q with no base URL", r.Path)
 		}
@@ -271,7 +289,9 @@ func (c *Client) build(ctx context.Context, r *Request) (*http.Request, error) {
 	}
 	req.Header.Set("User-Agent", ua)
 	if c.Auth != nil {
-		if err := c.Auth(ctx, req); err != nil {
+		// A token exchange made from Auth is not evidence for the decision
+		// and its response carries the credential: never record it.
+		if err := c.Auth(evidence.WithoutRecorder(ctx), req); err != nil {
 			return nil, err
 		}
 	}
@@ -291,10 +311,24 @@ func (r *Request) idempotent() bool {
 
 // Do performs the request. Retries happen only for idempotent requests on
 // connection errors, 502/503/504 and 429 with a short Retry-After.
+//
+// The response Do returns, of any status, is recorded as evidence on the
+// context's evidence.Recorder when it has one: method, path, status and
+// the ETag or the body's hash. Attempts that were retried are not.
 func (c *Client) Do(ctx context.Context, r *Request) (*Response, error) {
 	if ctx == nil {
 		return nil, errors.New("nil context")
 	}
+	resp, err := c.do(ctx, r)
+	if resp != nil {
+		if rec := evidence.RecorderFrom(ctx); rec != nil {
+			rec.Record(evidenceOf(resp))
+		}
+	}
+	return resp, err
+}
+
+func (c *Client) do(ctx context.Context, r *Request) (*Response, error) {
 	retries := c.Retries
 	if retries == 0 {
 		retries = 2
@@ -323,7 +357,11 @@ func (c *Client) Do(ctx context.Context, r *Request) (*Response, error) {
 			}
 		}
 		if err := c.sleep(ctx, wait); err != nil {
-			return nil, lastErr
+			// The response that was going to be retried is what the
+			// caller is told about, so it is what the evidence records;
+			// the context's end travels with it, so a cache waiter can
+			// tell a spent deadline from an upstream failure.
+			return resp, errors.Join(err, lastErr)
 		}
 	}
 }
@@ -358,7 +396,10 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 		return nil, ErrBodyTooLarge
 	}
 	c.logCall(req, res.StatusCode, start, nil)
-	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body}
+	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body, method: req.Method, path: req.URL.EscapedPath()}
+	if absolute(r.Path) {
+		out.host = c.foreignHost(req.URL)
+	}
 	if res.StatusCode >= 400 && !(r.Accept4xx && res.StatusCode < 500) {
 		return out, &StatusError{
 			Status:  res.StatusCode,
@@ -369,6 +410,76 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 		}
 	}
 	return out, nil
+}
+
+// absolute reports whether p is a full URL rather than a path under Base.
+func absolute(p string) bool {
+	return strings.HasPrefix(p, "https://") || strings.HasPrefix(p, "http://")
+}
+
+// foreignHost returns u's host for the evidence record of a request made
+// with a full URL: "" when it is the client's base host, the host itself
+// when it is another or the client has no base (an integration's client
+// for an instance URL learned at login, which the record must name). A
+// relative path is always the base host, so this is not on that path's
+// way.
+func (c *Client) foreignHost(u *url.URL) string {
+	if base := c.baseURL(); base != nil && sameHost(base, u) {
+		return ""
+	}
+	return u.Host
+}
+
+// sameHost reports whether a and b name the same host: names compared
+// without case, ports with the scheme's default applied.
+func sameHost(a, b *url.URL) bool {
+	return strings.EqualFold(a.Hostname(), b.Hostname()) && effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
+}
+
+// maxETag bounds the ETag kept as evidence; a longer one is not a version
+// tag but something to keep out of the log, and the body hash stands in.
+const maxETag = 128
+
+// evidenceOf describes one completed response for the decision log: method,
+// path (no query), the host when it is not the client's own, status, and
+// the ETag or the body's SHA-256. The body itself and every other header
+// stay out. Only the response Do returns is hashed, once.
+func evidenceOf(r *Response) evidence.Call {
+	c := evidence.Call{Method: r.method, Path: r.path, Host: r.host, Status: r.Status}
+	if etag := strings.TrimSpace(r.Header.Get("ETag")); validETag(etag) {
+		c.ETag = etag
+	} else if len(r.Body) > 0 {
+		sum := sha256.Sum256(r.Body)
+		c.SHA256 = hex.EncodeToString(sum[:])
+	}
+	return c
+}
+
+// validETag accepts an entity tag of printable ASCII (RFC 9110 etagc plus
+// the W/ prefix and quotes) of a sane length.
+func validETag(s string) bool {
+	if s == "" || len(s) > maxETag {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) logCall(req *http.Request, status int, start time.Time, err error) {
@@ -403,7 +514,7 @@ func retryable(err error) bool {
 		}
 		return false
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrBodyTooLarge) {
+	if evidence.ContextEnded(err) || errors.Is(err, ErrBodyTooLarge) {
 		return false
 	}
 	var te *transportError
@@ -488,6 +599,11 @@ func Classify(err error) *integration.Error {
 	if errors.As(err, &ie) {
 		return ie
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		// Also when the deadline ran out while waiting to retry a
+		// response: the request did not complete within its budget.
+		return integration.Wrap(integration.CodeUpstreamTimeout, err, "upstream call timed out")
+	}
 	var se *StatusError
 	if errors.As(err, &se) {
 		switch {
@@ -503,9 +619,6 @@ func Classify(err error) *integration.Error {
 	}
 	if errors.Is(err, ErrBodyTooLarge) {
 		return integration.Wrap(integration.CodeUpstreamError, err, "upstream response too large")
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return integration.Wrap(integration.CodeUpstreamTimeout, err, "upstream call timed out")
 	}
 	var te *transportError
 	if errors.As(err, &te) {
@@ -604,18 +717,18 @@ func (c *Client) NextLink(h http.Header) (string, error) {
 // within reports whether rawURL is a page under c.Base: same scheme and
 // host, and a path under the base path. A relative path always is.
 func (c *Client) within(rawURL string) bool {
-	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "http://") {
+	if !absolute(rawURL) {
 		return true
 	}
-	base, err := url.Parse(c.Base)
-	if err != nil || base.Host == "" {
+	base := c.baseURL()
+	if base == nil {
 		return false
 	}
 	u, err := url.Parse(rawURL)
 	if err != nil || u.User != nil {
 		return false
 	}
-	if u.Scheme != base.Scheme || !strings.EqualFold(u.Host, base.Host) {
+	if u.Scheme != base.Scheme || !sameHost(base, u) {
 		return false
 	}
 	prefix := strings.TrimRight(base.Path, "/")

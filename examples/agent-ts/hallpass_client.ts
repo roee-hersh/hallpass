@@ -125,18 +125,29 @@ export class Hallpass {
 
   /**
    * Ask hallpass. Never rejects on transport: every failure becomes an
-   * `unknown` decision. `groups` left out or null is omitted from the request.
+   * `unknown` decision. The fifth argument is the user's groups, or an
+   * options object: `{ groups, fresh }`. Groups left out or null are
+   * omitted from the request.
+   *
+   * `fresh: true` asks for an answer straight from the upstream system,
+   * skipping hallpass's caches. Use it for destructive actions. It narrows
+   * the window between the check and the action to the time between the
+   * two; it does not close it.
    */
   async check(
     user: string,
     connection: string,
     action: string,
     resource: string,
-    groups?: readonly string[] | null,
+    options?: readonly string[] | null | CheckOptions,
   ): Promise<Decision> {
+    const { groups, fresh } = checkOptions(options);
     const body: Record<string, unknown> = { user, connection, action, resource };
     if (groups != null) {
       body.groups = groupList(groups);
+    }
+    if (fresh) {
+      body.fresh = true;
     }
     let response: Response;
     let raw: string;
@@ -168,9 +179,9 @@ export class Hallpass {
     connection: string,
     action: string,
     resource: string,
-    groups?: readonly string[] | null,
+    options?: readonly string[] | null | CheckOptions,
   ): Promise<boolean> {
-    return (await this.check(user, connection, action, resource, groups)).allowed;
+    return (await this.check(user, connection, action, resource, options)).allowed;
   }
 
   /** Resolve to the decision when it is `allow`; reject with `PermissionDenied` otherwise. */
@@ -179,9 +190,9 @@ export class Hallpass {
     connection: string,
     action: string,
     resource: string,
-    groups?: readonly string[] | null,
+    options?: readonly string[] | null | CheckOptions,
   ): Promise<Decision> {
-    const d = await this.check(user, connection, action, resource, groups);
+    const d = await this.check(user, connection, action, resource, options);
     if (!d.allowed) {
       throw new PermissionDenied(d, user, connection, action, resource);
     }
@@ -230,6 +241,40 @@ function isLoopback(hostname: string): boolean {
   // URL normalizes ::ffff:127.0.0.1 to ::ffff:7f00:1; the first hex group holds the top two octets.
   const mapped = /^::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/i.exec(host);
   return mapped !== null && parseInt(mapped[1]!, 16) >> 8 === 127;
+}
+
+/** Options of `check`, `allowed` and `require`. */
+export interface CheckOptions {
+  /** The user's groups; left out or null, none are sent. */
+  groups?: readonly string[] | null;
+  /** Skip hallpass's caches and ask the upstream system now. */
+  fresh?: boolean;
+}
+
+function checkOptions(o: readonly string[] | null | CheckOptions | undefined): { groups: readonly string[] | null; fresh: boolean } {
+  if (o == null) {
+    return { groups: null, fresh: false };
+  }
+  if (Array.isArray(o)) {
+    return { groups: o as readonly string[], fresh: false };
+  }
+  if (typeof o === "boolean") {
+    throw new TypeError("the fifth argument is the groups array or { groups, fresh }; pass { fresh: true } for a fresh check");
+  }
+  if (typeof o !== "object" || Symbol.iterator in o) {
+    // A Set or another iterable of groups is not an array of them.
+    throw new TypeError("groups must be an array of strings");
+  }
+  for (const key of Object.keys(o)) {
+    if (key !== "groups" && key !== "fresh") {
+      throw new TypeError(`unknown check option ${JSON.stringify(key)}; the options are groups and fresh`);
+    }
+  }
+  const opts = o as CheckOptions;
+  if (opts.fresh !== undefined && typeof opts.fresh !== "boolean") {
+    throw new TypeError("fresh must be a boolean");
+  }
+  return { groups: opts.groups ?? null, fresh: opts.fresh === true };
 }
 
 function groupList(groups: readonly string[]): string[] {
@@ -314,6 +359,11 @@ export interface GuardedOptions<D = never> {
    * error's text from the model.
    */
   deny?: (e: PermissionDenied) => D | Promise<D>;
+  /**
+   * Make every check skip hallpass's caches and ask the upstream system
+   * now. Use it for delete, merge and scale-type actions.
+   */
+  fresh?: boolean;
 }
 
 /** The shape every agent framework hands a tool: one object of arguments, then whatever else it passes. */
@@ -348,7 +398,7 @@ export function guarded<D = never>(
 ): <A extends Args, Rest extends unknown[], R>(
   fn: (args: A, ...rest: Rest) => R | Promise<R>,
 ) => (args: A, ...rest: Rest) => Promise<R | D> {
-  const { user, groups, deny } = options;
+  const { user, groups, deny, fresh = false } = options;
   return <A extends Args, Rest extends unknown[], R>(fn: (args: A, ...rest: Rest) => R | Promise<R>) => {
     const name = fn.name || "the guarded function";
     const inner = async (args: A, ...rest: Rest): Promise<R | D> => {
@@ -365,7 +415,7 @@ export function guarded<D = never>(
       }
       const grp = groups === undefined ? undefined : current(groups, "groups");
       try {
-        await hp.require(who, connection, action, target, grp);
+        await hp.require(who, connection, action, target, { groups: grp, fresh });
       } catch (e) {
         if (e instanceof PermissionDenied && deny !== undefined) {
           return deny(e);

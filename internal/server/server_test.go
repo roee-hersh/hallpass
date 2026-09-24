@@ -69,6 +69,17 @@ func TestCheck(t *testing.T) {
 	if res.StatusCode != 200 || out["decision"] != "deny" {
 		t.Fatalf("%d %v", res.StatusCode, out)
 	}
+	if c.last.Fresh {
+		t.Fatal("fresh without the field")
+	}
+	// "fresh": true reaches the engine.
+	res, out = post(t, h, "Bearer "+key, `{"user":"a@x.com","connection":"c","action":"thing.read","resource":"thing:1","fresh":true}`, "application/json")
+	if res.StatusCode != 200 || out["decision"] != "allow" || !c.last.Fresh {
+		t.Fatalf("fresh: %d %v %+v", res.StatusCode, out, c.last)
+	}
+	if res, out := post(t, h, "Bearer "+key, `{"user":"a@x.com","fresh":"yes"}`, ""); res.StatusCode != 400 || !strings.Contains(out["reason"], "wrong type for field fresh") {
+		t.Fatalf("fresh wrong type: %d %v", res.StatusCode, out)
+	}
 }
 
 func TestAuth(t *testing.T) {

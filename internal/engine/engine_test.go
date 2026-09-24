@@ -30,6 +30,9 @@ type counting struct {
 	// needGroup, when set, makes ResolveIdentity answer user_not_found unless
 	// the request carries that group (like aws static_map).
 	needGroup string
+	// panicResolve makes ResolveIdentity panic, as a bug in an integration
+	// would inside the identity cache's fill.
+	panicResolve bool
 
 	mu sync.Mutex
 	// identityGroups is Identity.Groups as the last Check saw it.
@@ -65,6 +68,9 @@ func (c *counting) New(ctx context.Context, s *integration.Settings, d integrati
 // kubernetes and argocd integrations do.
 func (c *countingConn) ResolveIdentity(ctx context.Context, u integration.User) (integration.Identity, error) {
 	c.p.resolves.Add(1)
+	if c.p.panicResolve {
+		panic("resolve bug " + u.Email)
+	}
 	if c.p.needGroup != "" && !slices.Contains(u.Groups, c.p.needGroup) {
 		return integration.Identity{}, integration.UserNotFound("%s and its groups are not mapped", u.Email)
 	}
@@ -109,7 +115,27 @@ connections:
     timeout: 300ms
 `
 
-func build(t *testing.T, c *counting, o Options) (*Engine, *bytes.Buffer) {
+// lockedBuffer is a bytes.Buffer both the decision log and the slog
+// handler write to, each under its own mutex, so concurrent checks need
+// one more.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func build(t *testing.T, c *counting, o Options) (*Engine, *lockedBuffer) {
 	t.Helper()
 	reg := integration.NewRegistry()
 	reg.Register(fake.Integration{})
@@ -118,14 +144,14 @@ func build(t *testing.T, c *counting, o Options) (*Engine, *bytes.Buffer) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var logbuf bytes.Buffer
-	o.DecisionLog = declog.New(&logbuf)
-	o.Logger = slog.New(slog.NewJSONHandler(&logbuf, nil))
+	logbuf := &lockedBuffer{}
+	o.DecisionLog = declog.New(logbuf)
+	o.Logger = slog.New(slog.NewJSONHandler(logbuf, nil))
 	e, err := Build(context.Background(), cfg, o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return e, &logbuf
+	return e, logbuf
 }
 
 func req(user, action, resource string) Request {
@@ -335,6 +361,38 @@ func TestTimeoutAndBadAllow(t *testing.T) {
 	r = e2.Check(context.Background(), req("a@x.com", "thing.read", "thing:1"))
 	if r.Decision.Outcome != integration.Unknown {
 		t.Fatalf("allow with a non-allow code got through: %+v", r)
+	}
+}
+
+// A panic inside a lookup is an unknown decision, logged once with its
+// stack and the panic's type, never its value.
+func TestLookupPanicLogged(t *testing.T) {
+	c := &counting{Integration: fake.Integration{}, panicResolve: true}
+	e, logs := build(t, c, Options{IdentityCache: 15 * time.Minute})
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	results := make(chan Result, 4)
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); results <- e.Check(ctx, req("a@x.com", "thing.read", "thing:1")) }()
+	}
+	wg.Wait()
+	close(results)
+	for r := range results {
+		if r.Decision.Outcome != integration.Unknown || r.Decision.Code != integration.CodeUpstreamError {
+			t.Fatalf("%+v", r)
+		}
+	}
+	if n := strings.Count(logs.String(), `"lookup panicked"`); n < 1 || n > 4 {
+		t.Fatalf("panic logged %d times", n)
+	}
+	if !strings.Contains(logs.String(), `"stack"`) || strings.Contains(logs.String(), "resolve bug") {
+		t.Fatalf("log: %s", logs.String())
+	}
+	// One fill, one PanicError, one log line: callers that shared it do not
+	// each log it.
+	if c.resolves.Load() == 1 && strings.Count(logs.String(), `"lookup panicked"`) != 1 {
+		t.Fatalf("one panic logged %d times", strings.Count(logs.String(), `"lookup panicked"`))
 	}
 }
 
