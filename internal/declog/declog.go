@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/roee-hersh/hallpass/internal/integration"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 )
 
 // Entry is one logged decision.
@@ -33,7 +33,7 @@ type Entry struct {
 	// Evidence is what the upstream system said when the decision was
 	// computed. A cached decision carries the evidence of the calls that
 	// produced it.
-	Evidence *integration.Evidence `json:"evidence,omitempty"`
+	Evidence *evidence.Evidence `json:"evidence,omitempty"`
 }
 
 // Logger writes entries. It is safe for concurrent use.

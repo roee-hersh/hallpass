@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/cache"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/httpx"
-	"github.com/roee-hersh/hallpass/internal/integration"
 )
 
 // STSClient calls AWS STS over the Query protocol.
@@ -161,7 +161,7 @@ func (p *CachedProvider) Credentials(ctx context.Context) (AWSCredentials, error
 		p.inflight = cc
 		// Credentials are not evidence for a decision: never record the
 		// calls that fetch them.
-		fctx, cancel := cache.Detach(integration.WithoutRecorder(ctx), defaultFetchTimeout)
+		fctx, cancel := cache.Detach(evidence.WithoutRecorder(ctx), defaultFetchTimeout)
 		go func() {
 			defer cancel()
 			p.fetch(cc, fctx)

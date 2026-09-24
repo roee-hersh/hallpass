@@ -15,6 +15,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/catalog"
 	"github.com/roee-hersh/hallpass/internal/config"
 	"github.com/roee-hersh/hallpass/internal/declog"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -111,7 +112,7 @@ func (c *webConn) ResolveIdentity(ctx context.Context, u integration.User) (inte
 }
 
 func (c *webConn) Check(ctx context.Context, r integration.CheckRequest) (integration.Decision, error) {
-	lastFresh.Store(integration.Fresh(ctx))
+	lastFresh.Store(evidence.Fresh(ctx))
 	var out struct{ Allow bool }
 	q := url.Values{"user": {r.Identity.ID}, "token": {canary + "-query"}}
 	if _, err := c.api.GetJSON(ctx, "/perm", q, &out); err != nil {

@@ -1,4 +1,7 @@
-package integration
+// Package evidence ties a decision to the upstream state it was computed
+// from: what each check asked the upstream and what the upstream answered,
+// carried on the context so httpx and the caches can record and replay it.
+package evidence
 
 import (
 	"context"
@@ -6,17 +9,16 @@ import (
 	"sync"
 )
 
-// Evidence ties a decision to the upstream state it was computed from: the
-// calls the decision was based on and, for each, what identifies the
-// version of the response (an ETag when the upstream sent one, otherwise a
-// hash of the body). It goes into the decision log so an auditor can tell
-// what the upstream system said when hallpass answered, not only the
-// outcome. Most vendor APIs expose no policy version, so this is the closest
-// thing available.
+// Evidence is the calls a decision was based on and, for each, what
+// identifies the version of the response (an ETag when the upstream sent
+// one, otherwise a hash of the body). It goes into the decision log so an
+// auditor can tell what the upstream system said when hallpass answered,
+// not only the outcome. Most vendor APIs expose no policy version, so this
+// is the closest thing available.
 type Evidence struct {
 	// Upstream lists the calls in the order they completed.
 	Upstream []Call `json:"upstream"`
-	// Truncated is set when more than MaxEvidenceCalls completed and the
+	// Truncated is set when more than MaxCalls completed and the
 	// rest were dropped.
 	Truncated bool `json:"truncated,omitempty"`
 }
@@ -48,11 +50,11 @@ type Call struct {
 	Shared bool `json:"shared,omitempty"`
 }
 
-// MaxEvidenceCalls bounds the calls one Recorder keeps, so a paginated
+// MaxCalls bounds the calls one Recorder keeps, so a paginated
 // lookup cannot grow a log line without limit. Calls made for the check
 // take precedence over replayed ones, and among those the latest are
 // kept: the call that decided a check is the last one it made.
-const MaxEvidenceCalls = 100
+const MaxCalls = 100
 
 // Origin says how a check came by a call's response.
 type Origin int
@@ -89,7 +91,7 @@ func (r *Recorder) Record(c Call) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.calls) >= MaxEvidenceCalls {
+	if len(r.calls) >= MaxCalls {
 		r.truncated = true
 		if c.Cached {
 			return

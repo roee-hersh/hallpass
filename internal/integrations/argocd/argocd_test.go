@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/cache"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integration/itest"
 	"github.com/roee-hersh/hallpass/internal/integrations/kubernetes"
@@ -247,7 +248,7 @@ func TestPolicyCacheAndFailures(t *testing.T) {
 	}
 	// A fresh check re-reads the policy inside the window and the next
 	// check is served from what it read.
-	if _, err := c.(*Connection).load(integration.WithFresh(context.Background())); err != nil {
+	if _, err := c.(*Connection).load(evidence.WithFresh(context.Background())); err != nil {
 		t.Fatal(err)
 	}
 	if cl.reads == reads {

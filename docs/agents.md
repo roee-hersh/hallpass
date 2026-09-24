@@ -363,7 +363,13 @@ d.allowed;  // true only for allow
 
 await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123");
 // rejects with PermissionDenied unless the answer is allow
+
+await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", null, true);
+// fresh: skips hallpass's caches and asks Jira now, for a destructive action
 ```
+
+`check`, `allowed` and `require` take `groups` and then `fresh`, with the
+meaning described for the Python client above.
 
 Every Node agent framework calls a tool with one object of arguments, so
 `guarded` wraps a function of that shape and returns one with the same
@@ -378,7 +384,7 @@ const session = new AsyncLocalStorage<{ user: string; groups?: string[] }>();
 const user = () => current(session).user;
 const groups = () => current(session).groups ?? [];
 
-const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user })(
+const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user, fresh: true })(
   async ({ key }: { key: string }) => {
     await jira.deleteIssue(key); // the agent's own credential
     return `deleted ${key}`;
@@ -392,6 +398,8 @@ app.post("/chat", auth, (req, res) =>
 
 A `user` key the model puts in the arguments is ignored; a call whose
 arguments cannot fill the template makes no request and runs nothing.
+`fresh: true` in the options makes every check ask the upstream system now,
+right for a destructive tool like this one.
 
 ### Vercel AI SDK
 

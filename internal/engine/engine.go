@@ -23,6 +23,7 @@ import (
 	"github.com/roee-hersh/hallpass/internal/catalog"
 	"github.com/roee-hersh/hallpass/internal/config"
 	"github.com/roee-hersh/hallpass/internal/declog"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -321,11 +322,11 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 
 	ctx, cancel := context.WithTimeout(ctx, c.settings.EffectiveTimeout())
 	defer cancel()
-	ctx, rec := integration.WithRecorder(ctx)
+	ctx, rec := evidence.WithRecorder(ctx)
 	if req.Fresh {
 		// Every cache.TTL on the way, the identity cache and the ones
 		// integrations keep, looks up again under a fresh context.
-		ctx = integration.WithFresh(ctx)
+		ctx = evidence.WithFresh(ctx)
 	}
 
 	identity, err := e.identity(ctx, c, user)

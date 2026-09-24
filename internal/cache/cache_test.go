@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/roee-hersh/hallpass/internal/integration"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 )
 
 func TestGetSetExpiry(t *testing.T) {
@@ -262,12 +262,12 @@ func TestDetach(t *testing.T) {
 // saw to its leader.
 func TestDoEvidence(t *testing.T) {
 	c := New[string, int](0)
-	call := func(p string) integration.Call { return integration.Call{Method: "GET", Path: p, Status: 200} }
+	call := func(p string) evidence.Call { return evidence.Call{Method: "GET", Path: p, Status: 200} }
 	fill := func(ctx context.Context) (int, time.Duration, error) {
-		integration.RecorderFrom(ctx).Record(call("/lookup"))
+		evidence.RecorderFrom(ctx).Record(call("/lookup"))
 		return 1, time.Minute, nil
 	}
-	ctx, rec := integration.WithRecorder(context.Background())
+	ctx, rec := evidence.WithRecorder(context.Background())
 	if _, err := c.Do(ctx, "k", fill); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestDoEvidence(t *testing.T) {
 		t.Fatalf("leader: %+v", ev)
 	}
 	// A hit replays the fill's evidence, marked cached.
-	ctx2, rec2 := integration.WithRecorder(context.Background())
+	ctx2, rec2 := evidence.WithRecorder(context.Background())
 	if _, err := c.Do(ctx2, "k", fill); err != nil {
 		t.Fatal(err)
 	}
@@ -292,13 +292,13 @@ func TestDoEvidence(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	slow := func(ctx context.Context) (int, time.Duration, error) {
-		integration.RecorderFrom(ctx).Record(call("/slow"))
+		evidence.RecorderFrom(ctx).Record(call("/slow"))
 		close(started)
 		<-release
 		return 2, time.Minute, nil
 	}
-	lctx, lrec := integration.WithRecorder(context.Background())
-	wctx, wrec := integration.WithRecorder(context.Background())
+	lctx, lrec := evidence.WithRecorder(context.Background())
+	wctx, wrec := evidence.WithRecorder(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); c.Do(lctx, "slow", slow) }()
@@ -322,9 +322,9 @@ func TestDoEvidence(t *testing.T) {
 
 	// A failed fill is not stored but its leader still sees the evidence;
 	// a fill that asks not to be stored (ttl 0) is live evidence too.
-	ectx, erec := integration.WithRecorder(context.Background())
+	ectx, erec := evidence.WithRecorder(context.Background())
 	_, err := c.Do(ectx, "err", func(ctx context.Context) (int, time.Duration, error) {
-		integration.RecorderFrom(ctx).Record(integration.Call{Method: "GET", Path: "/err", Status: 503})
+		evidence.RecorderFrom(ctx).Record(evidence.Call{Method: "GET", Path: "/err", Status: 503})
 		return 0, 0, errors.New("upstream")
 	})
 	if err == nil {
@@ -333,9 +333,9 @@ func TestDoEvidence(t *testing.T) {
 	if ev := erec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Status != 503 || ev.Upstream[0].Cached {
 		t.Fatalf("failed fill: %+v", ev)
 	}
-	zctx, zrec := integration.WithRecorder(context.Background())
+	zctx, zrec := evidence.WithRecorder(context.Background())
 	c.Do(zctx, "zero", func(ctx context.Context) (int, time.Duration, error) {
-		integration.RecorderFrom(ctx).Record(call("/zero"))
+		evidence.RecorderFrom(ctx).Record(call("/zero"))
 		return 0, 0, nil
 	})
 	if ev := zrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached {
@@ -346,7 +346,7 @@ func TestDoEvidence(t *testing.T) {
 	}
 	// Set stores no evidence, so a hit on it replays nothing.
 	c.Set("set", 3, time.Minute)
-	sctx, srec := integration.WithRecorder(context.Background())
+	sctx, srec := evidence.WithRecorder(context.Background())
 	c.Do(sctx, "set", fill)
 	if srec.Evidence() != nil {
 		t.Fatalf("Set entry has evidence: %+v", srec.Evidence())
@@ -368,7 +368,7 @@ func TestDoFresh(t *testing.T) {
 	var fills atomic.Int32
 	fill := func(ctx context.Context) (int, time.Duration, error) {
 		n := int(fills.Add(1))
-		integration.RecorderFrom(ctx).Record(integration.Call{Method: "GET", Path: "/v", Status: 200, ETag: strconv.Itoa(n)})
+		evidence.RecorderFrom(ctx).Record(evidence.Call{Method: "GET", Path: "/v", Status: 200, ETag: strconv.Itoa(n)})
 		return n, time.Minute, nil
 	}
 	ctx := context.Background()
@@ -378,7 +378,7 @@ func TestDoFresh(t *testing.T) {
 	if v, _ := c.Do(ctx, "k", fill); v != 1 || fills.Load() != 1 {
 		t.Fatal("not cached")
 	}
-	fctx, frec := integration.WithRecorder(integration.WithFresh(ctx))
+	fctx, frec := evidence.WithRecorder(evidence.WithFresh(ctx))
 	if v, err := c.Do(fctx, "k", fill); err != nil || v != 2 || fills.Load() != 2 {
 		t.Fatalf("fresh: %v %v fills=%d", v, err, fills.Load())
 	}
@@ -386,7 +386,7 @@ func TestDoFresh(t *testing.T) {
 		t.Fatalf("fresh evidence: %+v", ev)
 	}
 	// The fresh answer replaced the entry, evidence included.
-	nctx, nrec := integration.WithRecorder(ctx)
+	nctx, nrec := evidence.WithRecorder(ctx)
 	if v, _ := c.Do(nctx, "k", fill); v != 2 || fills.Load() != 2 {
 		t.Fatal("fresh answer not stored")
 	}
@@ -410,7 +410,7 @@ func TestDoFresh(t *testing.T) {
 	time.Sleep(2 * time.Millisecond) // the clock must move past the slow fill's start
 	done := make(chan int, 1)
 	go func() {
-		v, _ := c.Do(integration.WithFresh(ctx), "slow", func(context.Context) (int, time.Duration, error) { return 7, time.Minute, nil })
+		v, _ := c.Do(evidence.WithFresh(ctx), "slow", func(context.Context) (int, time.Duration, error) { return 7, time.Minute, nil })
 		done <- v
 	}()
 	select {
@@ -444,7 +444,7 @@ func TestDoFresh(t *testing.T) {
 	freshDone2 := make(chan struct{})
 	go func() {
 		defer close(freshDone2)
-		c.Do(integration.WithFresh(ctx), "order", func(context.Context) (int, time.Duration, error) {
+		c.Do(evidence.WithFresh(ctx), "order", func(context.Context) (int, time.Duration, error) {
 			close(fstarted2)
 			<-frelease2
 			return 7, time.Minute, nil
@@ -479,9 +479,10 @@ func TestDoFresh(t *testing.T) {
 		t.Fatal("Store with ttl 0 kept an older entry")
 	}
 
-	// A fresh fill takes over the key: callers arriving while it runs,
-	// fresh or not, join it rather than starting another, and the
-	// ordinary fill's own waiter still gets that fill's answer.
+	// A fresh fill takes over the key: an ordinary caller arriving while
+	// it runs joins it rather than starting another, a fresh one reads
+	// again (its read must begin after it asked), and the ordinary fill's
+	// own waiter still gets that fill's answer.
 	var freshFills atomic.Int32
 	ostarted := make(chan struct{})
 	orelease := make(chan struct{})
@@ -502,47 +503,47 @@ func TestDoFresh(t *testing.T) {
 		return 11, time.Minute, nil
 	}
 	freshDone := make(chan int, 1)
-	go func() { v, _ := c.Do(integration.WithFresh(ctx), "join", joinable); freshDone <- v }()
+	go func() { v, _ := c.Do(evidence.WithFresh(ctx), "join", joinable); freshDone <- v }()
 	<-fstarted
-	joined := make(chan int, 2)
+	joined := make(chan int, 1)
 	another := func(context.Context) (int, time.Duration, error) {
 		freshFills.Add(1)
 		return 12, time.Minute, nil
 	}
 	go func() { v, _ := c.Do(ctx, "join", another); joined <- v }()
-	go func() { v, _ := c.Do(integration.WithFresh(ctx), "join", another); joined <- v }()
-	time.Sleep(20 * time.Millisecond) // let both reach Do's select
-	close(frelease)
-	for i := 0; i < 2; i++ {
-		if v := <-joined; v != 11 {
-			t.Fatalf("caller %d did not join the fresh fill: %d", i, v)
-		}
+	time.Sleep(20 * time.Millisecond) // let it reach Do's select
+	if v, _ := c.Do(evidence.WithFresh(ctx), "join", another); v != 12 || freshFills.Load() != 2 {
+		t.Fatalf("second fresh caller joined an earlier fill: v=%d fills=%d", v, freshFills.Load())
 	}
-	if v := <-freshDone; v != 11 || freshFills.Load() != 1 {
-		t.Fatalf("fresh fill: v=%d fills=%d", v, freshFills.Load())
+	close(frelease)
+	if v := <-joined; v != 11 {
+		t.Fatalf("ordinary caller did not join the fresh fill: %d", v)
+	}
+	if v := <-freshDone; v != 11 {
+		t.Fatalf("fresh fill: v=%d", v)
 	}
 	close(orelease)
 	if v := <-ordinaryDone; v != 10 {
 		t.Fatalf("ordinary waiter lost its fill: %d", v)
 	}
-	if v, _ := c.Get("join"); v != 11 {
-		t.Fatalf("older ordinary read replaced the fresh answer: %d", v)
+	if v, _ := c.Get("join"); v != 12 {
+		t.Fatalf("an older read replaced the latest fresh answer: %d", v)
 	}
 	// A panic in a fresh fill is a PanicError, like any other.
 	var pe *PanicError
-	if _, err := c.Do(integration.WithFresh(ctx), "boom", func(context.Context) (int, time.Duration, error) { panic("x") }); !errors.As(err, &pe) {
+	if _, err := c.Do(evidence.WithFresh(ctx), "boom", func(context.Context) (int, time.Duration, error) { panic("x") }); !errors.As(err, &pe) {
 		t.Fatalf("fresh panic: %v", err)
 	}
 
 	// A failed fresh lookup stores nothing and leaves the entry; a fresh
 	// answer with ttl 0 removes it.
-	if _, err := c.Do(integration.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 0, time.Minute, errors.New("x") }); err == nil {
+	if _, err := c.Do(evidence.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 0, time.Minute, errors.New("x") }); err == nil {
 		t.Fatal("no error")
 	}
 	if v, ok := c.Get("k"); !ok || v != 2 {
 		t.Fatal("entry lost on a failed fresh lookup")
 	}
-	if v, err := c.Do(integration.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 9, 0, nil }); err != nil || v != 9 {
+	if v, err := c.Do(evidence.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 9, 0, nil }); err != nil || v != 9 {
 		t.Fatal(v, err)
 	}
 	if _, ok := c.Get("k"); ok {

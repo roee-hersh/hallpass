@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
 
@@ -425,7 +426,7 @@ func TestEvidence(t *testing.T) {
 		}
 		return tok.AccessToken, nil
 	})
-	ctx, rec := integration.WithRecorder(context.Background())
+	ctx, rec := evidence.WithRecorder(context.Background())
 	for _, p := range []string{"/etag", "/badetag", "/plain", "/empty"} {
 		if _, err := c.Do(ctx, &Request{Path: p + "?token=" + canary + "-q", Header: http.Header{"X-Secret": {canary + "-h"}}}); err != nil {
 			t.Fatal(p, err)
@@ -439,7 +440,7 @@ func TestEvidence(t *testing.T) {
 		t.Fatalf("%+v", ev)
 	}
 	sum := sha256.Sum256([]byte(`{"a":1}`))
-	want := []integration.Call{
+	want := []evidence.Call{
 		{Method: "GET", Path: "/etag", Status: 200, ETag: `W/"v7"`},
 		{Method: "GET", Path: "/badetag", Status: 200, SHA256: hex.EncodeToString(sum[:])},
 		{Method: "GET", Path: "/plain", Status: 200, SHA256: func() string {
@@ -472,7 +473,7 @@ func TestEvidence(t *testing.T) {
 	}))
 	defer flaky.Close()
 	fc := newTestClient(t, flaky, &bytes.Buffer{})
-	fctx, frec := integration.WithRecorder(context.Background())
+	fctx, frec := evidence.WithRecorder(context.Background())
 	if _, err := fc.Do(fctx, &Request{Path: "/flaky"}); err != nil || flaps.Load() != 2 {
 		t.Fatal(err, flaps.Load())
 	}
@@ -485,7 +486,7 @@ func TestEvidence(t *testing.T) {
 	defer other.Close()
 	oc := newTestClient(t, srv, &bytes.Buffer{})
 	oc.HTTP = other.Client()
-	octx, orec := integration.WithRecorder(context.Background())
+	octx, orec := evidence.WithRecorder(context.Background())
 	if _, err := oc.Do(octx, &Request{Path: other.URL + "/elsewhere"}); err != nil {
 		t.Fatal(err)
 	}
@@ -495,9 +496,32 @@ func TestEvidence(t *testing.T) {
 	if ev := orec.Evidence(); len(ev.Upstream) != 2 || ev.Upstream[0].Host != strings.TrimPrefix(other.URL, "https://") || ev.Upstream[1].Host != "" {
 		t.Fatalf("host evidence: %+v", ev)
 	}
+	// The base host in another spelling (case, an explicit default port)
+	// is still the base host.
+	for _, pair := range [][2]string{
+		{"https://api.example.com", "https://API.example.com/x"},
+		{"https://api.example.com", "https://api.example.com:443/x"},
+		{"https://api.example.com:443", "https://api.example.com/x"},
+		{"http://localhost:8080", "http://LOCALHOST:8080/x"},
+	} {
+		u, _ := url.Parse(pair[1])
+		if h := (&Client{Base: pair[0]}).foreignHost(u); h != "" {
+			t.Errorf("%s under %s: foreign host %q", pair[1], pair[0], h)
+		}
+	}
+	for _, pair := range [][2]string{
+		{"https://api.example.com", "https://api.example.com:8443/x"},
+		{"https://api.example.com", "http://api.example.com/x"},
+		{"https://api.example.com", "https://iam.example.com/x"},
+	} {
+		u, _ := url.Parse(pair[1])
+		if h := (&Client{Base: pair[0]}).foreignHost(u); h == "" {
+			t.Errorf("%s under %s: not foreign", pair[1], pair[0])
+		}
+	}
 	// A request that never got a response leaves no evidence.
 	srv.Close()
-	rec2ctx, rec2 := integration.WithRecorder(context.Background())
+	rec2ctx, rec2 := evidence.WithRecorder(context.Background())
 	c.Do(rec2ctx, &Request{Path: "/plain"})
 	if rec2.Evidence() != nil {
 		t.Fatalf("evidence for a failed transport: %+v", rec2.Evidence())

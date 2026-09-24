@@ -185,10 +185,14 @@ The request also accepts `"fresh": true`. A fresh check skips every cache for th
 the decision cache, the identity cache and the lookups an integration caches itself (role
 definitions, policies), and asks the upstream system now; what it learns replaces the cached
 entries, so reads keep using the cache. Use it for destructive actions (delete, merge, scale),
-where a 30-second-old answer is not good enough. A fresh check narrows the window between the
-check and the action to the time between the two; it does not close it. Closing it needs a
-conditional write in the upstream system (for example `If-Match` with an ETag), which only some
-APIs support.
+where a 30-second-old answer is not good enough, and not for reads: a fresh check costs every
+upstream call an uncached check makes (for Argo CD, the policy config maps and the project list;
+for Vault, the policies involved), and concurrent fresh checks each read, since a fresh answer is
+one from a read that began after the caller asked. Maps hallpass reads from a local file
+(`role_map_file`, `user_map_file`) are re-read on their own schedule, not per fresh check. A fresh
+check narrows the window between the check and the action to the time between the two; it does
+not close it. Closing it needs a conditional write in the upstream system (for example `If-Match`
+with an ETag), which only some APIs support.
 
 `GET /healthz` returns `{"status":"ok"}` without authentication.
 

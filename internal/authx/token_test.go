@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/cache"
-	"github.com/roee-hersh/hallpass/internal/integration"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 )
 
 // A token fetch is never evidence: the Fetch runs without the caller's
@@ -17,12 +17,12 @@ import (
 func TestTokenSourceFetchIsNotEvidence(t *testing.T) {
 	var sawRecorder atomic.Bool
 	src := &TokenSource{Fetch: func(ctx context.Context) (Token, error) {
-		if integration.RecorderFrom(ctx) != nil {
+		if evidence.RecorderFrom(ctx) != nil {
 			sawRecorder.Store(true)
 		}
 		return Token{Value: "t"}, nil
 	}}
-	ctx, rec := integration.WithRecorder(context.Background())
+	ctx, rec := evidence.WithRecorder(context.Background())
 	if _, err := src.Get(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestTokenSourceFetchIsNotEvidence(t *testing.T) {
 		t.Fatal("token fetch ran with the check's recorder")
 	}
 	p := &CachedProvider{Fetch: func(ctx context.Context) (AWSCredentials, error) {
-		if integration.RecorderFrom(ctx) != nil {
+		if evidence.RecorderFrom(ctx) != nil {
 			sawRecorder.Store(true)
 		}
 		return AWSCredentials{AccessKeyID: "a", SecretAccessKey: "s"}, nil

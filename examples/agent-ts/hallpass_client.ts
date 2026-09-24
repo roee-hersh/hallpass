@@ -126,6 +126,11 @@ export class Hallpass {
   /**
    * Ask hallpass. Never rejects on transport: every failure becomes an
    * `unknown` decision. `groups` left out or null is omitted from the request.
+   *
+   * `fresh` asks for an answer straight from the upstream system, skipping
+   * hallpass's caches. Use it for destructive actions. It narrows the window
+   * between the check and the action to the time between the two; it does
+   * not close it.
    */
   async check(
     user: string,
@@ -133,10 +138,14 @@ export class Hallpass {
     action: string,
     resource: string,
     groups?: readonly string[] | null,
+    fresh = false,
   ): Promise<Decision> {
     const body: Record<string, unknown> = { user, connection, action, resource };
     if (groups != null) {
       body.groups = groupList(groups);
+    }
+    if (fresh) {
+      body.fresh = true;
     }
     let response: Response;
     let raw: string;
@@ -169,8 +178,9 @@ export class Hallpass {
     action: string,
     resource: string,
     groups?: readonly string[] | null,
+    fresh = false,
   ): Promise<boolean> {
-    return (await this.check(user, connection, action, resource, groups)).allowed;
+    return (await this.check(user, connection, action, resource, groups, fresh)).allowed;
   }
 
   /** Resolve to the decision when it is `allow`; reject with `PermissionDenied` otherwise. */
@@ -180,8 +190,9 @@ export class Hallpass {
     action: string,
     resource: string,
     groups?: readonly string[] | null,
+    fresh = false,
   ): Promise<Decision> {
-    const d = await this.check(user, connection, action, resource, groups);
+    const d = await this.check(user, connection, action, resource, groups, fresh);
     if (!d.allowed) {
       throw new PermissionDenied(d, user, connection, action, resource);
     }
@@ -314,6 +325,11 @@ export interface GuardedOptions<D = never> {
    * error's text from the model.
    */
   deny?: (e: PermissionDenied) => D | Promise<D>;
+  /**
+   * Make every check skip hallpass's caches and ask the upstream system
+   * now. Use it for delete, merge and scale-type actions.
+   */
+  fresh?: boolean;
 }
 
 /** The shape every agent framework hands a tool: one object of arguments, then whatever else it passes. */
@@ -348,7 +364,7 @@ export function guarded<D = never>(
 ): <A extends Args, Rest extends unknown[], R>(
   fn: (args: A, ...rest: Rest) => R | Promise<R>,
 ) => (args: A, ...rest: Rest) => Promise<R | D> {
-  const { user, groups, deny } = options;
+  const { user, groups, deny, fresh = false } = options;
   return <A extends Args, Rest extends unknown[], R>(fn: (args: A, ...rest: Rest) => R | Promise<R>) => {
     const name = fn.name || "the guarded function";
     const inner = async (args: A, ...rest: Rest): Promise<R | D> => {
@@ -365,7 +381,7 @@ export function guarded<D = never>(
       }
       const grp = groups === undefined ? undefined : current(groups, "groups");
       try {
-        await hp.require(who, connection, action, target, grp);
+        await hp.require(who, connection, action, target, grp, fresh);
       } catch (e) {
         if (e instanceof PermissionDenied && deny !== undefined) {
           return deny(e);

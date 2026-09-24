@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/authx"
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/catalog"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
@@ -141,6 +142,8 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	if c.now == nil {
 		c.now = time.Now
 	}
+	c.saml = cache.New[struct{}, *samlIndex](1)
+	c.saml.SetClock(c.now)
 	if c.mode == "" {
 		c.mode = modeSAML
 	}
@@ -209,10 +212,8 @@ type Connection struct {
 	instMu         sync.Mutex
 	discoveredInst string
 
-	samlMu      sync.Mutex
-	samlIndex   *samlIndex
-	samlLoaded  time.Time
-	samlLoading *samlLoad // the fetch in flight, nil when none
+	// saml is the external-identity index under the empty key.
+	saml *cache.TTL[struct{}, *samlIndex]
 
 	mapMu      sync.Mutex
 	mapEntries map[string]string

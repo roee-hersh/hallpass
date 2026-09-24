@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/roee-hersh/hallpass/internal/catalog"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integration/itest"
 	"github.com/roee-hersh/hallpass/internal/secret"
@@ -457,9 +459,23 @@ func TestPermissionsCached(t *testing.T) {
 	expect(t, check(t, c, dana, "monitor.edit", "monitor:1"), integration.CodeAllowed, "")
 	expect(t, check(t, c, dana, "users.manage", "org"), integration.CodeDenied, "")
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.permsCalls != 1 {
 		t.Errorf("role permissions read %d times, want 1", f.permsCalls)
+	}
+	f.mu.Unlock()
+	// A fresh check reads the role's permissions again inside the window.
+	id, err := c.ResolveIdentity(context.Background(), dana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := c.Check(evidence.WithFresh(context.Background()), integration.CheckRequest{User: dana, Identity: id, Action: catalog.Action{Name: "logs.read"}, ActionName: "logs.read", Resource: catalog.Resource{Type: "org"}})
+	if err != nil || d.Code != integration.CodeAllowed {
+		t.Fatalf("fresh: %+v %v", d, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.permsCalls != 2 {
+		t.Errorf("role permissions read %d times after a fresh check, want 2", f.permsCalls)
 	}
 }
 

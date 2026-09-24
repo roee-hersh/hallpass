@@ -769,8 +769,7 @@ func TestIdentitySAMLConflicts(t *testing.T) {
 
 // TestSAMLMapPanicDoesNotWedge: a panic inside the identity listing becomes
 // an error for the caller and for everyone waiting on the same fetch, the
-// in-flight marker is cleared so the next call fetches again, and nothing
-// unwinds through ResolveIdentity.
+// next call fetches again, and nothing unwinds through ResolveIdentity.
 func TestSAMLMapPanicDoesNotWedge(t *testing.T) {
 	ctx := context.Background()
 	e := setup(t, nil)
@@ -805,12 +804,6 @@ func TestSAMLMapPanicDoesNotWedge(t *testing.T) {
 		}()
 	}
 	// Let the waiters park on the round, then let the leader panic.
-	c.samlMu.Lock()
-	inflight := c.samlLoading != nil
-	c.samlMu.Unlock()
-	if !inflight {
-		t.Fatal("the round finished before it was released")
-	}
 	time.Sleep(20 * time.Millisecond)
 	close(release)
 	for i := 0; i < waiters+1; i++ {
@@ -826,12 +819,6 @@ func TestSAMLMapPanicDoesNotWedge(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("a caller is still waiting: the in-flight marker was not released")
 		}
-	}
-	c.samlMu.Lock()
-	wedged := c.samlLoading != nil
-	c.samlMu.Unlock()
-	if wedged {
-		t.Fatal("samlLoading still set after the panic")
 	}
 	if !strings.Contains(e.logs.String(), "panicked") {
 		t.Error("the panic was not logged")
@@ -851,7 +838,7 @@ func TestSAMLMapPanicDoesNotWedge(t *testing.T) {
 }
 
 // TestSAMLMapCancelledLeader: a waiter is not failed by the leader's own
-// context ending; it fetches again with its own.
+// context ending; the fetch runs on, detached, and the waiter gets it.
 func TestSAMLMapCancelledLeader(t *testing.T) {
 	e := setup(t, nil)
 	c := e.conn.(*Connection)
@@ -889,8 +876,8 @@ func TestSAMLMapCancelledLeader(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("waiter hung")
 	}
-	if n := fetches.Load(); n != 2 {
-		t.Errorf("fetches = %d, want 2 (leader, then the waiter on its own)", n)
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("fetches = %d, want 1 (the leader's, reused by the waiter)", n)
 	}
 }
 

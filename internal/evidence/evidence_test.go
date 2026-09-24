@@ -1,4 +1,4 @@
-package integration
+package evidence
 
 import (
 	"context"
@@ -60,27 +60,27 @@ func TestRecorder(t *testing.T) {
 
 func TestRecorderCap(t *testing.T) {
 	rec := &Recorder{}
-	for i := 0; i < MaxEvidenceCalls+5; i++ {
+	for i := 0; i < MaxCalls+5; i++ {
 		rec.Record(Call{Method: "GET", Path: "/p", Status: 200})
 	}
 	ev := rec.Evidence()
-	if len(ev.Upstream) != MaxEvidenceCalls || !ev.Truncated {
+	if len(ev.Upstream) != MaxCalls || !ev.Truncated {
 		t.Fatalf("len=%d truncated=%v", len(ev.Upstream), ev.Truncated)
 	}
 	// Replayed calls fill the cap first; the check's own calls then take
 	// the place of the oldest replayed ones, never the other way round.
 	rec = &Recorder{}
-	for i := 0; i < MaxEvidenceCalls; i++ {
+	for i := 0; i < MaxCalls; i++ {
 		rec.Record(Call{Method: "GET", Path: "/replayed", Status: 200, Cached: true})
 	}
 	rec.Record(Call{Method: "GET", Path: "/live-1", Status: 200})
 	rec.Record(Call{Method: "GET", Path: "/live-2", Status: 200})
 	rec.Record(Call{Method: "GET", Path: "/replayed-late", Status: 200, Cached: true})
 	ev = rec.Evidence()
-	if len(ev.Upstream) != MaxEvidenceCalls || !ev.Truncated {
+	if len(ev.Upstream) != MaxCalls || !ev.Truncated {
 		t.Fatalf("len=%d truncated=%v", len(ev.Upstream), ev.Truncated)
 	}
-	if got := ev.Upstream[MaxEvidenceCalls-2:]; got[0].Path != "/live-1" || got[1].Path != "/live-2" {
+	if got := ev.Upstream[MaxCalls-2:]; got[0].Path != "/live-1" || got[1].Path != "/live-2" {
 		t.Fatalf("live calls dropped: %+v", got)
 	}
 	for _, c := range ev.Upstream {
@@ -91,13 +91,13 @@ func TestRecorderCap(t *testing.T) {
 	// With nothing replayed left, the oldest live call goes: the last
 	// calls a check made are the ones that decided it.
 	rec = &Recorder{}
-	for i := 0; i < MaxEvidenceCalls; i++ {
+	for i := 0; i < MaxCalls; i++ {
 		rec.Record(Call{Method: "GET", Path: "/page", Status: 200})
 	}
 	rec.Record(Call{Method: "POST", Path: "/decides", Status: 200})
 	ev = rec.Evidence()
-	if len(ev.Upstream) != MaxEvidenceCalls || ev.Upstream[MaxEvidenceCalls-1].Path != "/decides" || !ev.Truncated {
-		t.Fatalf("deciding call dropped: %+v", ev.Upstream[MaxEvidenceCalls-1])
+	if len(ev.Upstream) != MaxCalls || ev.Upstream[MaxCalls-1].Path != "/decides" || !ev.Truncated {
+		t.Fatalf("deciding call dropped: %+v", ev.Upstream[MaxCalls-1])
 	}
 	rec2 := &Recorder{}
 	rec2.Add(ev, Own)

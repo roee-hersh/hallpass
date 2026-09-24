@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+
+	"github.com/roee-hersh/hallpass/internal/evidence"
 )
 
 // Outcome is the answer to a check.
@@ -59,7 +61,7 @@ type Decision struct {
 	// Evidence is what the upstream system said when the decision was
 	// computed. The engine fills it from the calls httpx recorded;
 	// integrations leave it nil.
-	Evidence *Evidence
+	Evidence *evidence.Evidence
 }
 
 // Reason renders "<code>: <text>", the wire form of the reason field.

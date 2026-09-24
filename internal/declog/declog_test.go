@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/roee-hersh/hallpass/internal/integration"
+	"github.com/roee-hersh/hallpass/internal/evidence"
 )
 
 func TestLogWritesJSONLines(t *testing.T) {
@@ -34,7 +34,7 @@ func TestLogWritesJSONLines(t *testing.T) {
 		t.Fatalf("empty fields written: %s", lines[0])
 	}
 	buf.Reset()
-	l.Log(Entry{Decision: "deny", Fresh: true, Evidence: &integration.Evidence{Upstream: []integration.Call{
+	l.Log(Entry{Decision: "deny", Fresh: true, Evidence: &evidence.Evidence{Upstream: []evidence.Call{
 		{Method: "GET", Path: "/users/u", Status: 200, ETag: `"v1"`, Cached: true},
 		{Method: "GET", Path: "/perm", Status: 200, SHA256: "ab"},
 	}}})

@@ -79,8 +79,10 @@ decision (method, path, status, and the `ETag` or the body's SHA-256) and writte
 by the engine; an integration does nothing for this. Calls made from the client's `Auth` func or
 by an `authx` token source are not recorded. A lookup an integration caches in a `cache.TTL`
 (role definitions, policies) is replayed, marked `cached`, on every check the entry serves, and
-is looked up again for a check with `"fresh": true` (`integration.Fresh(ctx)`). Keep such lookups
-in a `cache.TTL` rather than a hand-rolled map so both hold.
+is looked up again for a check with `"fresh": true` (`evidence.Fresh(ctx)`). Keep such lookups
+in a `cache.TTL` rather than a hand-rolled map so both hold. A map read from a local file
+(`role_map_file`, `user_map_file`) is configuration, not upstream state, and keeps its own re-read
+schedule.
 
 ## Auth (`internal/authx`)
 

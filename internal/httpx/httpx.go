@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"math/rand/v2"
@@ -27,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
 
@@ -173,8 +175,10 @@ type Response struct {
 	Header http.Header
 	Body   []byte
 	// method, path and host describe the request, for the evidence
-	// record; host is empty for a call to the client's own base host.
+	// record; host is empty for a call to the client's own base host, and
+	// digest is the body's SHA-256 when a recorder was listening.
 	method, path, host string
+	digest             []byte
 }
 
 // JSON decodes the body into v.
@@ -278,7 +282,7 @@ func (c *Client) build(ctx context.Context, r *Request) (*http.Request, error) {
 	if c.Auth != nil {
 		// A token exchange made from Auth is not evidence for the decision
 		// and its response carries the credential: never record it.
-		if err := c.Auth(integration.WithoutRecorder(ctx), req); err != nil {
+		if err := c.Auth(evidence.WithoutRecorder(ctx), req); err != nil {
 			return nil, err
 		}
 	}
@@ -300,7 +304,7 @@ func (r *Request) idempotent() bool {
 // connection errors, 502/503/504 and 429 with a short Retry-After.
 //
 // The response Do returns, of any status, is recorded as evidence on the
-// context's integration.Recorder when it has one: method, path, status and
+// context's evidence.Recorder when it has one: method, path, status and
 // the ETag or the body's hash. Attempts that were retried are not.
 func (c *Client) Do(ctx context.Context, r *Request) (*Response, error) {
 	if ctx == nil {
@@ -308,7 +312,7 @@ func (c *Client) Do(ctx context.Context, r *Request) (*Response, error) {
 	}
 	resp, err := c.do(ctx, r)
 	if resp != nil {
-		if rec := integration.RecorderFrom(ctx); rec != nil {
+		if rec := evidence.RecorderFrom(ctx); rec != nil {
 			rec.Record(evidenceOf(resp))
 		}
 	}
@@ -369,7 +373,14 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 	if max <= 0 {
 		max = MaxBody
 	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, max+1))
+	// The body is hashed as it is read, only when someone will record it.
+	var rd io.Reader = io.LimitReader(res.Body, max+1)
+	var digest hash.Hash
+	if evidence.RecorderFrom(ctx) != nil {
+		digest = sha256.New()
+		rd = io.TeeReader(rd, digest)
+	}
+	body, err := io.ReadAll(rd)
 	if err != nil {
 		c.logCall(req, res.StatusCode, start, err)
 		return nil, &transportError{err: err}
@@ -380,6 +391,9 @@ func (c *Client) once(ctx context.Context, r *Request) (*Response, error) {
 	}
 	c.logCall(req, res.StatusCode, start, nil)
 	out := &Response{Status: res.StatusCode, Header: res.Header, Body: body, method: req.Method, path: req.URL.EscapedPath()}
+	if digest != nil && len(body) > 0 {
+		out.digest = digest.Sum(nil)
+	}
 	if absolute(r.Path) {
 		out.host = c.foreignHost(req.URL)
 	}
@@ -409,10 +423,29 @@ func (c *Client) foreignHost(u *url.URL) string {
 		return u.Host
 	}
 	base, err := url.Parse(c.Base)
-	if err != nil || strings.EqualFold(base.Host, u.Host) {
+	if err != nil || sameHost(base, u) {
 		return ""
 	}
 	return u.Host
+}
+
+// sameHost reports whether a and b name the same host: names compared
+// without case, ports with the scheme's default applied.
+func sameHost(a, b *url.URL) bool {
+	return strings.EqualFold(a.Hostname(), b.Hostname()) && effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
 }
 
 // maxETag bounds the ETag kept as evidence; a longer one is not a version
@@ -421,15 +454,14 @@ const maxETag = 128
 
 // evidenceOf describes one completed response for the decision log: method,
 // path (no query), the host when it is not the client's own, status, and
-// the ETag or the body's SHA-256. The body itself and every other header
-// stay out.
-func evidenceOf(r *Response) integration.Call {
-	c := integration.Call{Method: r.method, Path: r.path, Host: r.host, Status: r.Status}
+// the ETag or the body's SHA-256, computed while the body was read. The
+// body itself and every other header stay out.
+func evidenceOf(r *Response) evidence.Call {
+	c := evidence.Call{Method: r.method, Path: r.path, Host: r.host, Status: r.Status}
 	if etag := strings.TrimSpace(r.Header.Get("ETag")); etag != "" && validETag(etag) {
 		c.ETag = etag
-	} else if len(r.Body) > 0 {
-		sum := sha256.Sum256(r.Body)
-		c.SHA256 = hex.EncodeToString(sum[:])
+	} else if len(r.digest) > 0 {
+		c.SHA256 = hex.EncodeToString(r.digest)
 	}
 	return c
 }
