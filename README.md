@@ -45,6 +45,21 @@ sequenceDiagram
 - **Fails closed.** Anything it cannot evaluate is `unknown`, not `allow`.
 - **Single static binary.** One YAML file and one dependency (`yaml.v3`). No database.
 
+## How it differs from OPA, Cedar, OpenFGA and OAuth
+
+| | Where the rules live | What you maintain | Fits |
+|---|---|---|---|
+| **OPA / Cedar** | Policies you write, over data you feed in | The policy, and a sync of each system's roles into that data | Rules of your own application |
+| **OpenFGA / SpiceDB** | A relationship store you write tuples into | The tuples, kept in step with every system | Your own application's object graph |
+| **Per-user OAuth** | The system itself, through the user's own token | Every user connecting every system; the agent holding their tokens | Systems that support it, for users who will connect |
+| **hallpass** | The system itself, through one read-only credential | One credential per system, nothing to sync | Permissions that already exist in Jira, GitHub, AWS, Kubernetes, ... |
+
+hallpass has no policy language and stores no rules. It asks the system that owns the resource,
+at call time, and passes the answer through. Use it next to a policy engine, not instead of one:
+OPA or Cedar for the rules of your own product, hallpass for what a person may do in systems you
+do not control. Where a system supports acting with the user's own token, prefer that; hallpass
+covers the many that do not, and the agents that cannot ask every user to connect every tool.
+
 ## Security model
 
 hallpass treats the agent as an **untrusted deputy**: what the agent's own credential can do never
@@ -317,30 +332,37 @@ hallpass check -server https://hallpass.internal -connection jira-main \
 
 ## Integrations
 
-| Integration | Status |
-|---|---|
-| kubernetes | ready |
-| argocd | ready |
-| gitlab | ready |
-| github | ready |
-| bitbucket (Cloud and Data Center) | ready |
-| jira (Cloud) | ready |
-| confluence (Cloud) | ready |
-| slack | ready |
-| datadog | ready |
-| pagerduty | ready |
-| aws | ready |
-| googleworkspace | ready |
-| googlecloud | ready |
-| microsoft365 | ready |
-| salesforce | ready (UNVERIFIED, see docs) |
-| snowflake | ready (UNVERIFIED, see docs) |
-| vault | ready (UNVERIFIED, see docs) |
-| azure | ready (UNVERIFIED, see docs) |
-| linear | ready (UNVERIFIED, see docs) |
-| zendesk | ready (UNVERIFIED, see docs) |
-| databricks | ready |
-| fake | for smoke tests |
+Twenty-one systems. Two are exercised against the real thing in CI; most validate every request
+their tests make against the vendor's published API description; none has yet been confirmed
+against a live account beyond those two. The live test (`examples/live-cases.yaml`) is there for
+you to run against your own systems before you rely on an integration. Every integration's docs
+end with an **Unverified** section naming what has not been confirmed; for the six marked *beta*
+that list is long enough that you should read it first.
+
+| Integration | Status | Tests run against |
+|---|---|---|
+| kubernetes | ready | a real cluster (kind), end to end |
+| argocd | ready | the real `argocd` CLI evaluator (differential test) |
+| github | ready | fake upstream, requests validated against GitHub's API description |
+| gitlab | ready | fake upstream, validated against GitLab's API description |
+| bitbucket (Cloud and Data Center) | ready | fake upstream, validated against Bitbucket Cloud's API description |
+| jira (Cloud) | ready | fake upstream, validated against Jira's API description |
+| confluence (Cloud) | ready | fake upstream, validated against Confluence's API descriptions |
+| slack | ready | fake upstream, validated against Slack's API description |
+| datadog | ready | fake upstream, validated against Datadog's API descriptions |
+| pagerduty | ready | fake upstream, validated against PagerDuty's API description |
+| aws | ready | fake upstream, validated against the IAM, STS and Identity Center service models |
+| googleworkspace | ready | fake upstream, validated against the Google API discovery documents |
+| googlecloud | ready | fake upstream, validated against the Policy Troubleshooter discovery document |
+| microsoft365 | ready | fake upstream, validated against the Microsoft Graph API description |
+| databricks | ready | fake upstream only |
+| salesforce | beta | fake upstream only; see **Unverified** in its docs |
+| snowflake | beta | fake upstream, validated against the SQL API description; see **Unverified** |
+| vault | beta | fake upstream, validated against Vault's API description; see **Unverified** |
+| azure | beta | fake upstream, validated against the Azure authorization API descriptions; see **Unverified** |
+| linear | beta | fake upstream, validated against Linear's GraphQL schema; see **Unverified** |
+| zendesk | beta | fake upstream, validated against Zendesk's API description; see **Unverified** |
+| fake | for smoke tests | |
 
 Each integration is documented in `docs/integrations/<name>.md`: the credential to create, the
 minimum permissions it needs, the actions and resources, and what it cannot see.
@@ -416,3 +438,9 @@ Apache-2.0.
 Issues and pull requests are welcome, especially new integrations. See
 [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately as described in
 [SECURITY.md](SECURITY.md).
+
+Much of this code was written with Claude Code, directed and reviewed by the maintainer. That is
+why the tests are the bar rather than the author: every integration ships with a fake of its API
+that validates each request against the vendor's description, injects failures, and asserts that
+no secret reaches a log line; the security model above is enforced by those tests, not by trust.
+Contributions written the same way are welcome on the same terms.
