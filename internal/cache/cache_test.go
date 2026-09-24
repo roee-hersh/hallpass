@@ -722,6 +722,47 @@ func TestDoFresh(t *testing.T) {
 	}
 }
 
+// A hit and a fill date the caller's record by when the read began, and
+// an entry is as old as the oldest cached read its fill rested on: a
+// later fill built on an older input does not replace a newer entry.
+func TestDoDatesReads(t *testing.T) {
+	c := New[string, int](0)
+	var clockMu sync.Mutex
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
+	tick := func(d time.Duration) { clockMu.Lock(); clock = clock.Add(d); clockMu.Unlock() }
+	t0 := clock
+	fill := func(ctx context.Context) (int, time.Duration, error) { return 1, time.Hour, nil }
+	c.Do(context.Background(), "in", fill)
+	tick(time.Minute)
+	// A hit is dated by the entry's read.
+	hctx, hrec := evidence.WithRecorder(context.Background())
+	c.Do(hctx, "in", fill)
+	if o, ok := hrec.Oldest(); !ok || !o.Equal(t0) {
+		t.Fatalf("hit dated %v %v, want %v", o, ok, t0)
+	}
+	// A fill that reads the cached input is as old as that input.
+	built := New[string, int](0)
+	built.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
+	built.Do(context.Background(), "out", func(ctx context.Context) (int, time.Duration, error) {
+		v, _ := c.Do(ctx, "in", fill)
+		return v + 10, time.Hour, nil
+	})
+	tick(time.Minute)
+	// A read that began now, before the built entry's own start but after
+	// its input, still replaces it: the built entry is dated by its
+	// input at t0.
+	built.Store("out", 99, time.Hour, t0.Add(30*time.Second))
+	if v, _ := built.Get("out"); v != 99 {
+		t.Fatalf("entry dated by its own start, not its oldest input: %d", v)
+	}
+	// And one older than the input does not.
+	built.Store("out", 7, time.Hour, t0.Add(-time.Second))
+	if v, _ := built.Get("out"); v != 99 {
+		t.Fatalf("older read replaced the entry: %d", v)
+	}
+}
+
 // A waiter is not failed by the leader's deadline: when the shared fill
 // ended because the leader's remaining time ran out, the waiter, which has
 // time left, fills again with its own context.

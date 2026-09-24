@@ -190,9 +190,9 @@ upstream call an uncached check makes (for Argo CD, the policy config maps and t
 for Vault, the policies involved; for Snowflake, the grants of every role in the hierarchy). One
 exception: GitHub's organization-wide SAML identity listing, which a fresh check reuses when it
 is under a minute old, since the permission read after it is live anyway. Fresh checks that
-arrive within a second of each other share the lookups they re-read (an identity, a policy),
-each still making its own permission read; a fresh answer is one from reads that began no more
-than a second before the caller asked. Maps hallpass reads from a local file
+arrive within a second of each other share the lookups they re-read (an identity, a role's
+permissions, a policy); a fresh answer is one from reads that began no more than a second before
+the caller asked. Maps hallpass reads from a local file
 (`role_map_file`, `user_map_file`) are re-read on their own schedule, not per fresh check. A fresh
 check narrows the window between the check and the action to the time between the two; it does
 not close it. Closing it needs a conditional write in the upstream system (for example `If-Match`

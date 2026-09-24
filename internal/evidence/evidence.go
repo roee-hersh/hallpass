@@ -12,6 +12,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"time"
 )
 
 // ContextEnded reports whether err is a context ending (cancelled or past
@@ -85,6 +86,9 @@ type Evidence struct {
 	flatOnce  sync.Once
 	flat      []Call
 	flatTrunc bool
+	// cached is the AsCached view, built once for the same reason.
+	cachedOnce sync.Once
+	cached     *Evidence
 }
 
 // item is one own call or a reference to another Evidence's calls.
@@ -193,12 +197,14 @@ func (e *Evidence) walk(by Origin, visit func(Call)) bool {
 }
 
 // AsCached returns e's calls as served from a cache, for a decision served
-// from the decision cache. A nil e gives nil.
+// from the decision cache. A nil e gives nil; the same e gives the same
+// view, so a decision served many times flattens it once.
 func (e *Evidence) AsCached() *Evidence {
 	if e == nil {
 		return nil
 	}
-	return &Evidence{items: []item{{src: e, by: Cached}}}
+	e.cachedOnce.Do(func() { e.cached = &Evidence{items: []item{{src: e, by: Cached}}} })
+	return e.cached
 }
 
 // wire is the JSON shape: the flattened calls.
@@ -240,6 +246,9 @@ type Recorder struct {
 	mu  sync.Mutex
 	ev  Evidence
 	own int
+	// oldest is when the oldest read added with AddAt began; zero when
+	// none was.
+	oldest time.Time
 }
 
 // Record adds one call the check made. A nil Recorder records nothing.
@@ -265,16 +274,43 @@ func (r *Recorder) Record(c Call) {
 // them. A nil ev adds nothing. Past MaxCalls references the rest are
 // dropped: they are replayed calls, the first to go at the cap anyway.
 func (r *Recorder) Add(ev *Evidence, by Origin) {
-	if r == nil || ev == nil {
+	r.AddAt(ev, by, time.Time{})
+}
+
+// AddAt is Add for a read that began at readAt: the calls came from a
+// cache entry or a fill that started then. The oldest such time is what
+// Oldest reports, so a decision can be dated by its oldest input. A nil
+// ev still dates the record: an entry with no calls is still a read.
+func (r *Recorder) AddAt(ev *Evidence, by Origin, readAt time.Time) {
+	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !readAt.IsZero() && (r.oldest.IsZero() || readAt.Before(r.oldest)) {
+		r.oldest = readAt
+	}
+	if ev == nil {
+		return
+	}
 	if len(r.ev.items)-r.own >= MaxCalls {
 		r.ev.truncated = true
 		return
 	}
 	r.ev.items = append(r.ev.items, item{src: ev, by: by})
+}
+
+// Oldest returns when the oldest read behind the record began, and false
+// when every call was the check's own. A decision rests on nothing older
+// than its inputs, so a cache orders it by this rather than by when the
+// check began.
+func (r *Recorder) Oldest() (time.Time, bool) {
+	if r == nil {
+		return time.Time{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.oldest, !r.oldest.IsZero()
 }
 
 // Evidence returns a snapshot of what was recorded, or nil when nothing

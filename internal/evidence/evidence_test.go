@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func call(p string) Call { return Call{Method: "GET", Path: p, Status: 200} }
@@ -87,6 +88,33 @@ func TestOrigins(t *testing.T) {
 		if !c.Cached || c.Shared {
 			t.Fatalf("shared of cached: %+v", c)
 		}
+	}
+}
+
+func TestOldest(t *testing.T) {
+	rec := &Recorder{}
+	if _, ok := rec.Oldest(); ok {
+		t.Fatal("empty recorder has an oldest read")
+	}
+	rec.Record(call("/own"))
+	rec.Add(Of(call("/now")), Cached)
+	if _, ok := rec.Oldest(); ok {
+		t.Fatal("own and undated reads have no age")
+	}
+	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rec.AddAt(Of(call("/a")), Cached, t1.Add(time.Hour))
+	rec.AddAt(nil, Cached, t1)
+	rec.AddAt(Of(call("/b")), Shared, t1.Add(2*time.Hour))
+	if o, ok := rec.Oldest(); !ok || !o.Equal(t1) {
+		t.Fatalf("oldest = %v %v", o, ok)
+	}
+	if n := len(rec.Evidence().Calls()); n != 4 {
+		t.Fatalf("calls = %d", n)
+	}
+	// The cached view is one object, built once.
+	ev := rec.Evidence()
+	if ev.AsCached() != ev.AsCached() {
+		t.Fatal("AsCached built two views")
 	}
 }
 

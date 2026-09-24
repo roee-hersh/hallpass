@@ -352,8 +352,13 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	d.Outcome = integration.OutcomeOf(d.Code)
 	d.Evidence = rec.Evidence()
 	if e.decTTL > 0 && d.Outcome != integration.Unknown {
-		// Store, not Set: a check that began earlier must not replace the
-		// answer of a later one (a fresh check's, in particular).
+		// Store, not Set: a decision is as old as the oldest read it
+		// rests on (a cached identity, a cached policy), and one built on
+		// older reads must not replace the answer of a later one (a fresh
+		// check's, in particular).
+		if o, ok := rec.Oldest(); ok && o.Before(started) {
+			started = o
+		}
 		e.decs.Store(decKey, d, e.decTTL, started)
 	}
 	return Result{Decision: d, Status: http.StatusOK}

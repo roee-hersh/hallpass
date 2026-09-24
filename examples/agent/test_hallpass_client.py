@@ -205,6 +205,8 @@ class ClientTest(unittest.TestCase):
                                           "resource": "thing:allowed", "fresh": True})
         self.check("allowed", fresh=False)
         self.assertNotIn("fresh", last_request())
+        with self.assertRaisesRegex(TypeError, "fresh is keyword-only"):
+            self.hp.check(DANA, "demo", "thing.write", "thing:allowed", True)  # fresh in the groups slot
 
     def test_require_and_allowed(self):
         self.assertTrue(self.hp.allowed("u", "demo", "thing.write", "thing:allowed"))

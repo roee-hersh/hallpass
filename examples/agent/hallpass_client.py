@@ -119,6 +119,7 @@ class Hallpass:
         action: str,
         resource: str,
         groups: Iterable[str] | None = None,
+        *,
         fresh: bool = False,
     ) -> Decision:
         """Ask hallpass. Never raises on transport: every failure becomes an ``unknown`` decision.
@@ -158,13 +159,13 @@ class Hallpass:
             # malformed URL.
             return Decision(UNKNOWN, f"client_error: hallpass unreachable: {e}", 0)
 
-    def allowed(self, user: str, connection: str, action: str, resource: str, groups=None, fresh: bool = False) -> bool:
+    def allowed(self, user: str, connection: str, action: str, resource: str, groups=None, *, fresh: bool = False) -> bool:
         """True only when hallpass said ``allow``."""
-        return self.check(user, connection, action, resource, groups, fresh).allowed
+        return self.check(user, connection, action, resource, groups, fresh=fresh).allowed
 
-    def require(self, user: str, connection: str, action: str, resource: str, groups=None, fresh: bool = False) -> Decision:
+    def require(self, user: str, connection: str, action: str, resource: str, groups=None, *, fresh: bool = False) -> Decision:
         """Return the decision when it is ``allow``; raise ``PermissionDenied`` otherwise."""
-        d = self.check(user, connection, action, resource, groups, fresh)
+        d = self.check(user, connection, action, resource, groups, fresh=fresh)
         if not d.allowed:
             raise PermissionDenied(d, user, connection, action, resource)
         return d
@@ -191,6 +192,8 @@ def _validate_url(url: str) -> str:
 
 
 def _group_list(groups: Iterable[str]) -> list[str]:
+    if isinstance(groups, bool):
+        raise TypeError("groups must be a list of strings; fresh is keyword-only (fresh=True)")
     if isinstance(groups, str):
         raise TypeError("groups must be a list of strings, not a string")
     out = list(groups)
@@ -337,7 +340,7 @@ def guarded(
             async def inner(*args, **kwargs):
                 who, grp, res, call = prepare(args, kwargs)
                 try:
-                    await asyncio.to_thread(hp.require, who, connection, action, res, grp, fresh)
+                    await asyncio.to_thread(hp.require, who, connection, action, res, grp, fresh=fresh)
                 except PermissionDenied as e:
                     return refused(e)
                 return await call()
@@ -348,7 +351,7 @@ def guarded(
             def inner(*args, **kwargs):
                 who, grp, res, call = prepare(args, kwargs)
                 try:
-                    hp.require(who, connection, action, res, grp, fresh)
+                    hp.require(who, connection, action, res, grp, fresh=fresh)
                 except PermissionDenied as e:
                     return refused(e)
                 return call()

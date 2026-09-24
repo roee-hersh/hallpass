@@ -30,8 +30,9 @@ type TTL[K comparable, V any] struct {
 type entry[V any] struct {
 	v   V
 	exp time.Time
-	// started is when the read that produced v began; a read that began
-	// earlier does not replace it.
+	// started is when the read that produced v began, or the oldest
+	// cached read it rests on; a read that began earlier does not
+	// replace it.
 	started time.Time
 	// ev is the evidence of the fill that produced v, replayed on hits.
 	ev *evidence.Evidence
@@ -93,8 +94,8 @@ func (c *TTL[K, V]) SetClock(now func() time.Time) {
 
 // Get returns the cached value when present and not expired.
 func (c *TTL[K, V]) Get(k K) (V, bool) {
-	v, _, ok := c.get(k)
-	return v, ok
+	e, ok := c.entry(k)
+	return e.v, ok
 }
 
 // Set stores v for ttl, as a value read now. A ttl <= 0 removes the key.
@@ -227,12 +228,13 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
 	rec := evidence.RecorderFrom(ctx)
 	fresh := evidence.Fresh(ctx)
-	for refills := 0; ; refills++ {
-		v, err, again := c.do(ctx, k, fill, rec, fresh, refills == 0)
-		if !again {
-			return v, err
-		}
+	v, err, again := c.do(ctx, k, fill, rec, fresh, true)
+	if again {
+		// The fill this caller waited on ended with its leader's
+		// deadline; one round more, on the caller's own.
+		v, err, _ = c.do(ctx, k, fill, rec, fresh, false)
 	}
+	return v, err
 }
 
 // do is one round of Do. again asks for another round: the caller waited
@@ -244,7 +246,7 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 	// while it is younger than the cache's fresh max age.
 	if e, hit := c.getLocked(k); hit && (!fresh || c.youngLocked(e, now)) {
 		c.mu.Unlock()
-		rec.Add(e.ev, evidence.Cached)
+		rec.AddAt(e.ev, evidence.Cached, e.started)
 		return e.v, nil, false
 	}
 	// A fresh caller shares a fresh fill that began within the join
@@ -287,9 +289,9 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 			if !fresh {
 				// The fill this caller joined failed; an entry may have
 				// landed meanwhile (another fill's), and answers.
-				if v, ev, ok := c.get(k); ok {
-					rec.Add(ev, evidence.Cached)
-					return v, nil, false
+				if e, ok := c.entry(k); ok {
+					rec.AddAt(e.ev, evidence.Cached, e.started)
+					return e.v, nil, false
 				}
 			}
 			if mayRefill && ctx.Err() == nil && evidence.ContextEnded(cl.err) {
@@ -297,7 +299,7 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 				// ended because of it; this caller still has time, so it
 				// fills again with its own. What the ended fill did
 				// complete stays on the record.
-				rec.Add(cl.ev, evidence.Shared)
+				rec.AddAt(cl.ev, evidence.Shared, cl.started)
 				return v, nil, true
 			}
 		}
@@ -305,9 +307,14 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 		if !leader {
 			by = evidence.Shared
 		}
-		rec.Add(cl.ev, by)
+		rec.AddAt(cl.ev, by, cl.started)
 		return cl.v, cl.err, false
 	case <-ctx.Done():
+		if !leader {
+			c.mu.Lock()
+			cl.waiters--
+			c.mu.Unlock()
+		}
 		return v, ctx.Err(), false
 	}
 }
@@ -318,16 +325,11 @@ func (c *TTL[K, V]) youngLocked(e entry[V], now time.Time) bool {
 	return c.freshMaxAge > 0 && now.Sub(e.started) < c.freshMaxAge
 }
 
-// get is Get that also returns the entry's evidence.
-func (c *TTL[K, V]) get(k K) (V, *evidence.Evidence, bool) {
+// entry returns k's entry when present and not expired.
+func (c *TTL[K, V]) entry(k K) (entry[V], bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.getLocked(k)
-	if !ok {
-		var zero V
-		return zero, nil, false
-	}
-	return e.v, e.ev, true
+	return c.getLocked(k)
 }
 
 // getLocked returns k's entry when present and not expired, dropping an
@@ -366,10 +368,17 @@ func (c *TTL[K, V]) fill(k K, cl *call[V], ctx context.Context, fill func(ctx co
 			delete(inflight, k)
 		}
 		if cl.err == nil {
+			// The entry is as old as the oldest cached read the fill
+			// rested on, so a later fill built on older inputs does not
+			// replace a newer one.
+			started := cl.started
+			if o, ok := cl.rec.Oldest(); ok && o.Before(started) {
+				started = o
+			}
 			if ttl > 0 {
-				c.storeLocked(k, cl.v, ttl, cl.ev, cl.started)
+				c.storeLocked(k, cl.v, ttl, cl.ev, started)
 			} else if cl.fresh {
-				c.dropOlderLocked(k, cl.started)
+				c.dropOlderLocked(k, started)
 			}
 		}
 		c.mu.Unlock()
