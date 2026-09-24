@@ -937,6 +937,41 @@ func TestDoFreshJoinerRejectsOldReads(t *testing.T) {
 	}
 }
 
+// Every caller of a panicked fill gets the same PanicError, and only the
+// first to ask reports it.
+func TestPanicErrorFirstReport(t *testing.T) {
+	c := New[string, int](0)
+	jc := trackJoins(c)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	errs := make(chan error, 3)
+	fill := func(context.Context) (int, time.Duration, error) {
+		close(started)
+		<-release
+		panic("x")
+	}
+	for i := 0; i < 3; i++ {
+		go func() { _, err := c.Do(context.Background(), "k", fill); errs <- err }()
+		if i == 0 {
+			<-started
+		}
+	}
+	jc.await(t, "k", 2, 0)
+	close(release)
+	reports := 0
+	for i := 0; i < 3; i++ {
+		var pe *PanicError
+		if err := <-errs; !errors.As(err, &pe) {
+			t.Fatal(err)
+		} else if pe.FirstReport() {
+			reports++
+		}
+	}
+	if reports != 1 {
+		t.Fatalf("first reports = %d", reports)
+	}
+}
+
 // A fill that panicked is reported even when an entry landed meanwhile.
 func TestDoPanicNotCoveredByEntry(t *testing.T) {
 	c := New[string, int](0)

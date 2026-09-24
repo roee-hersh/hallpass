@@ -604,9 +604,6 @@ func Classify(err error) *integration.Error {
 		// response: the request did not complete within its budget.
 		return integration.Wrap(integration.CodeUpstreamTimeout, err, "upstream call timed out")
 	}
-	if errors.Is(err, context.Canceled) {
-		return integration.Wrap(integration.CodeUpstreamError, err, "request cancelled")
-	}
 	var se *StatusError
 	if errors.As(err, &se) {
 		switch {

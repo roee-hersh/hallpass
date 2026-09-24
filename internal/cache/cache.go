@@ -275,7 +275,11 @@ func (c *TTL[K, V]) Refresh(ctx context.Context, k K, fill func(ctx context.Cont
 	now := c.now()
 	c.mu.Unlock()
 	cl := &call[V]{done: make(chan struct{}), started: now, fresh: true}
+	// Bounded like a Do fill when the caller set no deadline.
 	fctx, cancel := context.WithCancel(ctx)
+	if _, ok := ctx.Deadline(); !ok {
+		fctx, cancel = context.WithTimeout(ctx, DefaultFillTimeout)
+	}
 	defer cancel()
 	fctx, cl.rec = evidence.WithRecorder(fctx)
 	c.fill(k, cl, fctx, fill)
@@ -285,12 +289,15 @@ func (c *TTL[K, V]) Refresh(ctx context.Context, k K, fill func(ctx context.Cont
 
 // do is one round of Do. again asks for another round: the caller waited
 // on a fill that ended with its leader's context, not with the upstream,
-// and its own context still lives; or, stale, a fresh caller joined an
-// ordinary fill that turned out to rest on reads older than the window,
-// and on the next round (ownRead) reads on its own.
+// and its own context still lives; or a fresh caller joined an ordinary
+// fill that turned out to rest on reads older than the window. Either way
+// the next round (ownRead) reads on its own rather than join another fill
+// that may end the same way; its fill is registered, so callers after it
+// join it.
 func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error), rec *evidence.Recorder, fresh, ownRead bool) (v V, err error, again, stale bool) {
 	c.mu.Lock()
 	now := c.now()
+	window := c.freshWindow()
 	// The entry answers an ordinary caller; a fresh caller takes it only
 	// while it is younger than the join window (or the cache's fresh max
 	// age, when longer).
@@ -313,16 +320,20 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 	// otherwise it reads on its own. An ordinary caller joins the
 	// ordinary fill in flight, or, when there is none, a fresh one.
 	var cl *call[V]
-	if fresh {
+	switch {
+	case ownRead:
+	case fresh:
 		if fc, ok := c.fresh[k]; ok {
 			cl = fc
-		} else if oc, ok := c.inflight[k]; ok && !ownRead && now.Sub(oc.started) < c.freshWindow() {
+		} else if oc, ok := c.inflight[k]; ok && now.Sub(oc.started) < window {
 			cl = oc
 		}
-	} else if oc, ok := c.inflight[k]; ok {
-		cl = oc
-	} else if fc, ok := c.fresh[k]; ok {
-		cl = fc
+	default:
+		if oc, ok := c.inflight[k]; ok {
+			cl = oc
+		} else if fc, ok := c.fresh[k]; ok {
+			cl = fc
+		}
 	}
 	leader := cl == nil
 	if leader {
@@ -371,10 +382,10 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 				// the ended fill did complete stays on the record,
 				// undated likewise.
 				rec.Add(cl.ev, evidence.Shared)
-				return v, nil, true, false
+				return v, nil, true, true
 			}
 		}
-		if fresh && !leader && !cl.fresh && cl.err == nil && now.Sub(cl.began) >= c.freshWindow() {
+		if fresh && !leader && !cl.fresh && cl.err == nil && now.Sub(cl.began) >= window {
 			// The ordinary fill this fresh caller joined rested on cached
 			// reads older than the window: not fresh after all. Its calls
 			// stay on the record; the caller reads on its own.

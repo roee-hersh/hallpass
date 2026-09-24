@@ -198,6 +198,7 @@ func (e *Engine) Probe(ctx context.Context, ids ...string) []ProbeReport {
 		pctx, cancel := context.WithTimeout(ctx, 2*c.settings.EffectiveTimeout())
 		r, err := c.c.Probe(pctx)
 		cancel()
+		e.logPanic(id, "probe", err)
 		out = append(out, ProbeReport{ID: id, Integration: c.settings.Integration, Result: r, Err: err})
 	}
 	return out
@@ -330,7 +331,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 
 	identity, err := e.identity(ctx, c, user)
 	if err != nil {
-		e.logLookupPanic(req, err)
+		e.logPanic(req.Connection, req.Action, err)
 		d := integration.ToDecision(err)
 		d.Evidence = rec.Evidence()
 		return Result{Decision: d, Status: http.StatusOK}
@@ -343,7 +344,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 		Resource:   resource,
 	})
 	if err != nil {
-		e.logLookupPanic(req, err)
+		e.logPanic(req.Connection, req.Action, err)
 		d = integration.ToDecision(err)
 		e.logger.Debug("check failed", "connection", req.Connection, "action", req.Action, "code", d.Code, "error", err.Error())
 	}
@@ -366,14 +367,15 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	return Result{Decision: d, Status: http.StatusOK}
 }
 
-// logLookupPanic logs, once and with its stack, a panic that a cache.TTL
-// fill turned into a *cache.PanicError; the decision is unknown either way,
-// and the operator needs the stack. The panic's type is logged, not its
-// value, which may quote upstream data.
-func (e *Engine) logLookupPanic(req Request, err error) {
+// logPanic logs, once per panic and with its stack, a panic that a
+// cache.TTL fill turned into a *cache.PanicError, whether a check or a
+// probe got it; the outcome is unknown or a failed probe either way, and
+// the operator needs the stack. The panic's type is logged, not its value,
+// which may quote upstream data.
+func (e *Engine) logPanic(connection, action string, err error) {
 	var pe *cache.PanicError
 	if errors.As(err, &pe) && pe.FirstReport() {
-		e.logger.Error("lookup panicked", "connection", req.Connection, "action", req.Action, "type", fmt.Sprintf("%T", pe.Value), "stack", string(pe.Stack))
+		e.logger.Error("lookup panicked", "connection", connection, "action", action, "type", fmt.Sprintf("%T", pe.Value), "stack", string(pe.Stack))
 	}
 }
 
