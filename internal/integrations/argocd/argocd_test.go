@@ -246,8 +246,10 @@ func TestPolicyCacheAndFailures(t *testing.T) {
 	if cl.reads != reads {
 		t.Fatal("policy re-read within the cache window")
 	}
-	// A fresh check re-reads the policy inside the window and the next
-	// check is served from what it read.
+	// A fresh check re-reads the policy inside the window (once it is
+	// more than a second old) and the next check is served from what it
+	// read.
+	*now = now.Add(2 * time.Second)
 	if _, err := c.(*Connection).load(evidence.WithFresh(context.Background())); err != nil {
 		t.Fatal(err)
 	}

@@ -47,8 +47,6 @@ type call[V any] struct {
 	// fresh marks a fill started for a fresh check: an answer it may not
 	// store still removes the older entry, which it has just superseded.
 	fresh bool
-	// waiters counts the callers that joined the fill; tests wait on it.
-	waiters int
 	// rec is the fill's own Recorder, and ev its evidence, snapshotted
 	// once by the fill before done is closed; readAt is the fill's date,
 	// its start or the oldest cached read it rested on, whichever is
@@ -58,11 +56,16 @@ type call[V any] struct {
 	readAt time.Time
 }
 
-// FreshJoinWindow is how recently a fresh fill must have begun for a
-// later fresh caller to wait on it rather than read again: concurrent
-// fresh checks share one read, and a fresh answer is one from a read that
-// began no earlier than this before the caller asked.
+// FreshJoinWindow is how recently a read must have begun for a fresh
+// caller to take it, whether it is a fresh fill still in flight or the
+// entry it left: a fresh answer is one from a read that began no earlier
+// than this before the caller asked, so back-to-back fresh checks share
+// one read.
 const FreshJoinWindow = time.Second
+
+// joined, when set, is told of every caller that joins a fill rather than
+// starting one. Tests use it to wait for the callers they want on a fill.
+var joined func(key any, fresh bool)
 
 // New creates a cache holding at most max entries (0 means 10000).
 func New[K comparable, V any](max int) *TTL[K, V] {
@@ -78,10 +81,10 @@ func New[K comparable, V any](max int) *TTL[K, V] {
 	}
 }
 
-// SetFreshMaxAge lets a fresh check take an entry read less than d ago
-// instead of reading again. For a bulk listing (an organization's whole
-// identity index) that a fresh check has no business re-paging every
-// time; zero, the default, means a fresh check always reads again.
+// SetFreshMaxAge lets a fresh check take a read that began less than d
+// ago, an entry or a fill in flight, instead of reading again, when d is
+// longer than FreshJoinWindow. For a bulk listing (an organization's whole
+// identity index) that a fresh check has no business re-paging every time.
 func (c *TTL[K, V]) SetFreshMaxAge(d time.Duration) {
 	c.mu.Lock()
 	c.freshMaxAge = d
@@ -211,16 +214,14 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // cached lookup still shows what the upstream said when the lookup was
 // made.
 //
-// Under a fresh context (evidence.WithFresh) Do does not take the entry
-// (unless SetFreshMaxAge allows an entry that young) and does not wait on
-// an ordinary fill, which may have begun long before: it starts a fresh
-// fill of its own, kept apart from the ordinary one so neither displaces
-// the other, and its answer replaces the entry unless an even later read
-// stored one first. A fresh read that fails leaves the entry as it was.
-// Fresh callers arriving within FreshJoinWindow (or the fresh max age) of
-// a fresh fill's start share it; later ones read again. An ordinary
-// caller takes the entry, else joins the ordinary fill, else the fresh
-// one.
+// Under a fresh context (evidence.WithFresh) Do takes only a read that
+// began within FreshJoinWindow (or the fresh max age, when longer): such
+// an entry, or such a fresh fill still in flight, which it joins. Else it
+// starts a fresh fill of its own, kept apart from the ordinary one so
+// neither displaces the other, and its answer replaces the entry unless
+// an even later read stored one first. A fresh read that fails leaves the
+// entry as it was. An ordinary caller takes the entry, else joins the
+// ordinary fill, else the fresh one.
 //
 // The fill runs in its own goroutine on a context detached from the first
 // caller's cancellation (see Detach) rather than on ctx itself: otherwise
@@ -262,13 +263,16 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 		return e.v, nil, false
 	}
 	// A fresh caller shares a fresh fill that began within the join
-	// window, or within the fresh max age when the cache has one, and
-	// otherwise reads on its own. An ordinary caller joins the ordinary
-	// fill in flight, or, when there is none, a fresh one.
+	// window, or within the fresh max age when the cache has one (and
+	// then an ordinary fill that young as well), and otherwise reads on
+	// its own. An ordinary caller joins the ordinary fill in flight, or,
+	// when there is none, a fresh one.
 	var cl *call[V]
 	if fresh {
-		if fc, ok := c.fresh[k]; ok && now.Sub(fc.started) < max(FreshJoinWindow, c.freshMaxAge) {
+		if fc, ok := c.fresh[k]; ok && now.Sub(fc.started) < c.freshWindow() {
 			cl = fc
+		} else if oc, ok := c.inflight[k]; ok && now.Sub(oc.started) < c.freshMaxAge {
+			cl = oc
 		}
 	} else if oc, ok := c.inflight[k]; ok {
 		cl = oc
@@ -289,20 +293,27 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 			defer cancel()
 			c.fill(k, cl, fctx, fill)
 		}()
-	} else {
-		cl.waiters++
+	} else if joined != nil {
+		joined(k, fresh)
 	}
 	c.mu.Unlock()
 	select {
 	case <-cl.done:
 		// cl is complete: the fill's goroutine closed done after its
 		// last write.
+		by := evidence.Own
+		if !leader {
+			by = evidence.Shared
+		}
 		if cl.err != nil {
 			if !fresh {
 				// The fill failed; an entry may have landed meanwhile
 				// (another fill's, a fresh read's), and answers an
-				// ordinary caller, leader or not.
+				// ordinary caller, leader or not. What the failed fill
+				// did complete stays on the record, undated: the answer
+				// is the entry's.
 				if e, ok := c.entry(k); ok {
+					rec.Add(cl.ev, by)
 					rec.AddAt(e.ev, evidence.Cached, e.started)
 					return e.v, nil, false
 				}
@@ -311,31 +322,28 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 				// The fill ran on the leader's remaining deadline and
 				// ended because of it; this caller still has time, so it
 				// fills again with its own. What the ended fill did
-				// complete stays on the record.
-				rec.AddAt(cl.ev, evidence.Shared, cl.readAt)
+				// complete stays on the record, undated likewise.
+				rec.Add(cl.ev, evidence.Shared)
 				return v, nil, true
 			}
-		}
-		by := evidence.Own
-		if !leader {
-			by = evidence.Shared
 		}
 		rec.AddAt(cl.ev, by, cl.readAt)
 		return cl.v, cl.err, false
 	case <-ctx.Done():
-		if !leader {
-			c.mu.Lock()
-			cl.waiters--
-			c.mu.Unlock()
-		}
 		return v, ctx.Err(), false
 	}
 }
 
-// youngLocked reports whether e is young enough for a fresh check to take
-// under the cache's fresh max age.
+// youngLocked reports whether e is young enough for a fresh check to take:
+// read within the join window, or the cache's fresh max age when longer.
 func (c *TTL[K, V]) youngLocked(e entry[V], now time.Time) bool {
-	return c.freshMaxAge > 0 && now.Sub(e.started) < c.freshMaxAge
+	return now.Sub(e.started) < c.freshWindow()
+}
+
+// freshWindow is how far back a read may have begun for a fresh caller
+// to take it.
+func (c *TTL[K, V]) freshWindow() time.Duration {
+	return max(FreshJoinWindow, c.freshMaxAge)
 }
 
 // entry returns k's entry when present and not expired.

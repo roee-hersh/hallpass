@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/roee-hersh/hallpass/internal/catalog"
 	"github.com/roee-hersh/hallpass/internal/evidence"
@@ -256,17 +257,28 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 
 func setup(t *testing.T) (*itest.Server, *fake, integration.Connection) {
 	t.Helper()
+	srv, f, c, _ := setupClock(t)
+	return srv, f, c
+}
+
+// setupClock is setup with the connection's clock, which the test moves.
+func setupClock(t *testing.T) (*itest.Server, *fake, integration.Connection, func(time.Duration)) {
+	t.Helper()
 	srv := itest.NewServer(t)
 	srv.UseSpec(itest.AnySpec(itest.SpecFromEnv(t, "datadog-v1"), itest.SpecFromEnv(t, "datadog-v2")), itest.SpecOptions{})
 	f := newFake(t)
 	srv.Handle("GET", "/api/*", f.api)
 	deps, _ := itest.Deps(t, srv)
+	var mu sync.Mutex
+	now := time.Now()
+	deps.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	tick := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
 	s := itest.Settings("dd", "datadog", map[string]string{"url": srv.URL}, map[string]secret.Secret{"api_key": secret.Literal(f.apiKey), "credential": secret.Literal(f.appKey)})
 	c, err := (Integration{}).New(context.Background(), s, deps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return srv, f, c
+	return srv, f, c, tick
 }
 
 func check(t *testing.T, c integration.Connection, u integration.User, action, resource string) integration.Decision {
@@ -454,7 +466,7 @@ func TestRawActions(t *testing.T) {
 }
 
 func TestPermissionsCached(t *testing.T) {
-	_, f, c := setup(t)
+	_, f, c, tick := setupClock(t)
 	expect(t, check(t, c, dana, "logs.read", "org"), integration.CodeAllowed, "")
 	expect(t, check(t, c, dana, "monitor.edit", "monitor:1"), integration.CodeAllowed, "")
 	expect(t, check(t, c, dana, "users.manage", "org"), integration.CodeDenied, "")
@@ -463,7 +475,9 @@ func TestPermissionsCached(t *testing.T) {
 		t.Errorf("role permissions read %d times, want 1", f.permsCalls)
 	}
 	f.mu.Unlock()
-	// A fresh check reads the role's permissions again inside the window.
+	// A fresh check reads the role's permissions again inside the window
+	// (once they are more than a second old).
+	tick(2 * time.Second)
 	id, err := c.ResolveIdentity(context.Background(), dana)
 	if err != nil {
 		t.Fatal(err)

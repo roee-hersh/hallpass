@@ -614,6 +614,11 @@ func Classify(err error) *integration.Error {
 	if errors.As(err, &ie) {
 		return ie
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		// Also when the deadline ran out while waiting to retry a
+		// response: the request did not complete within its budget.
+		return integration.Wrap(integration.CodeUpstreamTimeout, err, "upstream call timed out")
+	}
 	var se *StatusError
 	if errors.As(err, &se) {
 		switch {

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -238,7 +239,10 @@ func TestEvidenceInDecisionLog(t *testing.T) {
 // what it learns replaces both entries.
 func TestFreshCheck(t *testing.T) {
 	u := newUpstream(t)
-	e, logs := buildWeb(t, u, Options{DecisionCache: 30 * time.Second, IdentityCache: 15 * time.Minute})
+	var clockMu sync.Mutex
+	clock := time.Now()
+	e, logs := buildWeb(t, u, Options{DecisionCache: 30 * time.Second, IdentityCache: 15 * time.Minute,
+		Now: func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock }})
 	ctx := context.Background()
 
 	if r := e.Check(ctx, webReq("thing:1", false)); r.Decision.Outcome != integration.Allow || lastFresh.Load() {
@@ -250,6 +254,10 @@ func TestFreshCheck(t *testing.T) {
 	if r := e.Check(ctx, webReq("thing:1", false)); !r.Cached || r.Decision.Outcome != integration.Allow {
 		t.Fatalf("cached: %+v", r)
 	}
+	// A fresh check reads again what was read more than a second ago.
+	clockMu.Lock()
+	clock = clock.Add(2 * time.Second)
+	clockMu.Unlock()
 	// Fresh sees the change and re-resolves the identity.
 	r := e.Check(ctx, webReq("thing:1", true))
 	if r.Cached || r.Decision.Outcome != integration.Deny || u.users.Load() != 2 || u.perms.Load() != 2 {
