@@ -471,10 +471,10 @@ func TestAction_extension_invoke_allow(t *testing.T) {
 func TestAction_extension_invoke_deny(t *testing.T) { allowDeny(t, "extension.invoke", "extensions:x") }
 
 func TestLoadFetchPanicDoesNotWedge(t *testing.T) {
-	_, ic, _ := setup(t, defaultCluster(), "none")
+	srv, ic, _ := setup(t, defaultCluster(), "none")
 	c := ic.(*Connection)
 	k8s := c.k8s
-	c.k8s = nil // fetch dereferences it and panics
+	c.k8s = panickingK8s(t, srv)
 	leaderErr := make(chan error, 1)
 	go func() {
 		_, err := c.load(context.Background())
@@ -508,6 +508,31 @@ func TestLoadFetchPanicDoesNotWedge(t *testing.T) {
 		t.Fatalf("after panic: %v %v", b, err)
 	}
 }
+
+// panickingK8s returns a kubernetes connection whose every request panics
+// in its transport. The panic is an ordinary Go panic: a nil dereference
+// would reach the fill as a hardware fault, which on Windows under -race
+// has crashed the test binary outright.
+func panickingK8s(t *testing.T, srv *itest.Server) *kubernetes.Connection {
+	t.Helper()
+	deps, _ := itest.Deps(t, srv)
+	deps.HTTPClient = func(*integration.Settings) (*http.Client, error) {
+		return &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			panic("fetch")
+		})}, nil
+	}
+	ks := itest.Settings("k8s", "kubernetes", map[string]string{"url": srv.URL, "username_template": "{email}"},
+		map[string]secret.Secret{"credential": itest.Literal("k8s")})
+	kc, err := kubernetes.Integration{}.New(context.Background(), ks, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return kc.(*kubernetes.Connection)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestLoadLeaderCancelDoesNotAbortWaiters(t *testing.T) {
 	cl := defaultCluster()
