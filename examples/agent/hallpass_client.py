@@ -29,11 +29,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import datetime
 import functools
 import http.client
 import inspect
 import ipaddress
 import json
+import logging
 import os
 import re
 import urllib.error
@@ -46,6 +48,10 @@ from typing import Any, Callable, Iterable, TypeVar, Union
 ALLOW = "allow"
 DENY = "deny"
 UNKNOWN = "unknown"
+
+# Where guarded reports each write it let through. hallpass never sees the
+# write itself, so this is the record that ties the action to the check.
+log = logging.getLogger("hallpass")
 
 
 @dataclass(frozen=True)
@@ -303,6 +309,13 @@ def guarded(
     ``fresh=True`` makes every check skip hallpass's caches and ask the
     upstream system now. Use it for destructive actions.
 
+    After the body has run, ``guarded`` logs one line on the ``hallpass``
+    logger (INFO): the decision, when the check was made, whether it was
+    fresh, and that the write was unconditional. hallpass only checked;
+    the write itself ran afterwards with no ``If-Match`` on the state
+    hallpass saw, so nobody reading the logs later should take check and
+    write for one atomic step.
+
         @tool
         @guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
         def delete_issue(key: str) -> str: ...
@@ -334,27 +347,50 @@ def guarded(
                 raise e
             return deny(e)
 
+        def ran(who: str, res: str, d: Decision, checked_at: datetime.datetime, outcome: str) -> None:
+            log.info(
+                "unconditional write: %s %s %s on %s in %s; hallpass said %s (%s) at %s, fresh=%s; "
+                "the write was not conditioned on the state hallpass saw (no If-Match), "
+                "so check and write were not atomic",
+                who, outcome, action, res, connection, d.decision, d.reason,
+                checked_at.isoformat(timespec="milliseconds"), fresh,
+            )
+
         if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
             async def inner(*args, **kwargs):
                 who, grp, res, call = prepare(args, kwargs)
+                checked_at = datetime.datetime.now(datetime.timezone.utc)
                 try:
-                    await asyncio.to_thread(hp.require, who, connection, action, res, grp, fresh=fresh)
+                    d = await asyncio.to_thread(hp.require, who, connection, action, res, grp, fresh=fresh)
                 except PermissionDenied as e:
                     return refused(e)
-                return await call()
+                try:
+                    result = await call()
+                except BaseException as e:
+                    ran(who, res, d, checked_at, f"raised {type(e).__name__} from")
+                    raise
+                ran(who, res, d, checked_at, "ran")
+                return result
 
         else:
 
             @functools.wraps(fn)
             def inner(*args, **kwargs):
                 who, grp, res, call = prepare(args, kwargs)
+                checked_at = datetime.datetime.now(datetime.timezone.utc)
                 try:
-                    hp.require(who, connection, action, res, grp, fresh=fresh)
+                    d = hp.require(who, connection, action, res, grp, fresh=fresh)
                 except PermissionDenied as e:
                     return refused(e)
-                return call()
+                try:
+                    result = call()
+                except BaseException as e:
+                    ran(who, res, d, checked_at, f"raised {type(e).__name__} from")
+                    raise
+                ran(who, res, d, checked_at, "ran")
+                return result
 
         inner.__signature__ = sig  # type: ignore[attr-defined]
         return inner  # type: ignore[return-value]

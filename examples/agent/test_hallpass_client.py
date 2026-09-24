@@ -255,6 +255,40 @@ class GuardedTest(unittest.TestCase):
         self.assertEqual(last_request(), {"user": DANA, "groups": ["platform-team"], "connection": "demo",
                                           "action": "thing.write", "resource": "thing:badline"})
 
+    def test_logs_unconditional_write(self):
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA, fresh=True)
+        def write(thing_id: str) -> str:
+            return "ok"
+
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
+        def broken(thing_id: str) -> str:
+            raise ValueError("boom")
+
+        @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA)
+        async def awrite(thing_id: str) -> str:
+            return "ok"
+
+        with self.assertLogs("hallpass", level="INFO") as logs:
+            self.assertEqual(write(thing_id="allowed"), "ok")
+        line = logs.output[0]
+        for part in ("unconditional write", DANA, "ran thing.write on thing:allowed in demo",
+                     "hallpass said allow (allowed: admin)", "fresh=True", "no If-Match", "not atomic"):
+            self.assertIn(part, line)
+        self.assertRegex(line, r"at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}\+00:00")
+        # A body that raises still logs: the write may have happened.
+        with self.assertLogs("hallpass", level="INFO") as logs:
+            with self.assertRaises(ValueError):
+                broken(thing_id="allowed")
+        self.assertIn("raised ValueError from thing.write", logs.output[0])
+        self.assertIn("fresh=False", logs.output[0])
+        with self.assertLogs("hallpass", level="INFO") as logs:
+            self.assertEqual(asyncio.run(awrite(thing_id="allowed")), "ok")
+        self.assertIn("ran thing.write on thing:allowed", logs.output[0])
+        # A refused call writes nothing, so it logs nothing.
+        with self.assertNoLogs("hallpass", level="INFO"):
+            with self.assertRaises(PermissionDenied):
+                write(thing_id="denied")
+
     def test_fresh(self):
         @guarded(self.hp, "demo", "thing.write", "thing:{thing_id}", user=DANA, fresh=True)
         def delete(thing_id: str) -> str:

@@ -67,6 +67,21 @@ only some APIs support. A hallpass built before `fresh` existed rejects a
 request that carries it, which the clients report as `unknown`: upgrade the
 service before turning `fresh` on.
 
+hallpass never sees the write itself, so `guarded` records it: after the
+body has run it logs one line on the Python logger `hallpass` (INFO) with
+the decision and reason, the time the check was made, whether it was fresh,
+and that the write was unconditional, with no `If-Match` on the state
+hallpass saw. Nobody reading the logs later should take check and write for
+one atomic step. A refused call logs nothing; a body that raises still
+logs, since the write may have happened.
+
+```
+unconditional write: dana@example.com ran DELETE_ISSUES on issue:PAY-123 in jira-main;
+hallpass said allow (allowed: dana may delete issues in PAY) at 2026-09-24T10:00:00.412+00:00,
+fresh=True; the write was not conditioned on the state hallpass saw (no If-Match),
+so check and write were not atomic
+```
+
 ## The `guarded` decorator
 
 `guarded` wraps a function so that its body runs only after hallpass allowed
