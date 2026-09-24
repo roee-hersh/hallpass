@@ -25,6 +25,49 @@ snippet live in [`examples/agent`](../examples/agent) and
 4. **hallpass only checks.** The action itself still runs with the agent's
    own credential, in your code, after the check.
 
+## Where to put the check
+
+Guard the tools that change state, and only those. A check per tool call costs an upstream round
+trip and can answer `unknown`, so it belongs where a wrong answer would let the agent do something
+on someone's behalf that they could not do themselves, and nowhere else.
+
+- **Reads stay unguarded.** What the agent can see is bounded by its own credential; give it a
+  read-only account with the scope you are comfortable exposing to everyone who can talk to it,
+  and let it read freely. A diagnosis tool that pulls logs, metrics, events and restarts in one call
+  should not wait on hallpass, and does not need to.
+- **Writes get one check each, at the boundary.** The tool that opens the pull request, scales the
+  deployment or deletes the issue asks once, immediately before it acts, for the user the session
+  was authenticated as. Actions with lasting effect use `fresh=True` so the answer comes from the
+  system, not the cache.
+- **Narrow the write paths first.** An agent that changes production only by opening a GitOps pull
+  request has one write path to guard, and the merge stays with the humans and rules the repository
+  already has. That is a better position than guarding twenty direct-write tools.
+
+The pattern this project came from: an ops agent whose `service_health` tool reads everything and
+is not guarded, and whose one state-changing tool opens a pull request against the GitOps
+repository:
+
+```python
+@tool
+def service_health(service: str) -> str:
+    """Error counts, metrics, events, restarts and node status for a service."""
+    ...  # read-only account, no check
+
+@tool
+@guarded(hp, "github-main", "repo.push", "repo:{owner}/{repo}", user=current_user, fresh=True)
+def open_config_pr(owner: str, repo: str, title: str, patch: str) -> str:
+    """Push a branch with the change and open a pull request for it."""
+    ...  # the agent's own token; runs only when GitHub says this user may push to that repository
+```
+
+Match the action to what the tool really does. This tool pushes a branch into the repository
+before it opens the pull request, so the question is whether the user may push there:
+`repo.push`, answered from GitHub's collaborator permission on that repository. `pr.create` is
+the weaker question, and deliberately so: GitHub lets a user with only `pull` open a pull
+request from a fork, so `pr.create` allows them when forking is enabled. Use it only for a tool
+that forks rather than pushes. Add `@{branch}` to the resource when the tool pushes to a
+protected branch directly, so the branch's rules are applied too.
+
 ## The client
 
 [`examples/agent/hallpass_client.py`](../examples/agent/hallpass_client.py)

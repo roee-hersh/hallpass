@@ -19,13 +19,21 @@ hallpass. hallpass asks the third-party system live, with its own read-only cred
 
 ## Why
 
-An AI agent or chat bot usually holds one powerful service account. When Dana asks it to delete a
-Jira issue or scale a deployment, the bot can, even when Dana could not. Copying every system's
-permission model into your own policy engine drifts out of date the day you write it.
+hallpass came out of an ops agent that runs at work. One tool call gives it a service's health from
+every angle (error counts, metrics, Kubernetes events, pod restarts, node status) in a few seconds,
+so it reads everything, with a read-only account, and nobody gates the reads. It changes things one
+way only: by opening a pull request against the GitOps repository. That single write path raised a
+question the agent could not answer on its own: may the *person asking* open that pull request in
+that repository? The agent's token could, whoever asked. GitHub already knows the answer, so the
+agent asks GitHub. hallpass is that question, pulled out of the agent so every write path can use
+it, in every system the agent touches.
 
-hallpass asks the source of truth instead: Kubernetes `SubjectAccessReview`, Jira's permission API,
-GitHub collaborator roles, AWS IAM policy simulation, and so on. One API, twenty-one systems, no
-synced copy of anyone's permissions.
+The general form: an agent or chat bot holds one credential that covers everything anyone uses it
+for. When Dana asks it to delete a Jira issue or scale a deployment, the bot can, even when Dana
+could not. Copying every system's permission model into your own policy engine drifts out of date
+the day you write it. hallpass asks the source of truth instead: Kubernetes `SubjectAccessReview`,
+Jira's permission API, GitHub collaborator roles, AWS IAM policy simulation, and so on. One API,
+twenty-one systems, no synced copy of anyone's permissions.
 
 ```mermaid
 sequenceDiagram
