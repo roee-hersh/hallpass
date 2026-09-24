@@ -26,11 +26,10 @@ const (
 const (
 	// samlCacheTTL is how long the full external-identity map is reused.
 	samlCacheTTL = 10 * time.Minute
-	// samlFreshMaxAge is how old the map may be for a fresh check to use
-	// it: the map is an organization's whole identity listing, paged, and
-	// a link between an address and a login is not what a fresh check is
-	// about; the permission read that follows is always live.
-	samlFreshMaxAge = time.Minute
+	// A fresh check uses the map for as long as anyone: it is an
+	// organization's whole identity listing, paged, and a link between an
+	// address and a login is not what a fresh check is about; the
+	// permission read that follows is always live.
 	// mapFileTTL is the shortest interval between two reads of user_map_file.
 	mapFileTTL = 60 * time.Second
 )

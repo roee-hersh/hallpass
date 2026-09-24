@@ -27,9 +27,10 @@ type Call struct {
 	// Path is the request path as sent. Never the query string, which may
 	// carry user data or a token.
 	Path string `json:"path"`
-	// Host is set only when the call went to a host other than the
-	// connection's own base URL: some vendors spread an API over several
-	// hosts, and a path alone would not say which answered.
+	// Host is set when the call went to a host other than the client's
+	// base URL, or was made by a client with no base URL: some vendors
+	// spread an API over several hosts, or name the instance to use at
+	// login, and a path alone would not say which answered.
 	Host   string `json:"host,omitempty"`
 	Status int    `json:"status"`
 	// ETag is the response's ETag header, when it sent one.

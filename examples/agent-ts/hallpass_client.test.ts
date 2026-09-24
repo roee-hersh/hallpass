@@ -145,8 +145,11 @@ describe("client", () => {
     assert.equal("fresh" in fake.lastRequest(), false);
     await hp.check(DANA, "demo", "thing.write", "thing:allowed", {});
     assert.equal("groups" in fake.lastRequest(), false);
-    // A bare boolean in the options slot is a clear error, not a request.
+    // A bare boolean in the options slot is a clear error, not a request;
+    // so are a Set of groups and an unknown option.
     await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", true as unknown as string[]), /pass \{ fresh: true \}/);
+    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", new Set(["a"]) as unknown as string[]), /array of strings/);
+    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", { group: ["a"] } as unknown as string[]), /unknown check option "group"/);
   });
 
   test("require and allowed", async () => {

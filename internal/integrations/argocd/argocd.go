@@ -17,7 +17,6 @@ import (
 
 	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/catalog"
-	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 	"github.com/roee-hersh/hallpass/internal/integrations/argocd/rbac"
@@ -316,12 +315,15 @@ func who(subject string, groups []string) string {
 
 // Probe reads the policy and reports what it found.
 func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error) {
-	// A fresh read: what it finds replaces the bundle, and a failure
-	// leaves the bundle checks are being answered from.
-	b, err := c.load(evidence.WithFresh(ctx))
+	// The probe reads the cluster itself, whatever the cache holds: what
+	// it finds replaces the bundle, and a failure leaves the bundle
+	// checks are being answered from.
+	started := c.now()
+	b, err := c.fetch(ctx)
 	if err != nil {
 		return integration.ProbeResult{}, err
 	}
+	c.policies.Store(struct{}{}, b, policyCacheTTL, started)
 	res := integration.ProbeResult{}
 	lines := 0
 	for _, l := range strings.Split(b.userPolicy, "\n") {

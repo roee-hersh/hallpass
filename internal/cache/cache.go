@@ -272,14 +272,14 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 	}
 	// A fresh caller shares a fresh fill still in flight (its answer is
 	// no older than that fill's start, which the caller would otherwise
-	// reproduce) and, under a fresh max age, an ordinary fill that young;
+	// reproduce) and an ordinary fill that began within the window;
 	// otherwise it reads on its own. An ordinary caller joins the
 	// ordinary fill in flight, or, when there is none, a fresh one.
 	var cl *call[V]
 	if fresh {
 		if fc, ok := c.fresh[k]; ok {
 			cl = fc
-		} else if oc, ok := c.inflight[k]; ok && now.Sub(oc.started) < c.freshMaxAge {
+		} else if oc, ok := c.inflight[k]; ok && now.Sub(oc.started) < c.freshWindow() {
 			cl = oc
 		}
 	} else if oc, ok := c.inflight[k]; ok {

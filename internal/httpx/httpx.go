@@ -417,14 +417,14 @@ func absolute(p string) bool {
 	return strings.HasPrefix(p, "https://") || strings.HasPrefix(p, "http://")
 }
 
-// foreignHost returns u's host when it is not the client's base host, for
-// the evidence record of a request made with a full URL, and "" when it is
-// the base host or the client has no base (a plain client an integration
-// points at its own connection's URL). A relative path is always the base
-// host, so this is not on that path's way.
+// foreignHost returns u's host for the evidence record of a request made
+// with a full URL: "" when it is the client's base host, the host itself
+// when it is another or the client has no base (an integration's client
+// for an instance URL learned at login, which the record must name). A
+// relative path is always the base host, so this is not on that path's
+// way.
 func (c *Client) foreignHost(u *url.URL) string {
-	base := c.baseURL()
-	if base == nil || sameHost(base, u) {
+	if base := c.baseURL(); base != nil && sameHost(base, u) {
 		return ""
 	}
 	return u.Host
@@ -603,6 +603,9 @@ func Classify(err error) *integration.Error {
 		// Also when the deadline ran out while waiting to retry a
 		// response: the request did not complete within its budget.
 		return integration.Wrap(integration.CodeUpstreamTimeout, err, "upstream call timed out")
+	}
+	if errors.Is(err, context.Canceled) {
+		return integration.Wrap(integration.CodeUpstreamError, err, "request cancelled")
 	}
 	var se *StatusError
 	if errors.As(err, &se) {

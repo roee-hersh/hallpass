@@ -330,6 +330,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 
 	identity, err := e.identity(ctx, c, user)
 	if err != nil {
+		e.logLookupPanic(req, err)
 		d := integration.ToDecision(err)
 		d.Evidence = rec.Evidence()
 		return Result{Decision: d, Status: http.StatusOK}
@@ -342,6 +343,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 		Resource:   resource,
 	})
 	if err != nil {
+		e.logLookupPanic(req, err)
 		d = integration.ToDecision(err)
 		e.logger.Debug("check failed", "connection", req.Connection, "action", req.Action, "code", d.Code, "error", err.Error())
 	}
@@ -361,6 +363,17 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 		e.decs.Store(decKey, d, e.decTTL, started)
 	}
 	return Result{Decision: d, Status: http.StatusOK}
+}
+
+// logLookupPanic logs, once and with its stack, a panic that a cache.TTL
+// fill turned into a *cache.PanicError; the decision is unknown either way,
+// and the operator needs the stack. The panic's type is logged, not its
+// value, which may quote upstream data.
+func (e *Engine) logLookupPanic(req Request, err error) {
+	var pe *cache.PanicError
+	if errors.As(err, &pe) {
+		e.logger.Error("lookup panicked", "connection", req.Connection, "action", req.Action, "type", fmt.Sprintf("%T", pe.Value), "stack", string(pe.Stack))
+	}
 }
 
 // groupsKey encodes a normalized group list for a cache key. Groups are

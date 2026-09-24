@@ -452,8 +452,9 @@ func TestDoFresh(t *testing.T) {
 		t.Fatalf("after fresh: %+v", ev)
 	}
 
-	// A fresh caller does not join an ordinary fill in flight, and the
-	// older fill finishing later does not replace the fresh answer.
+	// A fresh caller does not join an ordinary fill in flight that began
+	// before the window, and the older fill finishing later does not
+	// replace the fresh answer.
 	started := make(chan struct{})
 	release := make(chan struct{})
 	slow := func(ctx context.Context) (int, time.Duration, error) {
@@ -464,7 +465,7 @@ func TestDoFresh(t *testing.T) {
 	slowDone := make(chan struct{})
 	go func() { defer close(slowDone); c.Do(ctx, "slow", slow) }()
 	<-started
-	tick(time.Millisecond) // the fresh read begins after the slow fill's start
+	tick(FreshJoinWindow) // the slow fill is now too old for a fresh caller
 	done := make(chan int, 1)
 	go func() {
 		v, _ := c.Do(evidence.WithFresh(ctx), "slow", func(context.Context) (int, time.Duration, error) { return 7, time.Minute, nil })
@@ -495,7 +496,7 @@ func TestDoFresh(t *testing.T) {
 	slowDone2 := make(chan struct{})
 	go func() { defer close(slowDone2); c.Do(ctx, "order", slow2) }()
 	<-started2
-	tick(time.Millisecond)
+	tick(FreshJoinWindow)
 	fstarted2 := make(chan struct{})
 	frelease2 := make(chan struct{})
 	freshDone2 := make(chan struct{})
@@ -552,6 +553,7 @@ func TestDoFresh(t *testing.T) {
 	ordinaryDone := make(chan int, 1)
 	go func() { v, _ := c.Do(ctx, "join", ordinary); ordinaryDone <- v }()
 	<-ostarted
+	tick(FreshJoinWindow) // the ordinary fill is now too old for a fresh caller to join
 	fstarted := make(chan struct{})
 	frelease := make(chan struct{})
 	joinable := func(ctx context.Context) (int, time.Duration, error) {
@@ -769,7 +771,8 @@ func TestDoFresh(t *testing.T) {
 	if v := <-shared; v != 10 || agedFills.Load() != 3 {
 		t.Fatalf("fresh caller within the max age did not share the fill: v=%d fills=%d", v, agedFills.Load())
 	}
-	// ... and an ordinary fill that young as well.
+	// ... and an ordinary fill that began within the window as well
+	// (here the max age, being longer).
 	ostarted2 := make(chan struct{})
 	orelease2 := make(chan struct{})
 	go aged.Do(ctx, "ordinary", func(context.Context) (int, time.Duration, error) {

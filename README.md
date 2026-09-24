@@ -188,9 +188,9 @@ entries, so reads keep using the cache. Use it for destructive actions (delete, 
 where a 30-second-old answer is not good enough, and not for reads: a fresh check costs every
 upstream call an uncached check makes (for Argo CD, the policy config maps and the project list;
 for Vault, the policies involved; for Snowflake, the grants of every role in the hierarchy).
-Lookups that are not permission state are reused: GitHub's organization-wide SAML identity
-listing when under a minute old (the permission read after it is live anyway), Salesforce's
-object and field describes, and hallpass's own principal name in Databricks. Fresh checks share
+Lookups that are not permission state are reused for as long as any check reuses them: GitHub's
+organization-wide SAML identity listing (the permission read after it is live anyway),
+Salesforce's object and field describes, and hallpass's own principal name in Databricks. Fresh checks share
 a lookup one of them has in flight (an identity, a role's permissions, a policy) and one read
 less than a second ago; a fresh answer is one from reads in flight when the caller asked or begun
 no more than a second before. Maps hallpass reads from a local file
@@ -221,7 +221,8 @@ Every answered check is one JSON line in `decision_log` (a path, `stderr`, `stdo
 `reason` says what the decision was based on; `evidence` ties it to the exact upstream state. Each
 entry under `upstream` is one call the decision was computed from: the method and path (never the
 query string, which may carry user data), the host only when the call went to a host other than the
-connection's own base URL (some vendors spread an API over several hosts), the HTTP status, and the
+connection's own base URL or to an instance the vendor named at login (some vendors spread an API
+over several hosts), the HTTP status, and the
 response's `ETag` when the upstream sent one, else the SHA-256 of the response body.
 Response bodies, other headers and credentials are never logged; the token exchange an integration
 makes to authenticate is not evidence and is left out. A call marked `cached` was not made for this

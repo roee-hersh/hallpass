@@ -261,8 +261,14 @@ function checkOptions(o: readonly string[] | null | CheckOptions | undefined): {
   if (typeof o === "boolean") {
     throw new TypeError("the fifth argument is the groups array or { groups, fresh }; pass { fresh: true } for a fresh check");
   }
-  if (typeof o !== "object") {
+  if (typeof o !== "object" || Symbol.iterator in o) {
+    // A Set or another iterable of groups is not an array of them.
     throw new TypeError("groups must be an array of strings");
+  }
+  for (const key of Object.keys(o)) {
+    if (key !== "groups" && key !== "fresh") {
+      throw new TypeError(`unknown check option ${JSON.stringify(key)}; the options are groups and fresh`);
+    }
   }
   const opts = o as CheckOptions;
   return { groups: opts.groups ?? null, fresh: opts.fresh === true };
