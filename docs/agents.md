@@ -366,12 +366,13 @@ d.allowed;  // true only for allow
 await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123");
 // rejects with PermissionDenied unless the answer is allow
 
-await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", null, true);
+await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", { fresh: true });
 // fresh: skips hallpass's caches and asks Jira now, for a destructive action
 ```
 
-`check`, `allowed` and `require` take `groups` and then `fresh`, with the
-meaning described for the Python client above.
+The fifth argument of `check`, `allowed` and `require` is the user's groups
+or an options object, `{ groups, fresh }`, with the meaning described for
+the Python client above.
 
 Every Node agent framework calls a tool with one object of arguments, so
 `guarded` wraps a function of that shape and returns one with the same

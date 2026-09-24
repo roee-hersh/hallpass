@@ -181,6 +181,10 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	c.desc.SetClock(c.now)
 	c.objects = cache.New[string, bool](0)
 	c.objects.SetClock(c.now)
+	// Describes are schema, not permission state: a fresh check does not
+	// re-read them.
+	c.desc.SetFreshMaxAge(describeTTL)
+	c.objects.SetFreshMaxAge(describeTTL)
 	if c.url == "" {
 		return nil, errors.New("url is required")
 	}

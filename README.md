@@ -187,12 +187,13 @@ definitions, policies), and asks the upstream system now; what it learns replace
 entries, so reads keep using the cache. Use it for destructive actions (delete, merge, scale),
 where a 30-second-old answer is not good enough, and not for reads: a fresh check costs every
 upstream call an uncached check makes (for Argo CD, the policy config maps and the project list;
-for Vault, the policies involved; for Snowflake, the grants of every role in the hierarchy). One
-exception: GitHub's organization-wide SAML identity listing, which a fresh check reuses when it
-is under a minute old, since the permission read after it is live anyway. Fresh checks that
-arrive within a second of each other share the lookups they re-read (an identity, a role's
-permissions, a policy); a fresh answer is one from reads that began no more than a second before
-the caller asked. Maps hallpass reads from a local file
+for Vault, the policies involved; for Snowflake, the grants of every role in the hierarchy).
+Lookups that are not permission state are reused: GitHub's organization-wide SAML identity
+listing when under a minute old (the permission read after it is live anyway), Salesforce's
+object and field describes, and hallpass's own principal name in Databricks. Fresh checks share
+a lookup one of them has in flight (an identity, a role's permissions, a policy) and one read
+less than a second ago; a fresh answer is one from reads in flight when the caller asked or begun
+no more than a second before. Maps hallpass reads from a local file
 (`role_map_file`, `user_map_file`) are re-read on their own schedule, not per fresh check. A fresh
 check narrows the window between the check and the action to the time between the two; it does
 not close it. Closing it needs a conditional write in the upstream system (for example `If-Match`

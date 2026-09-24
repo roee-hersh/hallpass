@@ -133,14 +133,20 @@ describe("client", () => {
     await assert.rejects(check("allowed", ["ok", 1] as unknown as string[]), TypeError);
     assert.equal(fake.seen.length, 3);
     assert.equal("fresh" in fake.lastRequest(), false, "fresh omitted when not asked");
-    await hp.check(DANA, "demo", "thing.write", "thing:allowed", undefined, true);
+    await hp.check(DANA, "demo", "thing.write", "thing:allowed", { fresh: true });
     assert.deepEqual(fake.lastRequest(), {
       user: DANA, connection: "demo", action: "thing.write", resource: "thing:allowed", fresh: true,
     });
-    await hp.check(DANA, "demo", "thing.write", "thing:allowed", null, false);
+    await hp.check(DANA, "demo", "thing.write", "thing:allowed", { groups: ["a"], fresh: true });
+    assert.deepEqual(fake.lastRequest(), {
+      user: DANA, groups: ["a"], connection: "demo", action: "thing.write", resource: "thing:allowed", fresh: true,
+    });
+    await hp.check(DANA, "demo", "thing.write", "thing:allowed", { fresh: false });
     assert.equal("fresh" in fake.lastRequest(), false);
-    // fresh in the groups slot is a clear error, not a request.
-    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", true as unknown as string[]), /fresh is the argument after groups/);
+    await hp.check(DANA, "demo", "thing.write", "thing:allowed", {});
+    assert.equal("groups" in fake.lastRequest(), false);
+    // A bare boolean in the options slot is a clear error, not a request.
+    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", true as unknown as string[]), /pass \{ fresh: true \}/);
   });
 
   test("require and allowed", async () => {
@@ -148,9 +154,9 @@ describe("client", () => {
     assert.equal(await hp.allowed("u", "demo", "thing.write", "thing:timeout"), false);
     await hp.require("u", "demo", "thing.write", "thing:allowed");
     assert.equal("fresh" in fake.lastRequest(), false);
-    await hp.require("u", "demo", "thing.write", "thing:allowed", undefined, true);
+    await hp.require("u", "demo", "thing.write", "thing:allowed", { fresh: true });
     assert.equal(fake.lastRequest().fresh, true);
-    assert.equal(await hp.allowed("u", "demo", "thing.write", "thing:allowed", null, true), true);
+    assert.equal(await hp.allowed("u", "demo", "thing.write", "thing:allowed", { fresh: true }), true);
     assert.equal(fake.lastRequest().fresh, true);
     await assert.rejects(hp.require("u", "demo", "thing.write", "thing:timeout"), (e: unknown) => {
       assert.ok(e instanceof PermissionDenied);

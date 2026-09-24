@@ -125,21 +125,23 @@ export class Hallpass {
 
   /**
    * Ask hallpass. Never rejects on transport: every failure becomes an
-   * `unknown` decision. `groups` left out or null is omitted from the request.
+   * `unknown` decision. The fifth argument is the user's groups, or an
+   * options object: `{ groups, fresh }`. Groups left out or null are
+   * omitted from the request.
    *
-   * `fresh` asks for an answer straight from the upstream system, skipping
-   * hallpass's caches. Use it for destructive actions. It narrows the window
-   * between the check and the action to the time between the two; it does
-   * not close it.
+   * `fresh: true` asks for an answer straight from the upstream system,
+   * skipping hallpass's caches. Use it for destructive actions. It narrows
+   * the window between the check and the action to the time between the
+   * two; it does not close it.
    */
   async check(
     user: string,
     connection: string,
     action: string,
     resource: string,
-    groups?: readonly string[] | null,
-    fresh = false,
+    options?: readonly string[] | null | CheckOptions,
   ): Promise<Decision> {
+    const { groups, fresh } = checkOptions(options);
     const body: Record<string, unknown> = { user, connection, action, resource };
     if (groups != null) {
       body.groups = groupList(groups);
@@ -177,10 +179,9 @@ export class Hallpass {
     connection: string,
     action: string,
     resource: string,
-    groups?: readonly string[] | null,
-    fresh = false,
+    options?: readonly string[] | null | CheckOptions,
   ): Promise<boolean> {
-    return (await this.check(user, connection, action, resource, groups, fresh)).allowed;
+    return (await this.check(user, connection, action, resource, options)).allowed;
   }
 
   /** Resolve to the decision when it is `allow`; reject with `PermissionDenied` otherwise. */
@@ -189,10 +190,9 @@ export class Hallpass {
     connection: string,
     action: string,
     resource: string,
-    groups?: readonly string[] | null,
-    fresh = false,
+    options?: readonly string[] | null | CheckOptions,
   ): Promise<Decision> {
-    const d = await this.check(user, connection, action, resource, groups, fresh);
+    const d = await this.check(user, connection, action, resource, options);
     if (!d.allowed) {
       throw new PermissionDenied(d, user, connection, action, resource);
     }
@@ -243,10 +243,32 @@ function isLoopback(hostname: string): boolean {
   return mapped !== null && parseInt(mapped[1]!, 16) >> 8 === 127;
 }
 
-function groupList(groups: readonly string[]): string[] {
-  if (typeof groups === "boolean") {
-    throw new TypeError("groups must be an array of strings; fresh is the argument after groups (pass null for no groups)");
+/** Options of `check`, `allowed` and `require`. */
+export interface CheckOptions {
+  /** The user's groups; left out or null, none are sent. */
+  groups?: readonly string[] | null;
+  /** Skip hallpass's caches and ask the upstream system now. */
+  fresh?: boolean;
+}
+
+function checkOptions(o: readonly string[] | null | CheckOptions | undefined): { groups: readonly string[] | null; fresh: boolean } {
+  if (o == null) {
+    return { groups: null, fresh: false };
   }
+  if (Array.isArray(o)) {
+    return { groups: o as readonly string[], fresh: false };
+  }
+  if (typeof o === "boolean") {
+    throw new TypeError("the fifth argument is the groups array or { groups, fresh }; pass { fresh: true } for a fresh check");
+  }
+  if (typeof o !== "object") {
+    throw new TypeError("groups must be an array of strings");
+  }
+  const opts = o as CheckOptions;
+  return { groups: opts.groups ?? null, fresh: opts.fresh === true };
+}
+
+function groupList(groups: readonly string[]): string[] {
   if (typeof groups === "string" || !Array.isArray(groups) || !groups.every((g) => typeof g === "string")) {
     throw new TypeError("groups must be an array of strings");
   }
@@ -384,7 +406,7 @@ export function guarded<D = never>(
       }
       const grp = groups === undefined ? undefined : current(groups, "groups");
       try {
-        await hp.require(who, connection, action, target, grp, fresh);
+        await hp.require(who, connection, action, target, { groups: grp, fresh });
       } catch (e) {
         if (e instanceof PermissionDenied && deny !== undefined) {
           return deny(e);

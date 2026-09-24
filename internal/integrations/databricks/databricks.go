@@ -124,6 +124,8 @@ func (Integration) New(_ context.Context, s *integration.Settings, d integration
 	}
 	c.self = cache.New[struct{}, string](1)
 	c.self.SetClock(c.now)
+	// hallpass's own principal name is not what a fresh check is about.
+	c.self.SetFreshMaxAge(selfTTL)
 	c.plain = &httpx.Client{HTTP: hc, Logger: d.Logger}
 	c.tokens = &authx.TokenSource{Now: c.now, Fetch: c.mint}
 	c.api = &httpx.Client{HTTP: hc, Base: base, Logger: d.Logger, Auth: httpx.BearerAuth(c.bearer)}

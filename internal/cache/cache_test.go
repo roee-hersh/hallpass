@@ -262,8 +262,8 @@ func TestDetach(t *testing.T) {
 // gets them marked cached, and a fill that failed still reports what it
 // saw to its leader.
 func TestDoEvidence(t *testing.T) {
-	trackJoins(t)
 	c := New[string, int](0)
+	c.trackJoins()
 	call := func(p string) evidence.Call { return evidence.Call{Method: "GET", Path: p, Status: 200} }
 	fill := func(ctx context.Context) (int, time.Duration, error) {
 		evidence.RecorderFrom(ctx).Record(call("/lookup"))
@@ -362,40 +362,27 @@ func (c *TTL[K, V]) inflightCount() int {
 	return len(c.inflight) + len(c.fresh)
 }
 
-// joins counts, per key and kind, the callers that joined a fill since
-// trackJoins was called, through the package's test hook.
-var joins struct {
-	mu sync.Mutex
-	n  map[string]int
-}
-
-func joinKey(k any, fresh bool) string { return fmt.Sprintf("%v/%v", k, fresh) }
-
-// trackJoins installs the hook for the test's lifetime.
-func trackJoins(t *testing.T) {
-	t.Helper()
-	joins.mu.Lock()
-	joins.n = map[string]int{}
-	joins.mu.Unlock()
-	joined = func(k any, fresh bool) {
-		joins.mu.Lock()
-		joins.n[joinKey(k, fresh)]++
-		joins.mu.Unlock()
-	}
-	t.Cleanup(func() { joined = nil })
+// trackJoins makes c count, per key and kind, the callers that join a
+// fill, so a test releases a fill only once the callers it wants on it
+// have joined.
+func (c *TTL[K, V]) trackJoins() {
+	n := map[string]int{}
+	c.mu.Lock()
+	c.joined = func(k K, fresh bool) { n[fmt.Sprintf("%v/%v", k, fresh)]++ }
+	c.joins = func(k K, fresh bool) int { return n[fmt.Sprintf("%v/%v", k, fresh)] }
+	c.mu.Unlock()
 }
 
 // awaitWaiters spins until at least ordinary ordinary callers and fresh
 // fresh callers have joined a fill for k (whichever fill they joined)
-// since trackJoins, so a test releases a fill only once the callers it
-// wants on it have joined.
+// since trackJoins.
 func (c *TTL[K, V]) awaitWaiters(t *testing.T, k K, ordinary, fresh int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		joins.mu.Lock()
-		o, f := joins.n[joinKey(k, false)], joins.n[joinKey(k, true)]
-		joins.mu.Unlock()
+		c.mu.Lock()
+		o, f := c.joins(k, false), c.joins(k, true)
+		c.mu.Unlock()
 		if o >= ordinary && f >= fresh {
 			return
 		}
@@ -424,8 +411,8 @@ func (c *TTL[K, V]) awaitFresh(t *testing.T, k K, want bool) {
 // and any fill in flight, records the calls as its own, and stores the
 // answer for the callers after it.
 func TestDoFresh(t *testing.T) {
-	trackJoins(t)
 	c := New[string, int](0)
+	c.trackJoins()
 	var clockMu sync.Mutex
 	clock := time.Now()
 	c.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
@@ -585,18 +572,26 @@ func TestDoFresh(t *testing.T) {
 	freshJoined := make(chan int, 1)
 	go func() { v, _ := c.Do(evidence.WithFresh(ctx), "join", another); freshJoined <- v }()
 	c.awaitWaiters(t, "join", 1, 1)
+	// A fresh fill still in flight is shared however long ago it began.
+	clockMu.Lock()
+	clock = clock.Add(FreshJoinWindow + time.Second)
+	clockMu.Unlock()
+	lateJoined := make(chan int, 1)
+	go func() { v, _ := c.Do(evidence.WithFresh(ctx), "join", another); lateJoined <- v }()
+	c.awaitWaiters(t, "join", 1, 2)
+	close(frelease)
+	for _, ch := range []chan int{freshJoined, lateJoined, freshDone} {
+		if v := <-ch; v != 11 || freshFills.Load() != 1 {
+			t.Fatalf("fresh caller did not share the fresh fill: v=%d fills=%d", v, freshFills.Load())
+		}
+	}
+	// Once it is done and its entry older than the window, a fresh
+	// caller reads again.
 	clockMu.Lock()
 	clock = clock.Add(FreshJoinWindow)
 	clockMu.Unlock()
 	if v, _ := c.Do(evidence.WithFresh(ctx), "join", another); v != 12 || freshFills.Load() != 2 {
-		t.Fatalf("late fresh caller joined a fill older than the window: v=%d fills=%d", v, freshFills.Load())
-	}
-	close(frelease)
-	if v := <-freshJoined; v != 11 {
-		t.Fatalf("fresh caller within the window did not share the fresh fill: %d", v)
-	}
-	if v := <-freshDone; v != 11 {
-		t.Fatalf("fresh fill: v=%d", v)
+		t.Fatalf("fresh caller took an entry older than the window: v=%d fills=%d", v, freshFills.Load())
 	}
 	close(orelease)
 	if v := <-joined; v != 10 {
@@ -702,7 +697,7 @@ func TestDoFresh(t *testing.T) {
 	landedRec.Record(evidence.Call{Method: "GET", Path: "/landed", Status: 200})
 	_ = landedCtx
 	c.mu.Lock()
-	c.storeLocked("failed-record", 6, time.Minute, landedRec.Evidence(), clock.Add(-time.Hour))
+	c.storeLocked("failed-record", 6, time.Minute, landedRec.Evidence(), clock.Add(-time.Hour), clock)
 	c.mu.Unlock()
 	close(ffail3)
 	if v := <-got3; v != 6 {
@@ -719,6 +714,7 @@ func TestDoFresh(t *testing.T) {
 	// With a fresh max age, a fresh caller takes an entry younger than it
 	// and reads again past it.
 	aged := New[string, int](0)
+	aged.trackJoins()
 	aged.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
 	aged.SetFreshMaxAge(time.Minute)
 	var agedFills atomic.Int32
@@ -753,8 +749,7 @@ func TestDoFresh(t *testing.T) {
 	if v, _ := aged.Do(actx, "k", agedFill); v != 2 || agedFills.Load() != 2 {
 		t.Fatalf("aged entry served to a fresh caller: v=%d fills=%d", v, agedFills.Load())
 	}
-	// With a fresh max age, a fresh caller also shares a fresh fill older
-	// than the join window but younger than that age.
+	// A fresh fill in flight is shared whatever its age.
 	astarted := make(chan struct{})
 	arelease := make(chan struct{})
 	go aged.Do(evidence.WithFresh(ctx), "share", func(context.Context) (int, time.Duration, error) {
@@ -849,6 +844,28 @@ func TestDoFailedLeaderTakesLandedEntry(t *testing.T) {
 	e.Store("k", 2, time.Minute, clock.Add(-time.Hour))
 	if v, ok := e.Get("k"); !ok || v != 2 {
 		t.Fatalf("live store lost to an expired resident: %d %v", v, ok)
+	}
+}
+
+// A refill happens only when the fill's own context ended, not when the
+// upstream timed out with time to spare: a waiter then gets the failure
+// like the leader.
+func TestDoNoRefillOnUpstreamTimeout(t *testing.T) {
+	c := New[string, int](0)
+	c.trackJoins()
+	var fills atomic.Int32
+	started := make(chan struct{})
+	fill := func(ctx context.Context) (int, time.Duration, error) {
+		fills.Add(1)
+		close(started)
+		time.Sleep(20 * time.Millisecond)
+		return 0, 0, fmt.Errorf("upstream: %w", context.DeadlineExceeded)
+	}
+	go c.Do(context.Background(), "k", fill)
+	<-started
+	_, err := c.Do(context.Background(), "k", fill)
+	if !errors.Is(err, context.DeadlineExceeded) || fills.Load() != 1 {
+		t.Fatalf("waiter refilled on an upstream timeout: err=%v fills=%d", err, fills.Load())
 	}
 }
 
