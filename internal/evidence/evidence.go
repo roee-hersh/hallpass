@@ -247,9 +247,9 @@ type Recorder struct {
 	mu  sync.Mutex
 	ev  Evidence
 	own int
-	// oldest is when the oldest read added with AddAt began; zero when
-	// none was.
-	oldest time.Time
+	// oldest is when the oldest read added with AddAt began, and strict
+	// the oldest that a fresh check would not tolerate; zero when none.
+	oldest, strict time.Time
 }
 
 // Record adds one call the check made. A nil Recorder records nothing.
@@ -275,14 +275,17 @@ func (r *Recorder) Record(c Call) {
 // them. A nil ev adds nothing. Past MaxCalls references the rest are
 // dropped: they are replayed calls, the first to go at the cap anyway.
 func (r *Recorder) Add(ev *Evidence, by Origin) {
-	r.AddAt(ev, by, time.Time{})
+	r.AddAt(ev, by, time.Time{}, time.Time{})
 }
 
 // AddAt is Add for a read that began at readAt: the calls came from a
 // cache entry or a fill that started then. The oldest such time is what
-// Oldest reports, so a decision can be dated by its oldest input. A nil
-// ev still dates the record: an entry with no calls is still a read.
-func (r *Recorder) AddAt(ev *Evidence, by Origin, readAt time.Time) {
+// Oldest reports, so a decision can be dated by its oldest input; strict
+// is the same read's date as a fresh check judges it, which a cache sets
+// to now for a read it tolerates under its fresh max age, and the oldest
+// of those is what OldestStrict reports. A nil ev still dates the record:
+// an entry with no calls is still a read.
+func (r *Recorder) AddAt(ev *Evidence, by Origin, readAt, strict time.Time) {
 	if r == nil {
 		return
 	}
@@ -290,6 +293,9 @@ func (r *Recorder) AddAt(ev *Evidence, by Origin, readAt time.Time) {
 	defer r.mu.Unlock()
 	if !readAt.IsZero() && (r.oldest.IsZero() || readAt.Before(r.oldest)) {
 		r.oldest = readAt
+	}
+	if !strict.IsZero() && (r.strict.IsZero() || strict.Before(r.strict)) {
+		r.strict = strict
 	}
 	if ev == nil {
 		return
@@ -312,6 +318,17 @@ func (r *Recorder) Oldest() (time.Time, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.oldest, !r.oldest.IsZero()
+}
+
+// OldestStrict returns when the oldest read behind the record began as a
+// fresh check judges it (see AddAt), and false when there is none.
+func (r *Recorder) OldestStrict() (time.Time, bool) {
+	if r == nil {
+		return time.Time{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.strict, !r.strict.IsZero()
 }
 
 // Evidence returns a snapshot of what was recorded, or nil when nothing

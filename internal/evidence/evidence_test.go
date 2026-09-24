@@ -102,11 +102,14 @@ func TestOldest(t *testing.T) {
 		t.Fatal("own and undated reads have no age")
 	}
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	rec.AddAt(Of(call("/a")), Cached, t1.Add(time.Hour))
-	rec.AddAt(nil, Cached, t1)
-	rec.AddAt(Of(call("/b")), Shared, t1.Add(2*time.Hour))
+	rec.AddAt(Of(call("/a")), Cached, t1.Add(time.Hour), t1.Add(time.Hour))
+	rec.AddAt(nil, Cached, t1, t1.Add(3*time.Hour))
+	rec.AddAt(Of(call("/b")), Shared, t1.Add(2*time.Hour), t1.Add(2*time.Hour))
 	if o, ok := rec.Oldest(); !ok || !o.Equal(t1) {
 		t.Fatalf("oldest = %v %v", o, ok)
+	}
+	if o, ok := rec.OldestStrict(); !ok || !o.Equal(t1.Add(time.Hour)) {
+		t.Fatalf("oldest strict = %v %v", o, ok)
 	}
 	if n := len(rec.Evidence().Calls()); n != 4 {
 		t.Fatalf("calls = %d", n)

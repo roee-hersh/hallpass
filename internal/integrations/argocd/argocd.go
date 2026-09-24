@@ -129,10 +129,13 @@ type projectList struct {
 // *cache.PanicError for everyone waiting, and its evidence is replayed to
 // every check the bundle serves).
 func (c *Connection) load(ctx context.Context) (*bundle, error) {
-	return c.policies.Do(ctx, struct{}{}, func(ctx context.Context) (*bundle, time.Duration, error) {
-		b, err := c.fetch(ctx)
-		return b, policyCacheTTL, err
-	})
+	return c.policies.Do(ctx, struct{}{}, c.fillBundle)
+}
+
+// fillBundle is the cache fill: one fetch, kept for policyCacheTTL.
+func (c *Connection) fillBundle(ctx context.Context) (*bundle, time.Duration, error) {
+	b, err := c.fetch(ctx)
+	return b, policyCacheTTL, err
 }
 
 func (c *Connection) fetch(ctx context.Context) (*bundle, error) {
@@ -316,14 +319,12 @@ func who(subject string, groups []string) string {
 // Probe reads the policy and reports what it found.
 func (c *Connection) Probe(ctx context.Context) (integration.ProbeResult, error) {
 	// The probe reads the cluster itself, whatever the cache holds: what
-	// it finds replaces the bundle, and a failure leaves the bundle
-	// checks are being answered from.
-	started := c.now()
-	b, err := c.fetch(ctx)
+	// it finds replaces the bundle, evidence included, and a failure
+	// leaves the bundle checks are being answered from.
+	b, err := c.policies.Refresh(ctx, struct{}{}, c.fillBundle)
 	if err != nil {
 		return integration.ProbeResult{}, err
 	}
-	c.policies.Store(struct{}{}, b, policyCacheTTL, started)
 	res := integration.ProbeResult{}
 	lines := 0
 	for _, l := range strings.Split(b.userPolicy, "\n") {

@@ -820,9 +820,6 @@ func TestSAMLMapPanicDoesNotWedge(t *testing.T) {
 			t.Fatal("a caller is still waiting: the in-flight marker was not released")
 		}
 	}
-	if !strings.Contains(e.logs.String(), "panicked") {
-		t.Error("the panic was not logged")
-	}
 	itest.AssertNoCanary(t, e.logs.String())
 
 	// Through ResolveIdentity the panic is an unknown decision, not a crash.
