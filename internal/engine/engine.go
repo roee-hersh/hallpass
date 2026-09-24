@@ -101,16 +101,15 @@ func Build(ctx context.Context, cfg *config.Config, o Options) (*Engine, error) 
 		o.NegativeIdentityCache = time.Minute
 	}
 	e := &Engine{
-		logger:  o.Logger,
-		declog:  o.DecisionLog,
-		conns:   map[string]*conn{},
-		idCache: cache.New[string, idEntry](0),
-		decs:    cache.New[string, integration.Decision](0),
-		idTTL:   o.IdentityCache,
-		negTTL:  o.NegativeIdentityCache,
-		decTTL:  o.DecisionCache,
-		now:     o.Now,
+		logger: o.Logger,
+		declog: o.DecisionLog,
+		conns:  map[string]*conn{},
+		idTTL:  o.IdentityCache,
+		negTTL: o.NegativeIdentityCache,
+		decTTL: o.DecisionCache,
+		now:    o.Now,
 	}
+	e.Flush()
 	for _, s := range cfg.Connections {
 		integ := cfg.Integrations[s.ID]
 		if integ == nil {
@@ -426,8 +425,12 @@ func (e *Engine) identity(ctx context.Context, c *conn, u integration.User) (int
 	return ent.id, nil
 }
 
-// Flush empties both caches. Tests and future admin endpoints use it.
+// Flush empties both caches. Tests and future admin endpoints use it. The
+// caches run on the engine's clock, since the engine dates decisions
+// against the reads they rest on.
 func (e *Engine) Flush() {
 	e.idCache = cache.New[string, idEntry](0)
+	e.idCache.SetClock(e.now)
 	e.decs = cache.New[string, integration.Decision](0)
+	e.decs.SetClock(e.now)
 }

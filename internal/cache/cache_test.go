@@ -672,6 +672,20 @@ func TestDoFresh(t *testing.T) {
 	if calls := arec.Evidence().Calls(); len(calls) != 0 {
 		t.Fatalf("no calls were recorded, got %+v", calls)
 	}
+	// The young entry a fresh caller took counts as read now, not when
+	// it was read: the accepted staleness must not date the fresh check
+	// older than an ordinary one resting on the same entry.
+	if o, ok := arec.Oldest(); !ok || o.Before(clock) {
+		t.Fatalf("fresh reuse dated %v %v, want now (%v)", o, ok, clock)
+	}
+	clockMu.Lock()
+	clock = clock.Add(time.Second)
+	clockMu.Unlock()
+	octx2, orec2 := evidence.WithRecorder(ctx)
+	aged.Do(octx2, "k", agedFill)
+	if o, ok := orec2.Oldest(); !ok || !o.Before(clock) {
+		t.Fatalf("ordinary hit dated %v %v, want the entry's read", o, ok)
+	}
 	clockMu.Lock()
 	clock = clock.Add(time.Minute)
 	clockMu.Unlock()
@@ -719,6 +733,42 @@ func TestDoFresh(t *testing.T) {
 	}
 	if _, ok := c.Get("k"); ok {
 		t.Fatal("ttl 0 fresh answer stored")
+	}
+}
+
+// The leader of an ordinary fill that fails takes an entry that landed
+// meanwhile, like its waiters do.
+func TestDoFailedLeaderTakesLandedEntry(t *testing.T) {
+	c := New[string, int](0)
+	started := make(chan struct{})
+	fail := make(chan struct{})
+	got := make(chan int, 1)
+	go func() {
+		v, _ := c.Do(context.Background(), "k", func(context.Context) (int, time.Duration, error) {
+			close(started)
+			<-fail
+			return 0, 0, errors.New("upstream")
+		})
+		got <- v
+	}()
+	<-started
+	c.Set("k", 5, time.Minute)
+	close(fail)
+	if v := <-got; v != 5 {
+		t.Fatalf("failed leader got %d, want the entry that landed", v)
+	}
+	// An expired resident does not block a live store.
+	e := New[string, int](0)
+	var clockMu sync.Mutex
+	clock := time.Now()
+	e.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
+	e.Store("k", 1, time.Second, clock)
+	clockMu.Lock()
+	clock = clock.Add(2 * time.Second)
+	clockMu.Unlock()
+	e.Store("k", 2, time.Minute, clock.Add(-time.Hour))
+	if v, ok := e.Get("k"); !ok || v != 2 {
+		t.Fatalf("live store lost to an expired resident: %d %v", v, ok)
 	}
 }
 

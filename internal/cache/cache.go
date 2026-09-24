@@ -50,9 +50,12 @@ type call[V any] struct {
 	// waiters counts the callers that joined the fill; tests wait on it.
 	waiters int
 	// rec is the fill's own Recorder, and ev its evidence, snapshotted
-	// once by the fill before done is closed.
-	rec *evidence.Recorder
-	ev  *evidence.Evidence
+	// once by the fill before done is closed; readAt is the fill's date,
+	// its start or the oldest cached read it rested on, whichever is
+	// earlier.
+	rec    *evidence.Recorder
+	ev     *evidence.Evidence
+	readAt time.Time
 }
 
 // FreshJoinWindow is how recently a fresh fill must have begun for a
@@ -120,7 +123,7 @@ func (c *TTL[K, V]) Store(k K, v V, ttl time.Duration, started time.Time) {
 // dropOlderLocked removes k's entry unless a read that began after started
 // produced it.
 func (c *TTL[K, V]) dropOlderLocked(k K, started time.Time) {
-	if e, ok := c.items[k]; ok && !e.started.After(started) {
+	if e, ok := c.getLocked(k); ok && !e.started.After(started) {
 		delete(c.items, k)
 	}
 }
@@ -128,7 +131,8 @@ func (c *TTL[K, V]) dropOlderLocked(k K, started time.Time) {
 // storeLocked stores the result of a read that began at started, unless
 // the entry already there came from a read that began later.
 func (c *TTL[K, V]) storeLocked(k K, v V, ttl time.Duration, ev *evidence.Evidence, started time.Time) {
-	if e, ok := c.items[k]; ok && e.started.After(started) {
+	// An expired resident is no resident: getLocked drops it.
+	if e, ok := c.getLocked(k); ok && e.started.After(started) {
 		return
 	}
 	c.evictLocked()
@@ -246,7 +250,15 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 	// while it is younger than the cache's fresh max age.
 	if e, hit := c.getLocked(k); hit && (!fresh || c.youngLocked(e, now)) {
 		c.mu.Unlock()
-		rec.AddAt(e.ev, evidence.Cached, e.started)
+		// An entry a fresh caller takes under the fresh max age counts
+		// as read now: the staleness is accepted, and must not date the
+		// fresh decision older than an ordinary one that rests on the
+		// same entry.
+		readAt := e.started
+		if fresh {
+			readAt = now
+		}
+		rec.AddAt(e.ev, evidence.Cached, readAt)
 		return e.v, nil, false
 	}
 	// A fresh caller shares a fresh fill that began within the join
@@ -285,21 +297,22 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 	case <-cl.done:
 		// cl is complete: the fill's goroutine closed done after its
 		// last write.
-		if !leader && cl.err != nil {
+		if cl.err != nil {
 			if !fresh {
-				// The fill this caller joined failed; an entry may have
-				// landed meanwhile (another fill's), and answers.
+				// The fill failed; an entry may have landed meanwhile
+				// (another fill's, a fresh read's), and answers an
+				// ordinary caller, leader or not.
 				if e, ok := c.entry(k); ok {
 					rec.AddAt(e.ev, evidence.Cached, e.started)
 					return e.v, nil, false
 				}
 			}
-			if mayRefill && ctx.Err() == nil && evidence.ContextEnded(cl.err) {
+			if !leader && mayRefill && ctx.Err() == nil && evidence.ContextEnded(cl.err) {
 				// The fill ran on the leader's remaining deadline and
 				// ended because of it; this caller still has time, so it
 				// fills again with its own. What the ended fill did
 				// complete stays on the record.
-				rec.AddAt(cl.ev, evidence.Shared, cl.started)
+				rec.AddAt(cl.ev, evidence.Shared, cl.readAt)
 				return v, nil, true
 			}
 		}
@@ -307,7 +320,7 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 		if !leader {
 			by = evidence.Shared
 		}
-		rec.AddAt(cl.ev, by, cl.started)
+		rec.AddAt(cl.ev, by, cl.readAt)
 		return cl.v, cl.err, false
 	case <-ctx.Done():
 		if !leader {
@@ -359,6 +372,13 @@ func (c *TTL[K, V]) fill(k K, cl *call[V], ctx context.Context, fill func(ctx co
 			cl.v, cl.err = zero, errors.New("fill exited without returning")
 		}
 		cl.ev = cl.rec.Evidence()
+		// The fill is as old as the oldest cached read it rested on, so
+		// an entry or a decision built on older inputs does not replace
+		// a newer one.
+		cl.readAt = cl.started
+		if o, ok := cl.rec.Oldest(); ok && o.Before(cl.readAt) {
+			cl.readAt = o
+		}
 		c.mu.Lock()
 		inflight := c.inflight
 		if cl.fresh {
@@ -368,17 +388,10 @@ func (c *TTL[K, V]) fill(k K, cl *call[V], ctx context.Context, fill func(ctx co
 			delete(inflight, k)
 		}
 		if cl.err == nil {
-			// The entry is as old as the oldest cached read the fill
-			// rested on, so a later fill built on older inputs does not
-			// replace a newer one.
-			started := cl.started
-			if o, ok := cl.rec.Oldest(); ok && o.Before(started) {
-				started = o
-			}
 			if ttl > 0 {
-				c.storeLocked(k, cl.v, ttl, cl.ev, started)
+				c.storeLocked(k, cl.v, ttl, cl.ev, cl.readAt)
 			} else if cl.fresh {
-				c.dropOlderLocked(k, started)
+				c.dropOlderLocked(k, cl.readAt)
 			}
 		}
 		c.mu.Unlock()
