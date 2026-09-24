@@ -26,9 +26,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/evidence"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -152,23 +152,16 @@ type Client struct {
 	UserAgent string
 }
 
-// baseURLs holds each distinct Base parsed once: a connection's base URL
-// is a constant, and parsing it on every paginated response adds up.
-// Values are *url.URL, nil for a Base that is empty or does not parse.
-var baseURLs sync.Map
-
 // baseURL returns Base parsed, or nil when it is empty or does not parse.
-// The result is shared: read-only.
+// It is called only for a request made with a full URL (a next-page link,
+// a vendor's second host), never for the relative paths most calls use,
+// and parsing a short string costs nothing next to the call itself.
 func (c *Client) baseURL() *url.URL {
-	if v, ok := baseURLs.Load(c.Base); ok {
-		return v.(*url.URL)
+	u, err := url.Parse(c.Base)
+	if err != nil || u.Host == "" {
+		return nil
 	}
-	var parsed *url.URL
-	if u, err := url.Parse(c.Base); err == nil && u.Host != "" {
-		parsed = u
-	}
-	baseURLs.Store(c.Base, parsed)
-	return parsed
+	return u
 }
 
 // Request is one call.
@@ -534,7 +527,7 @@ func retryable(err error) bool {
 		}
 		return false
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrBodyTooLarge) {
+	if cache.ContextEnded(err) || errors.Is(err, ErrBodyTooLarge) {
 		return false
 	}
 	var te *transportError
@@ -735,7 +728,7 @@ func (c *Client) NextLink(h http.Header) (string, error) {
 // within reports whether rawURL is a page under c.Base: same scheme and
 // host, and a path under the base path. A relative path always is.
 func (c *Client) within(rawURL string) bool {
-	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "http://") {
+	if !absolute(rawURL) {
 		return true
 	}
 	base := c.baseURL()

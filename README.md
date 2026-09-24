@@ -187,8 +187,9 @@ definitions, policies), and asks the upstream system now; what it learns replace
 entries, so reads keep using the cache. Use it for destructive actions (delete, merge, scale),
 where a 30-second-old answer is not good enough, and not for reads: a fresh check costs every
 upstream call an uncached check makes (for Argo CD, the policy config maps and the project list;
-for Vault, the policies involved), and concurrent fresh checks each read, since a fresh answer is
-one from a read that began after the caller asked. Maps hallpass reads from a local file
+for Vault, the policies involved). Fresh checks that arrive within a second of each other share
+one read; a fresh answer is one from a read that began no more than a second before the caller
+asked. Maps hallpass reads from a local file
 (`role_map_file`, `user_map_file`) are re-read on their own schedule, not per fresh check. A fresh
 check narrows the window between the check and the action to the time between the two; it does
 not close it. Closing it needs a conditional write in the upstream system (for example `If-Match`

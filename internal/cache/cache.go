@@ -42,9 +42,22 @@ type call[V any] struct {
 	// fresh marks a fill started for a fresh check: an answer it may not
 	// store still removes the older entry, which it has just superseded.
 	fresh bool
-	// rec is the fill's own Recorder; its Evidence is final once done is
-	// closed.
+	// rec is the fill's own Recorder, and ev its evidence, snapshotted
+	// once by the fill before done is closed.
 	rec *evidence.Recorder
+	ev  *evidence.Evidence
+}
+
+// FreshJoinWindow is how recently a fresh fill must have begun for a
+// later fresh caller to wait on it rather than read again: concurrent
+// fresh checks share one read, and a fresh answer is one from a read that
+// began no earlier than this before the caller asked.
+const FreshJoinWindow = time.Second
+
+// ContextEnded reports whether err is the caller's context ending
+// (cancelled or past its deadline), as opposed to a failure of the work.
+func ContextEnded(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // New creates a cache holding at most max entries (0 means 10000).
@@ -75,13 +88,7 @@ func (c *TTL[K, V]) Get(k K) (V, bool) {
 
 // Set stores v for ttl, as a value read now. A ttl <= 0 removes the key.
 func (c *TTL[K, V]) Set(k K, v V, ttl time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if ttl <= 0 {
-		delete(c.items, k)
-		return
-	}
-	c.storeLocked(k, v, ttl, nil, c.now())
+	c.Store(k, v, ttl, c.now())
 }
 
 // Store is Set for a value read from the upstream at started: it is
@@ -188,12 +195,14 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // cached lookup still shows what the upstream said when the lookup was
 // made.
 //
-// Under a fresh context (evidence.WithFresh) Do neither reads the cache
-// nor waits on a fill that began before it, whatever started that fill: it
-// starts its own, which takes over the key so ordinary callers arriving
-// while it runs join it, and its answer replaces the entry unless an even
-// later read stored one first. Concurrent fresh callers each read; a fresh
-// answer is one from a read that began after the caller asked.
+// Under a fresh context (evidence.WithFresh) Do does not read the cache
+// and does not wait on an ordinary fill: it starts its own, which drops
+// the entry and takes over the key so ordinary callers arriving while it
+// runs join it, and its answer replaces the entry unless an even later
+// read stored one first. A fresh read that fails leaves no entry: the
+// next caller reads again rather than being served what the fresh caller
+// doubted. Fresh callers arriving within FreshJoinWindow of a fresh
+// fill's start share it; later ones read again.
 //
 // The fill runs in its own goroutine on a context detached from the first
 // caller's cancellation (see Detach) rather than on ctx itself: otherwise
@@ -212,15 +221,20 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 		}
 	}
 	c.mu.Lock()
+	now := c.now()
 	cl, ok := c.inflight[k]
-	leader := !ok || fresh
+	leader := !ok || (fresh && !(cl.fresh && now.Sub(cl.started) < FreshJoinWindow))
 	if leader {
-		// A fresh caller does not wait on a fill that began before it; its
-		// own fill takes over the key, so ordinary callers after it join a
-		// read at least as new as the fresh one. The earlier fill's
-		// waiters keep their call.
-		cl = &call[V]{done: make(chan struct{}), started: c.now(), fresh: fresh}
+		// A fresh caller does not wait on an ordinary fill, which may have
+		// begun long before it, nor on a fresh one older than the window;
+		// its own fill takes over the key and drops the entry, so callers
+		// after it join a read at least as new as the fresh one. The
+		// earlier fill's waiters keep their call.
+		cl = &call[V]{done: make(chan struct{}), started: now, fresh: fresh}
 		c.inflight[k] = cl
+		if fresh {
+			delete(c.items, k)
+		}
 		fctx, cancel := Detach(ctx, DefaultFillTimeout)
 		fctx, cl.rec = evidence.WithRecorder(fctx)
 		go func() {
@@ -233,7 +247,7 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 	case <-cl.done:
 		// cl is complete: the fill's goroutine closed done after its
 		// last write.
-		if !leader && ctx.Err() == nil && cl.err != nil && (errors.Is(cl.err, context.Canceled) || errors.Is(cl.err, context.DeadlineExceeded)) {
+		if !leader && ctx.Err() == nil && cl.err != nil && ContextEnded(cl.err) {
 			// The fill ran on the leader's remaining deadline and ended
 			// because of it; this caller still has time, so it fills
 			// again with its own.
@@ -243,7 +257,7 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 		if !leader {
 			by = evidence.Shared
 		}
-		rec.Add(cl.rec.Evidence(), by)
+		rec.Add(cl.ev, by)
 		return cl.v, cl.err
 	case <-ctx.Done():
 		var zero V
@@ -279,13 +293,14 @@ func (c *TTL[K, V]) fill(k K, cl *call[V], ctx context.Context, fill func(ctx co
 			var zero V
 			cl.v, cl.err = zero, errors.New("fill exited without returning")
 		}
+		cl.ev = cl.rec.Evidence()
 		c.mu.Lock()
 		if c.inflight[k] == cl {
 			delete(c.inflight, k)
 		}
 		if cl.err == nil {
 			if ttl > 0 {
-				c.storeLocked(k, cl.v, ttl, cl.rec.Evidence(), cl.started)
+				c.storeLocked(k, cl.v, ttl, cl.ev, cl.started)
 			} else if cl.fresh {
 				c.dropOlderLocked(k, cl.started)
 			}

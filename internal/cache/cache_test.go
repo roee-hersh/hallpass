@@ -480,9 +480,12 @@ func TestDoFresh(t *testing.T) {
 	}
 
 	// A fresh fill takes over the key: an ordinary caller arriving while
-	// it runs joins it rather than starting another, a fresh one reads
-	// again (its read must begin after it asked), and the ordinary fill's
-	// own waiter still gets that fill's answer.
+	// it runs joins it, a fresh one within the join window shares it, one
+	// arriving later reads again, and the ordinary fill's own waiter
+	// still gets that fill's answer.
+	var clockMu sync.Mutex
+	clock := time.Now()
+	c.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
 	var freshFills atomic.Int32
 	ostarted := make(chan struct{})
 	orelease := make(chan struct{})
@@ -511,13 +514,21 @@ func TestDoFresh(t *testing.T) {
 		return 12, time.Minute, nil
 	}
 	go func() { v, _ := c.Do(ctx, "join", another); joined <- v }()
-	time.Sleep(20 * time.Millisecond) // let it reach Do's select
+	freshJoined := make(chan int, 1)
+	go func() { v, _ := c.Do(evidence.WithFresh(ctx), "join", another); freshJoined <- v }()
+	time.Sleep(20 * time.Millisecond) // let both reach Do's select
+	clockMu.Lock()
+	clock = clock.Add(FreshJoinWindow)
+	clockMu.Unlock()
 	if v, _ := c.Do(evidence.WithFresh(ctx), "join", another); v != 12 || freshFills.Load() != 2 {
-		t.Fatalf("second fresh caller joined an earlier fill: v=%d fills=%d", v, freshFills.Load())
+		t.Fatalf("late fresh caller joined a fill older than the window: v=%d fills=%d", v, freshFills.Load())
 	}
 	close(frelease)
 	if v := <-joined; v != 11 {
 		t.Fatalf("ordinary caller did not join the fresh fill: %d", v)
+	}
+	if v := <-freshJoined; v != 11 {
+		t.Fatalf("fresh caller within the window did not share the fresh fill: %d", v)
 	}
 	if v := <-freshDone; v != 11 {
 		t.Fatalf("fresh fill: v=%d", v)
@@ -529,20 +540,50 @@ func TestDoFresh(t *testing.T) {
 	if v, _ := c.Get("join"); v != 12 {
 		t.Fatalf("an older read replaced the latest fresh answer: %d", v)
 	}
+
+	// A fresh fill drops the entry it supersedes as it starts, so an
+	// ordinary caller arriving while it runs waits for it rather than
+	// reading the old entry.
+	c.Set("drop", 1, time.Minute)
+	dstarted := make(chan struct{})
+	drelease := make(chan struct{})
+	go c.Do(evidence.WithFresh(ctx), "drop", func(context.Context) (int, time.Duration, error) {
+		close(dstarted)
+		<-drelease
+		return 2, time.Minute, nil
+	})
+	<-dstarted
+	got := make(chan int, 1)
+	go func() {
+		v, _ := c.Do(ctx, "drop", func(context.Context) (int, time.Duration, error) { return 3, time.Minute, nil })
+		got <- v
+	}()
+	select {
+	case v := <-got:
+		t.Fatalf("ordinary caller answered %d while a fresh read was in flight", v)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(drelease)
+	if v := <-got; v != 2 {
+		t.Fatalf("ordinary caller got %d, want the fresh read's 2", v)
+	}
 	// A panic in a fresh fill is a PanicError, like any other.
 	var pe *PanicError
 	if _, err := c.Do(evidence.WithFresh(ctx), "boom", func(context.Context) (int, time.Duration, error) { panic("x") }); !errors.As(err, &pe) {
 		t.Fatalf("fresh panic: %v", err)
 	}
 
-	// A failed fresh lookup stores nothing and leaves the entry; a fresh
-	// answer with ttl 0 removes it.
+	// A fresh lookup drops the entry it supersedes as it starts, so a
+	// failed one leaves none (the next caller reads again rather than
+	// being served what the fresh caller doubted), and a fresh answer
+	// with ttl 0 stores none.
 	if _, err := c.Do(evidence.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 0, time.Minute, errors.New("x") }); err == nil {
 		t.Fatal("no error")
 	}
-	if v, ok := c.Get("k"); !ok || v != 2 {
-		t.Fatal("entry lost on a failed fresh lookup")
+	if _, ok := c.Get("k"); ok {
+		t.Fatal("entry kept across a failed fresh lookup")
 	}
+	c.Set("k", 2, time.Minute)
 	if v, err := c.Do(evidence.WithFresh(ctx), "k", func(context.Context) (int, time.Duration, error) { return 9, 0, nil }); err != nil || v != 9 {
 		t.Fatal(v, err)
 	}

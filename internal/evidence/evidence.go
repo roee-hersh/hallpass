@@ -109,17 +109,34 @@ func (e *Evidence) flatten() ([]Call, bool) {
 	if e == nil {
 		return nil, false
 	}
-	var out []Call
-	truncated := e.walk(&out, Own)
-	for len(out) > MaxCalls {
-		truncated = true
-		i := slices.IndexFunc(out, func(c Call) bool { return c.Cached })
-		if i < 0 {
-			i = 0
-		}
-		out = slices.Delete(out, i, i+1)
+	var all []Call
+	truncated := e.walk(&all, Own)
+	excess := len(all) - MaxCalls
+	if excess <= 0 {
+		return all, truncated
 	}
-	return out, truncated
+	// Drop the oldest cached calls first, then the oldest of the rest,
+	// in one pass.
+	cached := 0
+	for _, c := range all {
+		if c.Cached {
+			cached++
+		}
+	}
+	dropCached := min(excess, cached)
+	dropLive := excess - dropCached
+	out := make([]Call, 0, MaxCalls)
+	for _, c := range all {
+		switch {
+		case c.Cached && dropCached > 0:
+			dropCached--
+		case !c.Cached && dropLive > 0:
+			dropLive--
+		default:
+			out = append(out, c)
+		}
+	}
+	return out, true
 }
 
 // walk appends e's calls to out with by applied, and reports whether any
@@ -224,13 +241,18 @@ func (r *Recorder) Record(c Call) {
 }
 
 // Add adds ev's calls, by reference, marked by how this check came by
-// them. A nil ev adds nothing.
+// them. A nil ev adds nothing. Past MaxCalls references the rest are
+// dropped: they are replayed calls, the first to go at the cap anyway.
 func (r *Recorder) Add(ev *Evidence, by Origin) {
 	if r == nil || ev == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(r.ev.items)-r.own >= MaxCalls {
+		r.ev.truncated = true
+		return
+	}
 	r.ev.items = append(r.ev.items, item{src: ev, by: by})
 }
 
