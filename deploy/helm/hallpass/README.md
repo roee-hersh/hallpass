@@ -22,7 +22,7 @@ The default config carries only the `demo` connection, which talks to nothing.
 ## Configure
 
 Put your connections in a values file. `config` is rendered verbatim into `hallpass.yaml`, so
-everything the main README documents under *Configuration* works here, except `listen`, which the
+everything [docs/operating.md](../../../docs/operating.md) documents under *Configuration* works here, except `listen`, which the
 chart sets from `containerPort`.
 
 Secrets never go into the config. Every credential is an `env:NAME` or `file:/path` reference, and the
