@@ -529,20 +529,20 @@ func TestDoFresh(t *testing.T) {
 		t.Fatalf("fresh answer lost to an older read that stored first: %v %v", v, ok)
 	}
 	// Store (the engine's decision cache) follows the same rule.
-	c.Store("order", 1, time.Minute, clock.Add(-time.Hour))
+	c.Store("order", 1, time.Minute, clock.Add(-time.Hour), clock.Add(-time.Hour))
 	if v, _ := c.Get("order"); v != 7 {
 		t.Fatal("Store replaced a newer entry")
 	}
 	tick(time.Millisecond)
-	c.Store("order", 2, time.Minute, clock)
+	c.Store("order", 2, time.Minute, clock, clock)
 	if v, _ := c.Get("order"); v != 2 {
 		t.Fatal("Store did not replace an older entry")
 	}
-	c.Store("order", 3, 0, clock.Add(-time.Hour))
+	c.Store("order", 3, 0, clock.Add(-time.Hour), clock.Add(-time.Hour))
 	if _, ok := c.Get("order"); !ok {
 		t.Fatal("Store with ttl 0 dropped a newer entry")
 	}
-	c.Store("order", 3, 0, clock)
+	c.Store("order", 3, 0, clock, clock)
 	if _, ok := c.Get("order"); ok {
 		t.Fatal("Store with ttl 0 kept an older entry")
 	}
@@ -708,7 +708,7 @@ func TestDoFresh(t *testing.T) {
 	landedRec.Record(evidence.Call{Method: "GET", Path: "/landed", Status: 200})
 	_ = landedCtx
 	c.mu.Lock()
-	c.storeLocked("failed-record", 6, time.Minute, landedRec.Evidence(), clock.Add(-time.Hour), clock, clock)
+	c.storeLocked("failed-record", 6, time.Minute, landedRec.Evidence(), clock.Add(-time.Hour), clock, clock, clock)
 	c.mu.Unlock()
 	close(ffail3)
 	if v := <-got3; v != 6 {
@@ -740,11 +740,13 @@ func TestDoFresh(t *testing.T) {
 	if calls := arec.Evidence().Calls(); len(calls) != 0 {
 		t.Fatalf("no calls were recorded, got %+v", calls)
 	}
-	// The young entry a fresh caller took counts as read now, not when
-	// it was read: the accepted staleness must not date the fresh check
-	// older than an ordinary one resting on the same entry.
-	if o, ok := arec.Oldest(); !ok || o.Before(clock) {
-		t.Fatalf("fresh reuse dated %v %v, want now (%v)", o, ok, clock)
+	// The young entry a fresh caller took is dated by its read for
+	// ordering, and as of now as a fresh check judges it.
+	if o, ok := arec.Oldest(); !ok || !o.Equal(clock) {
+		t.Fatalf("fresh reuse dated %v %v, want the entry's read (%v)", o, ok, clock)
+	}
+	if o, ok := arec.OldestStrict(); !ok || o.Before(clock) {
+		t.Fatalf("fresh reuse judged %v %v, want now (%v)", o, ok, clock)
 	}
 	clockMu.Lock()
 	clock = clock.Add(time.Second)
@@ -753,6 +755,11 @@ func TestDoFresh(t *testing.T) {
 	aged.Do(octx2, "k", agedFill)
 	if o, ok := orec2.Oldest(); !ok || !o.Before(clock) {
 		t.Fatalf("ordinary hit dated %v %v, want the entry's read", o, ok)
+	}
+	// ... and under this cache's minute-long fresh max age the entry is
+	// still one a fresh check would take, so it is judged as of now.
+	if o, ok := orec2.OldestStrict(); !ok || o.Before(clock) {
+		t.Fatalf("ordinary hit of a tolerated entry judged %v %v, want now", o, ok)
 	}
 	clockMu.Lock()
 	clock = clock.Add(time.Minute)
@@ -849,11 +856,11 @@ func TestDoFailedLeaderTakesLandedEntry(t *testing.T) {
 	var clockMu sync.Mutex
 	clock := time.Now()
 	e.SetClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
-	e.Store("k", 1, time.Second, clock)
+	e.Store("k", 1, time.Second, clock, clock)
 	clockMu.Lock()
 	clock = clock.Add(2 * time.Second)
 	clockMu.Unlock()
-	e.Store("k", 2, time.Minute, clock.Add(-time.Hour))
+	e.Store("k", 2, time.Minute, clock.Add(-time.Hour), clock.Add(-time.Hour))
 	if v, ok := e.Get("k"); !ok || v != 2 {
 		t.Fatalf("live store lost to an expired resident: %d %v", v, ok)
 	}
@@ -1000,14 +1007,28 @@ func TestDoDatesReads(t *testing.T) {
 	// A read that began now, before the built entry's own start but after
 	// its input, still replaces it: the built entry is dated by its
 	// input at t0.
-	built.Store("out", 99, time.Hour, t0.Add(30*time.Second))
+	built.Store("out", 99, time.Hour, t0.Add(30*time.Second), t0.Add(30*time.Second))
 	if v, _ := built.Get("out"); v != 99 {
 		t.Fatalf("entry dated by its own start, not its oldest input: %d", v)
 	}
 	// And one older than the input does not.
-	built.Store("out", 7, time.Hour, t0.Add(-time.Second))
+	built.Store("out", 7, time.Hour, t0.Add(-time.Second), t0.Add(-time.Second))
 	if v, _ := built.Get("out"); v != 99 {
 		t.Fatalf("older read replaced the entry: %d", v)
+	}
+	// On the same inputs, the read that began later wins, whichever
+	// finished first: a fresh decision at t0+0.5s is replaced by an
+	// ordinary one whose own reads began at t0+10s, and not by one whose
+	// own reads began before it.
+	d := New[string, int](0)
+	d.Store("d", 1, time.Hour, t0, t0.Add(500*time.Millisecond)) // fresh, own reads at +0.5s
+	d.Store("d", 2, time.Hour, t0, t0.Add(300*time.Millisecond)) // ordinary, own reads at +0.3s
+	if v, _ := d.Get("d"); v != 1 {
+		t.Fatalf("a check whose reads began earlier replaced the fresh decision: %d", v)
+	}
+	d.Store("d", 3, time.Hour, t0, t0.Add(10*time.Second)) // ordinary, own reads at +10s
+	if v, _ := d.Get("d"); v != 3 {
+		t.Fatalf("a check whose reads began later did not replace the fresh decision: %d", v)
 	}
 }
 

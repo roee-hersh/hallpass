@@ -271,6 +271,9 @@ function checkOptions(o: readonly string[] | null | CheckOptions | undefined): {
     }
   }
   const opts = o as CheckOptions;
+  if (opts.fresh !== undefined && typeof opts.fresh !== "boolean") {
+    throw new TypeError("fresh must be a boolean");
+  }
   return { groups: opts.groups ?? null, fresh: opts.fresh === true };
 }
 

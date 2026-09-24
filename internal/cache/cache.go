@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/evidence"
@@ -34,13 +35,13 @@ type TTL[K comparable, V any] struct {
 type entry[V any] struct {
 	v   V
 	exp time.Time
-	// started is when the read that produced v began, or the oldest
-	// cached read it rests on; a read that began earlier does not
-	// replace it. began is the same as a fresh check judges it: the
-	// read's own start, or the oldest cached read it rests on that a
-	// fresh check would not have tolerated; a fresh caller judges the
-	// entry's age by it.
-	started, began time.Time
+	// started is the oldest cached read v rests on, or the read's own
+	// start when it rests on none, and own that start: a read that rests
+	// on older inputs, or on the same inputs but began earlier, does not
+	// replace the entry. began is started as a fresh check judges it (a
+	// read a cache tolerated under its fresh max age counts as of then);
+	// a fresh caller judges the entry's age by it.
+	started, own, began time.Time
 	// ev is the evidence of the fill that produced v, replayed on hits.
 	ev *evidence.Evidence
 }
@@ -122,27 +123,29 @@ func (c *TTL[K, V]) Set(k K, v V, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
-	c.storeLocked(k, v, ttl, nil, now, now, now)
+	c.storeLocked(k, v, ttl, nil, now, now, now, now)
 }
 
-// Store is Set for a value read from the upstream at started: it is
-// skipped when the entry already there came from a read that began later,
-// which saw the upstream more recently. A fresh check's answer in
-// particular must not be replaced by an older read that finished after it.
-func (c *TTL[K, V]) Store(k K, v V, ttl time.Duration, started time.Time) {
+// Store is Set for a value computed by a read that began at own and rests
+// on cached inputs no older than started (own itself when it rests on
+// none): it is skipped when the entry already there rests on newer inputs,
+// or on the same inputs and a read that began later, which saw the
+// upstream more recently. A fresh check's answer in particular must not be
+// replaced by an older read that finished after it.
+func (c *TTL[K, V]) Store(k K, v V, ttl time.Duration, started, own time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
-	c.storeLocked(k, v, ttl, nil, started, now, now)
+	c.storeLocked(k, v, ttl, nil, started, own, own, now)
 }
 
-// storeLocked stores the result of a read that rests on nothing older than
-// started (see entry for began), unless the entry already there rests on
-// a read that began later. A ttl <= 0 stores nothing and removes such an
-// older entry.
-func (c *TTL[K, V]) storeLocked(k K, v V, ttl time.Duration, ev *evidence.Evidence, started, began, now time.Time) {
+// storeLocked stores the result of a read that began at own and rests on
+// nothing older than started (see entry for began), unless the entry
+// already there rests on newer inputs, or on the same and a read that
+// began later. A ttl <= 0 stores nothing and removes such an older entry.
+func (c *TTL[K, V]) storeLocked(k K, v V, ttl time.Duration, ev *evidence.Evidence, started, own, began, now time.Time) {
 	// An expired resident is no resident: getLocked drops it.
-	if e, ok := c.getLocked(k, now); ok && e.started.After(started) {
+	if e, ok := c.getLocked(k, now); ok && (e.started.After(started) || (e.started.Equal(started) && e.own.After(own))) {
 		return
 	}
 	if ttl <= 0 {
@@ -150,7 +153,7 @@ func (c *TTL[K, V]) storeLocked(k K, v V, ttl time.Duration, ev *evidence.Eviden
 		return
 	}
 	c.evictLocked(now)
-	c.items[k] = entry[V]{v: v, exp: now.Add(ttl), started: started, began: began, ev: ev}
+	c.items[k] = entry[V]{v: v, exp: now.Add(ttl), started: started, own: own, began: began, ev: ev}
 }
 
 // Delete removes one key.
@@ -195,9 +198,15 @@ const DefaultFillTimeout = 30 * time.Second
 type PanicError struct {
 	Value any    // the value passed to panic
 	Stack []byte // the fill goroutine's stack at the time of the panic
+
+	reported atomic.Bool
 }
 
 func (e *PanicError) Error() string { return fmt.Sprintf("fill panicked: %v", e.Value) }
+
+// FirstReport is true once per PanicError: every caller of a panicked fill
+// gets the same error, and the first to ask logs it.
+func (e *PanicError) FirstReport() bool { return e.reported.CompareAndSwap(false, true) }
 
 // Detach derives the context a shared fill runs on: it keeps ctx's values
 // (loggers, trace ids) but not its cancellation, so one caller
@@ -262,7 +271,10 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 // For a probe: it verifies the upstream and leaves the entry as good as
 // it found it, or as it was on a failure.
 func (c *TTL[K, V]) Refresh(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
-	cl := &call[V]{done: make(chan struct{}), started: c.now(), fresh: true}
+	c.mu.Lock()
+	now := c.now()
+	c.mu.Unlock()
+	cl := &call[V]{done: make(chan struct{}), started: now, fresh: true}
 	fctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	fctx, cl.rec = evidence.WithRecorder(fctx)
@@ -282,24 +294,18 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 	// The entry answers an ordinary caller; a fresh caller takes it only
 	// while it is younger than the join window (or the cache's fresh max
 	// age, when longer).
-	if e, hit := c.getLocked(k, now); hit && (!fresh || c.youngLocked(e, now)) {
-		young := c.youngLocked(e, now)
-		c.mu.Unlock()
-		// An entry a fresh caller takes counts as read now: the
-		// staleness is accepted, and must not date the fresh decision
-		// older than an ordinary one that rests on the same entry. For
-		// any caller, an entry young enough that a fresh check would
-		// take it does not age what rests on it as a fresh check judges
-		// it.
-		readAt, strict := e.started, e.began
-		if fresh {
-			readAt = now
+	if e, hit := c.getLocked(k, now); hit {
+		if young := c.youngLocked(e, now); !fresh || young {
+			c.mu.Unlock()
+			// An entry young enough that a fresh check would take it
+			// does not age what rests on it as a fresh check judges it.
+			strict := e.began
+			if young {
+				strict = now
+			}
+			rec.AddAt(e.ev, evidence.Cached, e.started, strict)
+			return e.v, nil, false, false
 		}
-		if young {
-			strict = now
-		}
-		rec.AddAt(e.ev, evidence.Cached, readAt, strict)
-		return e.v, nil, false, false
 	}
 	// A fresh caller shares a fresh fill still in flight (its answer is
 	// no older than that fill's start, which the caller would otherwise
@@ -376,12 +382,12 @@ func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) 
 			return v, nil, true, true
 		}
 		// A fresh caller that joined a read accepted it as current, like
-		// an entry it takes under the window: dated by its arrival.
-		readAt, strict := cl.readAt, cl.began
+		// an entry it takes under the window.
+		strict := cl.began
 		if fresh && !leader {
-			readAt, strict = now, now
+			strict = now
 		}
-		rec.AddAt(cl.ev, by, readAt, strict)
+		rec.AddAt(cl.ev, by, cl.readAt, strict)
 		return cl.v, cl.err, false, false
 	case <-ctx.Done():
 		return v, ctx.Err(), false, false
@@ -452,7 +458,7 @@ func (c *TTL[K, V]) fill(k K, cl *call[V], ctx context.Context, fill func(ctx co
 		if cl.err == nil && (ttl > 0 || cl.fresh) {
 			// A fresh answer that may not be stored still removes the
 			// older entry it has just superseded.
-			c.storeLocked(k, cl.v, ttl, cl.ev, cl.readAt, cl.began, c.now())
+			c.storeLocked(k, cl.v, ttl, cl.ev, cl.readAt, cl.started, cl.began, c.now())
 		}
 		c.mu.Unlock()
 		close(cl.done)

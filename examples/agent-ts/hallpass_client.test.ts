@@ -150,6 +150,7 @@ describe("client", () => {
     await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", true as unknown as string[]), /pass \{ fresh: true \}/);
     await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", new Set(["a"]) as unknown as string[]), /array of strings/);
     await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", { group: ["a"] } as unknown as string[]), /unknown check option "group"/);
+    await assert.rejects(hp.check(DANA, "demo", "thing.write", "thing:allowed", { fresh: "true" } as unknown as string[]), /fresh must be a boolean/);
   });
 
   test("require and allowed", async () => {

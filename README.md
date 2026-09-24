@@ -189,8 +189,9 @@ where a 30-second-old answer is not good enough, and not for reads: a fresh chec
 upstream call an uncached check makes (for Argo CD, the policy config maps and the project list;
 for Vault, the policies involved; for Snowflake, the grants of every role in the hierarchy).
 Lookups that are not permission state are reused for as long as any check reuses them: GitHub's
-organization-wide SAML identity listing (the permission read after it is live anyway),
-Salesforce's object and field describes, and hallpass's own principal name in Databricks. Fresh checks share
+organization-wide SAML identity listing (the permission read after it is live anyway), AWS
+Identity Center's role inventory and permission set names, Salesforce's object and field
+describes, and hallpass's own principal name in Databricks. Fresh checks share
 a lookup one of them has in flight (an identity, a role's permissions, a policy) and one read
 less than a second ago; a fresh answer is one from reads in flight when the caller asked or begun
 no more than a second before. Maps hallpass reads from a local file

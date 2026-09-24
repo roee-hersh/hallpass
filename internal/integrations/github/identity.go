@@ -3,14 +3,12 @@ package github
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/roee-hersh/hallpass/internal/cache"
 	"github.com/roee-hersh/hallpass/internal/httpx"
 	"github.com/roee-hersh/hallpass/internal/integration"
 )
@@ -231,10 +229,6 @@ func (c *Connection) samlMap(ctx context.Context) (*samlIndex, error) {
 		idx, err := c.fetchSAMLMap(ctx)
 		return idx, samlCacheTTL, err
 	})
-	var pe *cache.PanicError
-	if errors.As(err, &pe) {
-		return nil, integration.Wrap(integration.CodeUpstreamError, pe, "the SAML identity listing failed unexpectedly")
-	}
 	return idx, err
 }
 

@@ -311,7 +311,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 	groups := normalizeGroups(req.Groups)
 	user := integration.User{Email: req.User, Groups: groups}
 	decKey := strings.Join([]string{req.Connection, req.User, groupsKey(groups), req.Action, req.Resource}, "\x00")
-	started := e.now()
+	started := e.now() // the check's own start
 	if e.decTTL > 0 && !req.Fresh {
 		if d, ok := e.decs.Get(decKey); ok {
 			d.Evidence = d.Evidence.AsCached()
@@ -357,10 +357,11 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 		// rests on (a cached identity, a cached policy), and one built on
 		// older reads must not replace the answer of a later one (a fresh
 		// check's, in particular).
-		if o, ok := rec.Oldest(); ok && o.Before(started) {
-			started = o
+		inputs := started
+		if o, ok := rec.Oldest(); ok && o.Before(inputs) {
+			inputs = o
 		}
-		e.decs.Store(decKey, d, e.decTTL, started)
+		e.decs.Store(decKey, d, e.decTTL, inputs, started)
 	}
 	return Result{Decision: d, Status: http.StatusOK}
 }
@@ -371,7 +372,7 @@ func (e *Engine) check(ctx context.Context, req Request) Result {
 // value, which may quote upstream data.
 func (e *Engine) logLookupPanic(req Request, err error) {
 	var pe *cache.PanicError
-	if errors.As(err, &pe) {
+	if errors.As(err, &pe) && pe.FirstReport() {
 		e.logger.Error("lookup panicked", "connection", req.Connection, "action", req.Action, "type", fmt.Sprintf("%T", pe.Value), "stack", string(pe.Stack))
 	}
 }
