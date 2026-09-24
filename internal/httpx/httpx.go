@@ -26,6 +26,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/roee-hersh/hallpass/internal/evidence"
@@ -149,6 +150,25 @@ type Client struct {
 	Sleep func(context.Context, time.Duration) error
 	// UserAgent overrides the default.
 	UserAgent string
+}
+
+// baseURLs holds each distinct Base parsed once: a connection's base URL
+// is a constant, and parsing it on every paginated response adds up.
+// Values are *url.URL, nil for a Base that is empty or does not parse.
+var baseURLs sync.Map
+
+// baseURL returns Base parsed, or nil when it is empty or does not parse.
+// The result is shared: read-only.
+func (c *Client) baseURL() *url.URL {
+	if v, ok := baseURLs.Load(c.Base); ok {
+		return v.(*url.URL)
+	}
+	var parsed *url.URL
+	if u, err := url.Parse(c.Base); err == nil && u.Host != "" {
+		parsed = u
+	}
+	baseURLs.Store(c.Base, parsed)
+	return parsed
 }
 
 // Request is one call.
@@ -348,7 +368,9 @@ func (c *Client) do(ctx context.Context, r *Request) (*Response, error) {
 			}
 		}
 		if err := c.sleep(ctx, wait); err != nil {
-			return nil, lastErr
+			// The response that was going to be retried is what the
+			// caller is told about, so it is what the evidence records.
+			return resp, lastErr
 		}
 	}
 }
@@ -419,11 +441,11 @@ func absolute(p string) bool {
 // the base host. A relative path is always the base host, so this is not
 // on that path's way.
 func (c *Client) foreignHost(u *url.URL) string {
-	if c.Base == "" {
+	base := c.baseURL()
+	if base == nil {
 		return u.Host
 	}
-	base, err := url.Parse(c.Base)
-	if err != nil || sameHost(base, u) {
+	if sameHost(base, u) {
 		return ""
 	}
 	return u.Host
@@ -716,8 +738,8 @@ func (c *Client) within(rawURL string) bool {
 	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "http://") {
 		return true
 	}
-	base, err := url.Parse(c.Base)
-	if err != nil || base.Host == "" {
+	base := c.baseURL()
+	if base == nil {
 		return false
 	}
 	u, err := url.Parse(rawURL)

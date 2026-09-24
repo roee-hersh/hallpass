@@ -199,7 +199,8 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // caller's cancellation (see Detach) rather than on ctx itself: otherwise
 // that caller going away would abort the fill and hand every waiter a
 // context.Canceled that is not theirs. Each caller, the first included,
-// stops waiting when its own ctx is done. A panic in fill becomes a
+// stops waiting when its own ctx is done; a waiter whose leader's deadline
+// ended the fill fills again with its own. A panic in fill becomes a
 // *PanicError for everyone waiting on it.
 func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
 	rec := evidence.RecorderFrom(ctx)
@@ -232,6 +233,12 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 	case <-cl.done:
 		// cl is complete: the fill's goroutine closed done after its
 		// last write.
+		if !leader && ctx.Err() == nil && cl.err != nil && (errors.Is(cl.err, context.Canceled) || errors.Is(cl.err, context.DeadlineExceeded)) {
+			// The fill ran on the leader's remaining deadline and ended
+			// because of it; this caller still has time, so it fills
+			// again with its own.
+			return c.Do(ctx, k, fill)
+		}
 		by := evidence.Own
 		if !leader {
 			by = evidence.Shared

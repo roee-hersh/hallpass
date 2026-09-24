@@ -2,8 +2,12 @@ package evidence
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func call(p string) Call { return Call{Method: "GET", Path: p, Status: 200} }
 
 func TestRecorder(t *testing.T) {
 	ctx, rec := WithRecorder(context.Background())
@@ -12,96 +16,170 @@ func TestRecorder(t *testing.T) {
 	}
 	RecorderFrom(ctx).Record(Call{Method: "GET", Path: "/a", Status: 200, ETag: `"1"`})
 	ev := rec.Evidence()
-	if ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Path != "/a" || ev.Truncated {
-		t.Fatalf("%+v", ev)
+	if ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Path != "/a" || ev.Truncated() {
+		t.Fatalf("%+v", ev.Calls())
 	}
 	// The snapshot does not change under later records.
-	RecorderFrom(ctx).Record(Call{Method: "GET", Path: "/b", Status: 404})
-	if len(ev.Upstream) != 1 || len(rec.Evidence().Upstream) != 2 {
+	RecorderFrom(ctx).Record(call("/b"))
+	if len(ev.Calls()) != 1 || len(rec.Evidence().Calls()) != 2 {
 		t.Fatal("snapshot shared with the recorder")
 	}
 	// Nothing is recorded without a recorder, on a suppressed one, or on nil.
-	RecorderFrom(context.Background()).Record(Call{Path: "/x"})
-	RecorderFrom(WithoutRecorder(ctx)).Record(Call{Path: "/x"})
+	RecorderFrom(context.Background()).Record(call("/x"))
+	RecorderFrom(WithoutRecorder(ctx)).Record(call("/x"))
 	if RecorderFrom(WithoutRecorder(ctx)) != nil || RecorderFrom(context.Background()) != nil {
 		t.Fatal("RecorderFrom found a recorder where none should be")
 	}
 	var nilRec *Recorder
 	nilRec.Record(Call{})
 	nilRec.Add(ev, Cached)
-	if nilRec.Evidence() != nil || len(rec.Evidence().Upstream) != 2 {
+	if nilRec.Evidence() != nil || len(rec.Evidence().Calls()) != 2 {
 		t.Fatal("suppressed record leaked")
 	}
 	if WithoutRecorder(context.Background()) != context.Background() {
 		t.Error("WithoutRecorder wrapped a context that had no recorder")
 	}
-	// Cached calls are marked; a nil evidence adds nothing.
-	rec2 := &Recorder{}
-	rec2.Add(nil, Cached)
-	rec2.Add(ev, Cached)
-	got := rec2.Evidence()
-	if len(got.Upstream) != 1 || !got.Upstream[0].Cached || got.Upstream[0].Path != "/a" {
-		t.Fatalf("%+v", got)
-	}
-	if ev.Upstream[0].Cached {
-		t.Error("Add changed the source")
-	}
-	// Own calls keep their flags; a cached call stays cached whatever the
-	// origin; a shared one is shared unless cached.
-	rec3 := &Recorder{}
-	rec3.Add(got, Own)
-	rec3.Add(ev, Own)
-	rec3.Add(got, Shared)
-	rec3.Add(ev, Shared)
-	if c := rec3.Evidence().Upstream; !c[0].Cached || c[1].Cached || c[1].Shared || !c[2].Cached || c[2].Shared || c[3].Cached || !c[3].Shared {
-		t.Fatalf("%+v", c)
+	var nilEv *Evidence
+	if nilEv.Calls() != nil || nilEv.Truncated() || nilEv.AsCached() != nil || Of() != nil {
+		t.Error("nil evidence is not empty")
 	}
 }
 
-func TestRecorderCap(t *testing.T) {
+// Calls a check got from a cache or a concurrent check's lookup are held by
+// reference and marked by origin when flattened; the source is untouched.
+func TestOrigins(t *testing.T) {
+	src := Of(call("/a"), Call{Method: "GET", Path: "/c", Status: 200, Cached: true})
+	rec := &Recorder{}
+	rec.Add(nil, Cached)
+	rec.Add(src, Cached)
+	got := rec.Evidence().Calls()
+	if len(got) != 2 || !got[0].Cached || got[0].Shared || !got[1].Cached {
+		t.Fatalf("cached: %+v", got)
+	}
+	rec = &Recorder{}
+	rec.Add(src, Shared)
+	got = rec.Evidence().Calls()
+	if len(got) != 2 || got[0].Cached || !got[0].Shared || !got[1].Cached || got[1].Shared {
+		t.Fatalf("shared: %+v", got)
+	}
+	rec = &Recorder{}
+	rec.Add(src, Own)
+	rec.Record(call("/own"))
+	got = rec.Evidence().Calls()
+	if len(got) != 3 || got[0].Cached || got[0].Shared || !got[1].Cached || got[2].Path != "/own" {
+		t.Fatalf("own: %+v", got)
+	}
+	if c := src.Calls(); c[0].Cached || c[0].Shared {
+		t.Error("Add changed the source")
+	}
+	// Nesting: a decision served from the decision cache marks everything
+	// cached, whatever it was before.
+	cached := rec.Evidence().AsCached().Calls()
+	for _, c := range cached {
+		if !c.Cached || c.Shared {
+			t.Fatalf("AsCached: %+v", cached)
+		}
+	}
+	// A shared view of a cached view stays cached.
+	rec2 := &Recorder{}
+	rec2.Add(rec.Evidence().AsCached(), Shared)
+	for _, c := range rec2.Evidence().Calls() {
+		if !c.Cached || c.Shared {
+			t.Fatalf("shared of cached: %+v", c)
+		}
+	}
+}
+
+func TestCap(t *testing.T) {
 	rec := &Recorder{}
 	for i := 0; i < MaxCalls+5; i++ {
-		rec.Record(Call{Method: "GET", Path: "/p", Status: 200})
+		rec.Record(call("/p"))
 	}
 	ev := rec.Evidence()
-	if len(ev.Upstream) != MaxCalls || !ev.Truncated {
-		t.Fatalf("len=%d truncated=%v", len(ev.Upstream), ev.Truncated)
+	if len(ev.Calls()) != MaxCalls || !ev.Truncated() {
+		t.Fatalf("len=%d truncated=%v", len(ev.Calls()), ev.Truncated())
+	}
+	// Truncation carries over to whoever replays the evidence.
+	rec2 := &Recorder{}
+	rec2.Add(ev, Own)
+	if !rec2.Evidence().Truncated() {
+		t.Error("truncation not carried over")
 	}
 	// Replayed calls fill the cap first; the check's own calls then take
 	// the place of the oldest replayed ones, never the other way round.
-	rec = &Recorder{}
+	replayed := &Recorder{}
 	for i := 0; i < MaxCalls; i++ {
-		rec.Record(Call{Method: "GET", Path: "/replayed", Status: 200, Cached: true})
+		replayed.Record(call("/replayed"))
 	}
-	rec.Record(Call{Method: "GET", Path: "/live-1", Status: 200})
-	rec.Record(Call{Method: "GET", Path: "/live-2", Status: 200})
-	rec.Record(Call{Method: "GET", Path: "/replayed-late", Status: 200, Cached: true})
+	rec = &Recorder{}
+	rec.Add(replayed.Evidence(), Cached)
+	rec.Record(call("/live-1"))
+	rec.Record(call("/live-2"))
+	rec.Add(Of(call("/replayed-late")), Cached)
 	ev = rec.Evidence()
-	if len(ev.Upstream) != MaxCalls || !ev.Truncated {
-		t.Fatalf("len=%d truncated=%v", len(ev.Upstream), ev.Truncated)
+	got := ev.Calls()
+	if len(got) != MaxCalls || !ev.Truncated() {
+		t.Fatalf("len=%d truncated=%v", len(got), ev.Truncated())
 	}
-	if got := ev.Upstream[MaxCalls-2:]; got[0].Path != "/live-1" || got[1].Path != "/live-2" {
-		t.Fatalf("live calls dropped: %+v", got)
-	}
-	for _, c := range ev.Upstream {
-		if c.Path == "/replayed-late" {
-			t.Fatal("a replayed call displaced a live one")
+	// The own calls stay, in order, where they were among the replayed.
+	var own []string
+	for _, c := range got {
+		if !c.Cached {
+			own = append(own, c.Path)
 		}
 	}
-	// With nothing replayed left, the oldest live call goes: the last
-	// calls a check made are the ones that decided it.
+	if strings.Join(own, ",") != "/live-1,/live-2" {
+		t.Fatalf("live calls dropped: %v", own)
+	}
+	// It is the oldest replayed calls that went: the late one is kept.
+	if got[MaxCalls-1].Path != "/replayed-late" || !got[MaxCalls-1].Cached {
+		t.Fatalf("last call: %+v", got[MaxCalls-1])
+	}
+	// With nothing replayed left, the oldest own call goes: the last calls
+	// a check made are the ones that decided it.
 	rec = &Recorder{}
 	for i := 0; i < MaxCalls; i++ {
-		rec.Record(Call{Method: "GET", Path: "/page", Status: 200})
+		rec.Record(call("/page"))
 	}
 	rec.Record(Call{Method: "POST", Path: "/decides", Status: 200})
-	ev = rec.Evidence()
-	if len(ev.Upstream) != MaxCalls || ev.Upstream[MaxCalls-1].Path != "/decides" || !ev.Truncated {
-		t.Fatalf("deciding call dropped: %+v", ev.Upstream[MaxCalls-1])
+	got = rec.Evidence().Calls()
+	if len(got) != MaxCalls || got[MaxCalls-1].Path != "/decides" || !rec.Evidence().Truncated() {
+		t.Fatalf("deciding call dropped: %+v", got[MaxCalls-1])
 	}
-	rec2 := &Recorder{}
-	rec2.Add(ev, Own)
-	if !rec2.Evidence().Truncated {
-		t.Error("truncation not carried over")
+}
+
+func TestJSON(t *testing.T) {
+	rec := &Recorder{}
+	rec.Add(Of(Call{Method: "GET", Path: "/users/u", Status: 200, ETag: `"v1"`}), Cached)
+	rec.Record(Call{Method: "GET", Path: "/perm", Status: 200, SHA256: "ab"})
+	b, err := json.Marshal(rec.Evidence())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"upstream":[{"method":"GET","path":"/users/u","status":200,"etag":"\"v1\"","cached":true},{"method":"GET","path":"/perm","status":200,"sha256":"ab"}]}`
+	if string(b) != want {
+		t.Fatalf("\n got %s\nwant %s", b, want)
+	}
+	var back Evidence
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if c := back.Calls(); len(c) != 2 || !c[0].Cached || c[1].SHA256 != "ab" || back.Truncated() {
+		t.Fatalf("%+v", c)
+	}
+	// A nil pointer marshals as null, which omitempty leaves out.
+	var s struct {
+		E *Evidence `json:"e,omitempty"`
+	}
+	if b, _ := json.Marshal(s); string(b) != "{}" {
+		t.Fatalf("%s", b)
+	}
+	// Truncation is written.
+	tr := &Recorder{}
+	for i := 0; i <= MaxCalls; i++ {
+		tr.Record(call("/p"))
+	}
+	if b, _ := json.Marshal(tr.Evidence()); !strings.HasSuffix(string(b), `],"truncated":true}`) {
+		t.Fatalf("%s", b[len(b)-40:])
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -224,13 +225,20 @@ type samlIndex struct {
 // unwinding through the engine; the log line names the panic's type, not
 // its value, which may quote upstream data.
 func (c *Connection) samlMap(ctx context.Context) (*samlIndex, error) {
-	idx, err := c.saml.Do(ctx, struct{}{}, func(ctx context.Context) (*samlIndex, time.Duration, error) {
-		idx, err := c.fetchSAMLMap(ctx)
+	idx, err := c.saml.Do(ctx, struct{}{}, func(ctx context.Context) (idx *samlIndex, ttl time.Duration, err error) {
+		defer func() {
+			// Logged once, here in the fill, before the cache turns the
+			// panic into a *cache.PanicError for every caller.
+			if r := recover(); r != nil {
+				c.logger.Error("github: SAML identity listing panicked", "organization", c.org, "type", fmt.Sprintf("%T", r), "stack", string(debug.Stack()))
+				panic(r)
+			}
+		}()
+		idx, err = c.fetchSAMLMap(ctx)
 		return idx, samlCacheTTL, err
 	})
 	var pe *cache.PanicError
 	if errors.As(err, &pe) {
-		c.logger.Error("github: SAML identity listing panicked", "organization", c.org, "type", fmt.Sprintf("%T", pe.Value), "stack", string(pe.Stack))
 		return nil, integration.Wrap(integration.CodeUpstreamError, pe, "the SAML identity listing failed unexpectedly")
 	}
 	return idx, err

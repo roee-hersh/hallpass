@@ -271,7 +271,7 @@ func TestDoEvidence(t *testing.T) {
 	if _, err := c.Do(ctx, "k", fill); err != nil {
 		t.Fatal(err)
 	}
-	if ev := rec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached || ev.Upstream[0].Path != "/lookup" {
+	if ev := rec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Cached || ev.Calls()[0].Path != "/lookup" {
 		t.Fatalf("leader: %+v", ev)
 	}
 	// A hit replays the fill's evidence, marked cached.
@@ -279,7 +279,7 @@ func TestDoEvidence(t *testing.T) {
 	if _, err := c.Do(ctx2, "k", fill); err != nil {
 		t.Fatal(err)
 	}
-	if ev := rec2.Evidence(); ev == nil || len(ev.Upstream) != 1 || !ev.Upstream[0].Cached {
+	if ev := rec2.Evidence(); ev == nil || len(ev.Calls()) != 1 || !ev.Calls()[0].Cached {
 		t.Fatalf("hit: %+v", ev)
 	}
 	// A context without a recorder is fine.
@@ -313,10 +313,10 @@ func TestDoEvidence(t *testing.T) {
 	close(release)
 	wg.Wait()
 	// The leader made the call; the waiter joined it: shared, not cached.
-	if ev := lrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached || ev.Upstream[0].Shared {
+	if ev := lrec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Cached || ev.Calls()[0].Shared {
 		t.Fatalf("leader of shared fill: %+v", ev)
 	}
-	if ev := wrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached || !ev.Upstream[0].Shared {
+	if ev := wrec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Cached || !ev.Calls()[0].Shared {
 		t.Fatalf("waiter: %+v", ev)
 	}
 
@@ -330,7 +330,7 @@ func TestDoEvidence(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error")
 	}
-	if ev := erec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Status != 503 || ev.Upstream[0].Cached {
+	if ev := erec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Status != 503 || ev.Calls()[0].Cached {
 		t.Fatalf("failed fill: %+v", ev)
 	}
 	zctx, zrec := evidence.WithRecorder(context.Background())
@@ -338,7 +338,7 @@ func TestDoEvidence(t *testing.T) {
 		evidence.RecorderFrom(ctx).Record(call("/zero"))
 		return 0, 0, nil
 	})
-	if ev := zrec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached {
+	if ev := zrec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Cached {
 		t.Fatalf("unstored fill: %+v", ev)
 	}
 	if _, ok := c.Get("zero"); ok {
@@ -382,7 +382,7 @@ func TestDoFresh(t *testing.T) {
 	if v, err := c.Do(fctx, "k", fill); err != nil || v != 2 || fills.Load() != 2 {
 		t.Fatalf("fresh: %v %v fills=%d", v, err, fills.Load())
 	}
-	if ev := frec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Cached || ev.Upstream[0].ETag != "2" {
+	if ev := frec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Cached || ev.Calls()[0].ETag != "2" {
 		t.Fatalf("fresh evidence: %+v", ev)
 	}
 	// The fresh answer replaced the entry, evidence included.
@@ -390,7 +390,7 @@ func TestDoFresh(t *testing.T) {
 	if v, _ := c.Do(nctx, "k", fill); v != 2 || fills.Load() != 2 {
 		t.Fatal("fresh answer not stored")
 	}
-	if ev := nrec.Evidence(); ev == nil || !ev.Upstream[0].Cached || ev.Upstream[0].ETag != "2" {
+	if ev := nrec.Evidence(); ev == nil || !ev.Calls()[0].Cached || ev.Calls()[0].ETag != "2" {
 		t.Fatalf("after fresh: %+v", ev)
 	}
 
@@ -548,5 +548,43 @@ func TestDoFresh(t *testing.T) {
 	}
 	if _, ok := c.Get("k"); ok {
 		t.Fatal("ttl 0 fresh answer stored")
+	}
+}
+
+// A waiter is not failed by the leader's deadline: when the shared fill
+// ended because the leader's remaining time ran out, the waiter, which has
+// time left, fills again with its own context.
+func TestDoWaiterRefillsAfterLeaderDeadline(t *testing.T) {
+	c := New[string, int](0)
+	var fills atomic.Int32
+	fill := func(ctx context.Context) (int, time.Duration, error) {
+		n := int(fills.Add(1))
+		select {
+		case <-ctx.Done():
+			return 0, 0, ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+			return n, time.Minute, nil
+		}
+	}
+	leaderCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	leaderErr := make(chan error, 1)
+	go func() { _, err := c.Do(leaderCtx, "k", fill); leaderErr <- err }()
+	for c.inflightCount() != 1 {
+		time.Sleep(time.Millisecond)
+	}
+	wctx, wrec := evidence.WithRecorder(context.Background())
+	v, err := c.Do(wctx, "k", fill)
+	if err != nil || v != 2 || fills.Load() != 2 {
+		t.Fatalf("waiter: v=%d err=%v fills=%d", v, err, fills.Load())
+	}
+	if !errors.Is(<-leaderErr, context.DeadlineExceeded) {
+		t.Fatal("leader did not get its own deadline")
+	}
+	if wrec.Evidence() != nil {
+		t.Fatalf("no calls were recorded, yet: %+v", wrec.Evidence().Calls())
+	}
+	if got, ok := c.Get("k"); !ok || got != 2 {
+		t.Fatal("waiter's answer not stored")
 	}
 }

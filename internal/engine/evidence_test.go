@@ -173,15 +173,15 @@ func TestEvidenceInDecisionLog(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 	ev := r.Decision.Evidence
-	if ev == nil || len(ev.Upstream) != 2 || ev.Truncated {
+	if ev == nil || len(ev.Calls()) != 2 || ev.Truncated() {
 		t.Fatalf("evidence: %+v", ev)
 	}
 	// The identity lookup: ETag kept, no hash. Made by this check.
-	if c := ev.Upstream[0]; c.Method != "GET" || c.Path != "/users/a@x.com" || c.Status != 200 || c.ETag != `"user-v1"` || c.SHA256 != "" || c.Cached {
+	if c := ev.Calls()[0]; c.Method != "GET" || c.Path != "/users/a@x.com" || c.Status != 200 || c.ETag != `"user-v1"` || c.SHA256 != "" || c.Cached {
 		t.Errorf("identity call: %+v", c)
 	}
 	// The permission read: no ETag, so the body hash; the query is not there.
-	if c := ev.Upstream[1]; c.Method != "GET" || c.Path != "/perm" || c.Status != 200 || c.ETag != "" || len(c.SHA256) != 64 || c.Cached {
+	if c := ev.Calls()[1]; c.Method != "GET" || c.Path != "/perm" || c.Status != 200 || c.ETag != "" || len(c.SHA256) != 64 || c.Cached {
 		t.Errorf("permission call: %+v", c)
 	}
 	// The token exchange is not evidence.
@@ -191,7 +191,7 @@ func TestEvidenceInDecisionLog(t *testing.T) {
 
 	// A cached decision logs the evidence that produced it.
 	r = e.Check(ctx, webReq("thing:1", false))
-	if !r.Cached || r.Decision.Evidence == nil || len(r.Decision.Evidence.Upstream) != 2 {
+	if !r.Cached || r.Decision.Evidence == nil || len(r.Decision.Evidence.Calls()) != 2 {
 		t.Fatalf("cached: %+v", r)
 	}
 	// Another resource: the identity comes from the cache and says so, the
@@ -200,10 +200,10 @@ func TestEvidenceInDecisionLog(t *testing.T) {
 	if r.Cached || u.users.Load() != 1 {
 		t.Fatalf("%+v users=%d", r, u.users.Load())
 	}
-	if c := r.Decision.Evidence.Upstream[0]; !c.Cached || c.ETag != `"user-v1"` {
+	if c := r.Decision.Evidence.Calls()[0]; !c.Cached || c.ETag != `"user-v1"` {
 		t.Errorf("cached identity call: %+v", c)
 	}
-	if c := r.Decision.Evidence.Upstream[1]; c.Cached || c.Path != "/perm" {
+	if c := r.Decision.Evidence.Calls()[1]; c.Cached || c.Path != "/perm" {
 		t.Errorf("live permission call: %+v", c)
 	}
 
@@ -211,13 +211,13 @@ func TestEvidenceInDecisionLog(t *testing.T) {
 	if len(ents) != 3 {
 		t.Fatalf("entries = %d", len(ents))
 	}
-	if ents[0].Cached || ents[0].Evidence == nil || len(ents[0].Evidence.Upstream) != 2 {
+	if ents[0].Cached || ents[0].Evidence == nil || len(ents[0].Evidence.Calls()) != 2 {
 		t.Errorf("entry 0: %+v", ents[0])
 	}
-	if !ents[1].Cached || ents[1].Evidence == nil || ents[1].Evidence.Upstream[0].ETag != `"user-v1"` {
+	if !ents[1].Cached || ents[1].Evidence == nil || ents[1].Evidence.Calls()[0].ETag != `"user-v1"` {
 		t.Errorf("entry 1: %+v", ents[1])
 	}
-	if ents[2].Cached || !ents[2].Evidence.Upstream[0].Cached || ents[2].Evidence.Upstream[1].Cached {
+	if ents[2].Cached || !ents[2].Evidence.Calls()[0].Cached || ents[2].Evidence.Calls()[1].Cached {
 		t.Errorf("entry 2: %+v", ents[2])
 	}
 	// Nothing secret-shaped reaches a decision log line: not the token,
@@ -255,7 +255,7 @@ func TestFreshCheck(t *testing.T) {
 	if r.Cached || r.Decision.Outcome != integration.Deny || u.users.Load() != 2 || u.perms.Load() != 2 {
 		t.Fatalf("fresh: %+v users=%d perms=%d", r, u.users.Load(), u.perms.Load())
 	}
-	if c := r.Decision.Evidence.Upstream[0]; c.Cached || c.ETag != `"user-v2"` {
+	if c := r.Decision.Evidence.Calls()[0]; c.Cached || c.ETag != `"user-v2"` {
 		t.Errorf("fresh identity call: %+v", c)
 	}
 	if !lastFresh.Load() {
@@ -267,7 +267,7 @@ func TestFreshCheck(t *testing.T) {
 		t.Fatalf("after fresh: %+v", r)
 	}
 	r = e.Check(ctx, webReq("thing:2", false))
-	if u.users.Load() != 2 || r.Decision.Evidence.Upstream[0].ETag != `"user-v2"` || !r.Decision.Evidence.Upstream[0].Cached {
+	if u.users.Load() != 2 || r.Decision.Evidence.Calls()[0].ETag != `"user-v2"` || !r.Decision.Evidence.Calls()[0].Cached {
 		t.Fatalf("identity cache not refreshed: users=%d %+v", u.users.Load(), r.Decision.Evidence)
 	}
 	ents := entries(t, logs)
@@ -311,7 +311,7 @@ func TestEvidenceOnFailedLookup(t *testing.T) {
 			t.Fatalf("fresh=%v: %+v", fresh, r)
 		}
 		ev := r.Decision.Evidence
-		if ev == nil || len(ev.Upstream) == 0 || ev.Upstream[0].Path != "/users/a@x.com" || ev.Upstream[0].Status != 503 || ev.Upstream[0].Cached {
+		if ev == nil || len(ev.Calls()) == 0 || ev.Calls()[0].Path != "/users/a@x.com" || ev.Calls()[0].Status != 503 || ev.Calls()[0].Cached {
 			t.Fatalf("fresh=%v evidence: %+v", fresh, ev)
 		}
 	}

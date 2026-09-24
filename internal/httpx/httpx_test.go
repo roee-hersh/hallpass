@@ -436,7 +436,7 @@ func TestEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := rec.Evidence()
-	if ev == nil || len(ev.Upstream) != 5 {
+	if ev == nil || len(ev.Calls()) != 5 {
 		t.Fatalf("%+v", ev)
 	}
 	sum := sha256.Sum256([]byte(`{"a":1}`))
@@ -454,8 +454,8 @@ func TestEvidence(t *testing.T) {
 		}()},
 	}
 	for i, w := range want {
-		if ev.Upstream[i] != w {
-			t.Errorf("call %d:\n got %+v\nwant %+v", i, ev.Upstream[i], w)
+		if ev.Calls()[i] != w {
+			t.Errorf("call %d:\n got %+v\nwant %+v", i, ev.Calls()[i], w)
 		}
 	}
 	b, _ := json.Marshal(ev)
@@ -477,7 +477,7 @@ func TestEvidence(t *testing.T) {
 	if _, err := fc.Do(fctx, &Request{Path: "/flaky"}); err != nil || flaps.Load() != 2 {
 		t.Fatal(err, flaps.Load())
 	}
-	if ev := frec.Evidence(); ev == nil || len(ev.Upstream) != 1 || ev.Upstream[0].Status != 200 {
+	if ev := frec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Status != 200 {
 		t.Fatalf("retried attempt recorded: %+v", ev)
 	}
 	// A call to a host other than the client's own names the host; one to
@@ -493,7 +493,7 @@ func TestEvidence(t *testing.T) {
 	if _, err := oc.Do(octx, &Request{Path: srv.URL + "/empty"}); err != nil {
 		t.Fatal(err)
 	}
-	if ev := orec.Evidence(); len(ev.Upstream) != 2 || ev.Upstream[0].Host != strings.TrimPrefix(other.URL, "https://") || ev.Upstream[1].Host != "" {
+	if ev := orec.Evidence(); len(ev.Calls()) != 2 || ev.Calls()[0].Host != strings.TrimPrefix(other.URL, "https://") || ev.Calls()[1].Host != "" {
 		t.Fatalf("host evidence: %+v", ev)
 	}
 	// The base host in another spelling (case, an explicit default port)
@@ -518,6 +518,24 @@ func TestEvidence(t *testing.T) {
 		if h := (&Client{Base: pair[0]}).foreignHost(u); h == "" {
 			t.Errorf("%s under %s: not foreign", pair[1], pair[0])
 		}
+	}
+	// A retry cut short by the caller's context still records the
+	// response the caller is told about.
+	var attempts atomic.Int32
+	always503 := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(503)
+		w.Write([]byte(`{"down":true}`))
+	}))
+	defer always503.Close()
+	ic := newTestClient(t, always503, &bytes.Buffer{})
+	ic.Sleep = func(ctx context.Context, _ time.Duration) error { return context.Canceled }
+	ictx, irec := evidence.WithRecorder(context.Background())
+	if _, err := ic.Do(ictx, &Request{Path: "/x"}); Status(err) != 503 || attempts.Load() != 1 {
+		t.Fatal(err, attempts.Load())
+	}
+	if ev := irec.Evidence(); ev == nil || len(ev.Calls()) != 1 || ev.Calls()[0].Status != 503 {
+		t.Fatalf("interrupted retry not recorded: %+v", ev)
 	}
 	// A request that never got a response leaves no evidence.
 	srv.Close()
