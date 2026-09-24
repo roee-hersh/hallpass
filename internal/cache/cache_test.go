@@ -568,6 +568,39 @@ func TestDoFresh(t *testing.T) {
 	if v := <-got; v != 2 {
 		t.Fatalf("ordinary caller got %d, want the fresh read's 2", v)
 	}
+	// When the fresh read it joined fails, the ordinary caller takes the
+	// entry, which the failure left in place; the fresh caller gets the
+	// error.
+	c.Set("dropfail", 1, time.Minute)
+	fstart := make(chan struct{})
+	ffail := make(chan struct{})
+	ferr := make(chan error, 1)
+	go func() {
+		_, err := c.Do(evidence.WithFresh(ctx), "dropfail", func(context.Context) (int, time.Duration, error) {
+			close(fstart)
+			<-ffail
+			return 0, 0, errors.New("upstream")
+		})
+		ferr <- err
+	}()
+	<-fstart
+	octx, orec := evidence.WithRecorder(ctx)
+	ogot := make(chan int, 1)
+	go func() {
+		v, _ := c.Do(octx, "dropfail", func(context.Context) (int, time.Duration, error) { return 3, time.Minute, nil })
+		ogot <- v
+	}()
+	time.Sleep(20 * time.Millisecond)
+	close(ffail)
+	if err := <-ferr; err == nil {
+		t.Fatal("fresh caller did not get the error")
+	}
+	if v := <-ogot; v != 1 {
+		t.Fatalf("ordinary caller got %d after the fresh read failed, want the entry's 1", v)
+	}
+	if ev := orec.Evidence(); ev != nil && len(ev.Calls()) != 0 {
+		t.Fatalf("ordinary caller's evidence: %+v", ev.Calls())
+	}
 
 	// With a fresh max age, a fresh caller takes an entry younger than it
 	// and reads again past it.
@@ -591,6 +624,27 @@ func TestDoFresh(t *testing.T) {
 	clockMu.Unlock()
 	if v, _ := aged.Do(actx, "k", agedFill); v != 2 || agedFills.Load() != 2 {
 		t.Fatalf("aged entry served to a fresh caller: v=%d fills=%d", v, agedFills.Load())
+	}
+	// With a fresh max age, a fresh caller also shares a fresh fill older
+	// than the join window but younger than that age.
+	astarted := make(chan struct{})
+	arelease := make(chan struct{})
+	go aged.Do(evidence.WithFresh(ctx), "share", func(context.Context) (int, time.Duration, error) {
+		agedFills.Add(1)
+		close(astarted)
+		<-arelease
+		return 10, time.Hour, nil
+	})
+	<-astarted
+	clockMu.Lock()
+	clock = clock.Add(FreshJoinWindow + time.Second)
+	clockMu.Unlock()
+	shared := make(chan int, 1)
+	go func() { v, _ := aged.Do(evidence.WithFresh(ctx), "share", agedFill); shared <- v }()
+	time.Sleep(20 * time.Millisecond)
+	close(arelease)
+	if v := <-shared; v != 10 || agedFills.Load() != 3 {
+		t.Fatalf("fresh caller within the max age did not share the fill: v=%d fills=%d", v, agedFills.Load())
 	}
 	// A panic in a fresh fill is a PanicError, like any other.
 	var pe *PanicError

@@ -211,9 +211,10 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 // an ordinary fill: it starts its own, which takes over the key so
 // ordinary callers arriving while it runs join it rather than take the
 // entry, and its answer replaces the entry unless an even later read
-// stored one first. A fresh read that fails leaves the entry as it was
-// for ordinary callers. Fresh callers arriving within FreshJoinWindow of
-// a fresh fill's start share it; later ones read again.
+// stored one first. A fresh read that fails leaves the entry as it was,
+// and the ordinary callers that joined it take the entry. Fresh callers
+// arriving within FreshJoinWindow (or the fresh max age) of a fresh
+// fill's start share it; later ones read again.
 //
 // The fill runs in its own goroutine on a context detached from the first
 // caller's cancellation (see Detach) rather than on ctx itself: otherwise
@@ -225,6 +226,17 @@ func Detach(ctx context.Context, fallback time.Duration) (context.Context, conte
 func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error)) (V, error) {
 	rec := evidence.RecorderFrom(ctx)
 	fresh := evidence.Fresh(ctx)
+	for refills := 0; ; refills++ {
+		v, err, again := c.do(ctx, k, fill, rec, fresh, refills == 0)
+		if !again {
+			return v, err
+		}
+	}
+}
+
+// do is one round of Do. again asks for another round: the caller waited
+// on a fill that ended with its leader's deadline and may refill, once.
+func (c *TTL[K, V]) do(ctx context.Context, k K, fill func(ctx context.Context) (V, time.Duration, error), rec *evidence.Recorder, fresh, mayRefill bool) (v V, err error, again bool) {
 	c.mu.Lock()
 	now := c.now()
 	cl, ok := c.inflight[k]
@@ -232,13 +244,16 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 	// flight, which it joins instead; a fresh caller takes an entry only
 	// while it is younger than the cache's fresh max age.
 	if !(ok && cl.fresh) {
-		if e, hit := c.getLocked(k); hit && (!fresh || (c.freshMaxAge > 0 && now.Sub(e.started) < c.freshMaxAge)) {
+		if e, hit := c.getLocked(k); hit && (!fresh || c.youngLocked(e, now)) {
 			c.mu.Unlock()
 			rec.Add(e.ev, evidence.Cached)
-			return e.v, nil
+			return e.v, nil, false
 		}
 	}
-	leader := !ok || (fresh && !(cl.fresh && now.Sub(cl.started) < FreshJoinWindow))
+	// A fresh caller shares a fresh fill that began within the join
+	// window, or within the fresh max age when the cache has one.
+	window := max(FreshJoinWindow, c.freshMaxAge)
+	leader := !ok || (fresh && !(cl.fresh && now.Sub(cl.started) < window))
 	if leader {
 		// A fresh caller does not wait on an ordinary fill, which may have
 		// begun long before it, nor on a fresh one older than the window;
@@ -259,22 +274,39 @@ func (c *TTL[K, V]) Do(ctx context.Context, k K, fill func(ctx context.Context) 
 	case <-cl.done:
 		// cl is complete: the fill's goroutine closed done after its
 		// last write.
-		if !leader && ctx.Err() == nil && cl.err != nil && ContextEnded(cl.err) {
-			// The fill ran on the leader's remaining deadline and ended
-			// because of it; this caller still has time, so it fills
-			// again with its own.
-			return c.Do(ctx, k, fill)
+		if !leader && cl.err != nil {
+			if !fresh {
+				// The fresh read this caller joined failed; the entry it
+				// would otherwise have taken is still there.
+				if v, ev, ok := c.get(k); ok {
+					rec.Add(ev, evidence.Cached)
+					return v, nil, false
+				}
+			}
+			if mayRefill && ctx.Err() == nil && ContextEnded(cl.err) {
+				// The fill ran on the leader's remaining deadline and
+				// ended because of it; this caller still has time, so it
+				// fills again with its own. What the ended fill did
+				// complete stays on the record.
+				rec.Add(cl.ev, evidence.Shared)
+				return v, nil, true
+			}
 		}
 		by := evidence.Own
 		if !leader {
 			by = evidence.Shared
 		}
 		rec.Add(cl.ev, by)
-		return cl.v, cl.err
+		return cl.v, cl.err, false
 	case <-ctx.Done():
-		var zero V
-		return zero, ctx.Err()
+		return v, ctx.Err(), false
 	}
+}
+
+// youngLocked reports whether e is young enough for a fresh check to take
+// under the cache's fresh max age.
+func (c *TTL[K, V]) youngLocked(e entry[V], now time.Time) bool {
+	return c.freshMaxAge > 0 && now.Sub(e.started) < c.freshMaxAge
 }
 
 // get is Get that also returns the entry's evidence.

@@ -196,7 +196,9 @@ than a second before the caller asked. Maps hallpass reads from a local file
 (`role_map_file`, `user_map_file`) are re-read on their own schedule, not per fresh check. A fresh
 check narrows the window between the check and the action to the time between the two; it does
 not close it. Closing it needs a conditional write in the upstream system (for example `If-Match`
-with an ETag), which only some APIs support.
+with an ETag), which only some APIs support. A hallpass built before `fresh` existed rejects a
+request that carries it (`invalid_request: unknown field "fresh"`, which the clients report as
+`unknown`), so upgrade the service before turning it on in agents.
 
 `GET /healthz` returns `{"status":"ok"}` without authentication.
 

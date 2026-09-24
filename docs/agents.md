@@ -63,7 +63,9 @@ jira.delete_issue("PAY-123")
 A fresh check narrows the window between the check and the action to the
 time between the two; it does not close it. Closing it needs a conditional
 write in the upstream system (for example `If-Match` with an ETag), which
-only some APIs support.
+only some APIs support. A hallpass built before `fresh` existed rejects a
+request that carries it, which the clients report as `unknown`: upgrade the
+service before turning `fresh` on.
 
 ## The `guarded` decorator
 

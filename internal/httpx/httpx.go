@@ -740,7 +740,7 @@ func (c *Client) within(rawURL string) bool {
 	if err != nil || u.User != nil {
 		return false
 	}
-	if u.Scheme != base.Scheme || !strings.EqualFold(u.Host, base.Host) {
+	if u.Scheme != base.Scheme || !sameHost(base, u) {
 		return false
 	}
 	prefix := strings.TrimRight(base.Path, "/")

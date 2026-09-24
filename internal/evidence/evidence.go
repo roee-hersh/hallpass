@@ -70,6 +70,11 @@ type Evidence struct {
 	items []item
 	// truncated is set when own calls were dropped at the cap.
 	truncated bool
+
+	// flat is the flattened form, computed once: an Evidence is immutable.
+	flatOnce  sync.Once
+	flat      []Call
+	flatTrunc bool
 }
 
 // item is one own call or a reference to another Evidence's calls.
@@ -93,7 +98,8 @@ func Of(calls ...Call) *Evidence {
 
 // Calls returns the calls in the order they completed, marked by how the
 // check came by them, at most MaxCalls of them. Past the cap the oldest
-// calls are dropped, cached ones first. A nil Evidence has none.
+// calls are dropped, cached ones first. A nil Evidence has none. The
+// slice is shared: read-only.
 func (e *Evidence) Calls() []Call {
 	calls, _ := e.flatten()
 	return calls
@@ -109,6 +115,11 @@ func (e *Evidence) flatten() ([]Call, bool) {
 	if e == nil {
 		return nil, false
 	}
+	e.flatOnce.Do(func() { e.flat, e.flatTrunc = e.flattenOnce() })
+	return e.flat, e.flatTrunc
+}
+
+func (e *Evidence) flattenOnce() ([]Call, bool) {
 	// A counting pass decides what the cap drops (the oldest cached calls
 	// first, then the oldest of the rest); the second pass keeps only the
 	// survivors, so nothing beyond the cap is ever materialized.

@@ -519,6 +519,15 @@ func TestEvidence(t *testing.T) {
 			t.Errorf("%s under %s: not foreign", pair[1], pair[0])
 		}
 	}
+	// A next-page link on the base host with its default port spelled
+	// out is within the base, by the same rule.
+	wc := &Client{Base: "https://api.example.com/v1"}
+	if !wc.Within("https://api.example.com:443/v1/users?page=2") || !wc.Within("https://API.example.com/v1/x") {
+		t.Error("within: the base host in another spelling was rejected")
+	}
+	if wc.Within("https://api.example.com:8443/v1/x") || wc.Within("http://api.example.com/v1/x") {
+		t.Error("within: another port or scheme was accepted")
+	}
 	// A retry cut short by the caller's context still records the
 	// response the caller is told about.
 	var attempts atomic.Int32
