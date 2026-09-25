@@ -56,7 +56,7 @@ if __name__ == "__main__":
     import sys
 
     # Demo only: the command line stands in for the user a real request was
-    # authenticated as (see docs/agents.md, "Where the user comes from").
+    # authenticated as (see docs/guides/agent-tools.md, "Where the user comes from").
     current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
     print(check_permission.invoke({"connection": "demo", "action": "thing.write", "resource": "thing:1"}))
     print(write_thing.invoke({"thing_id": "1", "content": "hello"}))

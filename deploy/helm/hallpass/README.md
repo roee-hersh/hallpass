@@ -7,8 +7,12 @@ read-only-root-filesystem security context.
 
 ## Try it
 
+Each release publishes the chart to GitHub's container registry, with the chart version equal to
+the hallpass version. From a clone of the repository, use `deploy/helm/hallpass` instead of the
+`oci://` reference.
+
 ```sh
-helm install hallpass deploy/helm/hallpass --namespace hallpass --create-namespace \
+helm install hallpass oci://ghcr.io/roee-hersh/charts/hallpass --namespace hallpass --create-namespace \
   --set apiKey.value=change-me
 helm test hallpass -n hallpass
 kubectl -n hallpass port-forward svc/hallpass 8080:8080 &
@@ -22,7 +26,7 @@ The default config carries only the `demo` connection, which talks to nothing.
 ## Configure
 
 Put your connections in a values file. `config` is rendered verbatim into `hallpass.yaml`, so
-everything [docs/operating.md](../../../docs/operating.md) documents under *Configuration* works here, except `listen`, which the
+everything [the configuration reference](../../../docs/reference/configuration.md) documents works here, except `listen`, which the
 chart sets from `containerPort`.
 
 Secrets never go into the config. Every credential is an `env:NAME` or `file:/path` reference, and the
@@ -66,7 +70,7 @@ extraVolumeMounts:
 
 ```sh
 kubectl -n hallpass create secret generic hallpass-api-key --from-literal=HALLPASS_API_KEY="$(openssl rand -hex 32)"
-helm upgrade --install hallpass deploy/helm/hallpass -n hallpass -f values.yaml
+helm upgrade --install hallpass oci://ghcr.io/roee-hersh/charts/hallpass -n hallpass -f values.yaml
 ```
 
 Files mounted from Secrets are re-read on every use, so rotating a token in the Secret is enough.

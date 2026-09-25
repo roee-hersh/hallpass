@@ -18,11 +18,11 @@ go vet ./...
 ```
 
 CI also runs contract tests against vendor OpenAPI descriptions, a Kubernetes end-to-end run on
-kind and an Argo CD differential test. See [docs/testing.md](docs/testing.md) to run them locally.
+kind and an Argo CD differential test. See [docs/development/testing.md](docs/development/testing.md) to run them locally.
 
 ## Adding an integration
 
-Read [docs/integration-authoring.md](docs/integration-authoring.md). A new integration needs:
+Read [docs/development/integration-authoring.md](docs/development/integration-authoring.md). A new integration needs:
 
 - a read-only credential and the minimum permissions it requires, documented in
   `docs/integrations/<name>.md`;

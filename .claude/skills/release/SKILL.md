@@ -32,9 +32,10 @@ Actions → release → Run workflow). For a minor or major bump you can also ru
 
 ## 4. Verify
 
-- The run's `tag`, `binaries`, `image`, `sdk`, `pypi` and `npm` jobs all succeed; if one fails, read its log and fix.
+- The run's `tag`, `binaries`, `image`, `chart`, `sdk`, `pypi` and `npm` jobs all succeed; if one fails, read its log and fix.
 - The release page lists `linux`/`darwin`/`windows` × `amd64`/`arm64` archives and `checksums.txt`.
-- `ghcr.io/roee-hersh/hallpass:<version>` and `:latest` exist.
+- `ghcr.io/roee-hersh/hallpass:<version>` and `:latest` exist, and
+  `helm show chart oci://ghcr.io/roee-hersh/charts/hallpass --version <version>` works without logging in.
 - The `pypi` and `npm` jobs succeeded, not skipped (skipped means the `PUBLISH_PYPI` or
   `PUBLISH_NPM` variable is unset), and the registries serve the new version:
   `https://pypi.org/pypi/hallpass-client/json` and `https://registry.npmjs.org/hallpass-client`.

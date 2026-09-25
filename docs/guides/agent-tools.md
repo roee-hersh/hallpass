@@ -1,12 +1,12 @@
-# Using hallpass from an AI agent
+# Guarding agent tools
 
 An agent holds one powerful bot credential. Before it uses that credential on
 behalf of a person, it asks hallpass whether that person may do the thing.
 This guide shows the pattern and how to wire it into LangChain, LangGraph,
 Strands Agents, the Claude Agent SDK and any MCP host, and in TypeScript into
 the Vercel AI SDK and the MCP TypeScript SDK. Runnable versions of every
-snippet live in [`examples/agent`](../examples/agent) and
-[`examples/agent-ts`](../examples/agent-ts).
+snippet live in [`examples/agent`](../../examples/agent) and
+[`examples/agent-ts`](../../examples/agent-ts).
 
 ## The rules
 
@@ -70,7 +70,7 @@ protected branch directly, so the branch's rules are applied too.
 
 ## The client
 
-The Python client is the [`hallpass-client`](../sdk/python) package, with no
+The Python client is the [`hallpass-client`](../../sdk/python) package, with no
 dependencies beyond the standard library:
 
 ```sh
@@ -269,7 +269,7 @@ may write and `dana@example.com` may not. Replace `demo`, `thing.write` and
 
 ### LangChain
 
-[`langchain_tool.py`](../examples/agent/langchain_tool.py)
+[`langchain_tool.py`](../../examples/agent/langchain_tool.py)
 
 ```python
 @tool
@@ -289,7 +289,7 @@ agent = create_agent(model, tools=tools)   # or any LangChain agent constructor
 
 ### LangGraph
 
-[`langgraph_agent.py`](../examples/agent/langgraph_agent.py) uses the
+[`langgraph_agent.py`](../../examples/agent/langgraph_agent.py) uses the
 LangChain tools unchanged. `create_agent` from LangChain 1.x is built on
 LangGraph and gives a ready tool-calling loop; `ToolNode(tools)` is the same
 tools as a node for a graph you assemble yourself.
@@ -308,7 +308,7 @@ tool_node = ToolNode(tools)  # for a hand-built StateGraph
 
 ### Strands Agents
 
-[`strands_tool.py`](../examples/agent/strands_tool.py)
+[`strands_tool.py`](../../examples/agent/strands_tool.py)
 
 ```python
 from strands import Agent, tool
@@ -333,7 +333,7 @@ is reported to the model as a tool error with hallpass's reason.
 
 ### Claude Agent SDK
 
-[`claude_agent_sdk_tool.py`](../examples/agent/claude_agent_sdk_tool.py)
+[`claude_agent_sdk_tool.py`](../../examples/agent/claude_agent_sdk_tool.py)
 
 The SDK hands a handler one dict of arguments; `guarded` formats the
 resource from it.
@@ -362,7 +362,7 @@ A refusal reaches the model as an `is_error` result with hallpass's reason.
 
 ### MCP server, for any host
 
-[`mcp_server.py`](../examples/agent/mcp_server.py) is a standalone server
+[`mcp_server.py`](../../examples/agent/mcp_server.py) is a standalone server
 over stdio for Claude Code, Claude Desktop, Cursor or any other MCP host.
 The host launches one process per user session and names the user in
 `AGENT_USER`; the tools never take a user argument. Its Python environment
@@ -408,7 +408,7 @@ Or in any host that takes an `mcpServers` JSON block:
 
 ## TypeScript
 
-The same client for Node is the [`hallpass-client`](../sdk/node) npm package,
+The same client for Node is the [`hallpass-client`](../../sdk/node) npm package,
 on the built-in `fetch` with no dependencies (`npm install hallpass-client`).
 It follows the rules above to the letter: a
 transport failure, a redirect, a non-JSON body or an `allow` with a non-200
@@ -468,7 +468,7 @@ right for a destructive tool like this one.
 
 ### Vercel AI SDK
 
-[`ai_sdk_tool.ts`](../examples/agent-ts/ai_sdk_tool.ts)
+[`ai_sdk_tool.ts`](../../examples/agent-ts/ai_sdk_tool.ts)
 
 ```ts
 import { generateText, tool } from "ai";
@@ -495,7 +495,7 @@ works the same way.
 
 ### MCP server in TypeScript, for any host
 
-[`mcp_server.ts`](../examples/agent-ts/mcp_server.ts) is the TypeScript
+[`mcp_server.ts`](../../examples/agent-ts/mcp_server.ts) is the TypeScript
 version of the server above. The host launches one process per user session
 and names the user in `AGENT_USER`; the tools never take a user argument. A
 thrown `PermissionDenied` becomes an `isError` result carrying its message,

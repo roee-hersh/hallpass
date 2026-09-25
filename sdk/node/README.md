@@ -48,4 +48,4 @@ await hp.require(...);  // rejects with PermissionDenied unless allow
 ```
 
 Framework examples: [examples/agent-ts](https://github.com/roee-hersh/hallpass/tree/main/examples/agent-ts).
-The guide: [docs/agents.md](https://github.com/roee-hersh/hallpass/blob/main/docs/agents.md).
+The guide: [docs/guides/agent-tools.md](https://github.com/roee-hersh/hallpass/blob/main/docs/guides/agent-tools.md).

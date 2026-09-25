@@ -18,6 +18,7 @@ release (03:00 UTC), so merge only complete, working changes.
      fresh venv, then run `sdk/python/tests` with that venv's Python from outside the repository
    - when `sdk/node` changed: `cd sdk/node && npm ci && npm test`, and run the `examples/agent-ts`
      tests, which exercise it
+   - when any Markdown changed: `python3 test/docs/linkcheck.py`
    - when `deploy/helm` changed: `helm lint deploy/helm/hallpass --strict --set apiKey.value=x`
 4. Open a pull request using `.github/pull_request_template.md`. Mention the
    issue it closes when there is one.
