@@ -1,562 +1,216 @@
-# Guarding agent tools
+# Add hallpass to your agent
 
-An agent holds one powerful bot credential. Before it uses that credential on
-behalf of a person, it asks hallpass whether that person may do the thing.
-This guide shows the pattern and how to wire it into LangChain, LangGraph,
-Strands Agents, the Claude Agent SDK and any MCP host, and in TypeScript into
-the Vercel AI SDK and the MCP TypeScript SDK. Runnable versions of every
-snippet live in [`examples/agent`](../../examples/agent) and
-[`examples/agent-ts`](../../examples/agent-ts).
+Your agent acts in other systems with its own credential. This guide adds one check in front of
+each tool that changes something, so the tool runs only when the person asking is allowed to do
+it themselves.
 
-## The rules
+You need a running hallpass. The [quickstart](../quickstart.md) starts one with a `demo`
+connection in which `admin@example.com` may write and `dana@example.com` may not.
 
-1. **Act only on `allow`.** `deny` and `unknown` are both refusals. hallpass
-   answers `unknown` when it could not evaluate: upstream timeout, ambiguous
-   user, a resource it cannot see, a bad request.
-2. **No answer is a refusal too.** A connection error, a timeout, a malformed
-   response, a redirect, or an `allow` with a non-200 status all count as
-   `unknown`. Redirects are never followed, because following one would send
-   the API key to whatever host the `Location` header names. Plain `http://`
-   is accepted only for localhost, for the same reason.
-3. **The model does not choose the user.** The person the agent acts for is
-   set by your application for the session. It is never a tool argument: a
-   tool argument is text the model produces, and a model that can pick the
-   user can pick an administrator.
-4. **hallpass only checks.** The action itself still runs with the agent's
-   own credential, in your code, after the check.
+## 1. Install the client
 
-## Where to put the check
+```sh
+pip install hallpass-client     # Python
+npm install hallpass-client     # Node
+```
 
-Guard the tools that change state, and only those. A check per tool call costs an upstream round
-trip and can answer `unknown`, so it belongs where a wrong answer would let the agent do something
-on someone's behalf that they could not do themselves, and nowhere else.
+Set `HALLPASS_URL` and `HALLPASS_API_KEY` in the agent's environment.
 
-- **Reads stay unguarded.** What the agent can see is bounded by its own credential; give it a
-  read-only account with the scope you are comfortable exposing to everyone who can talk to it,
-  and let it read freely. A diagnosis tool that pulls logs, metrics, events and restarts in one call
-  should not wait on hallpass, and does not need to.
-- **Writes get one check each, at the boundary.** The tool that opens the pull request, scales the
-  deployment or deletes the issue asks once, immediately before it acts, for the user the session
-  was authenticated as. Actions with lasting effect use `fresh=True` so the answer comes from the
-  system, not the cache.
-- **Narrow the write paths first.** An agent that changes production only by opening a GitOps pull
-  request has one write path to guard, and the merge stays with the humans and rules the repository
-  already has. That is a better position than guarding twenty direct-write tools.
+## 2. Decide which tools to guard
 
-The pattern this project came from: an ops agent whose `service_health` tool reads everything and
-is not guarded, and whose one state-changing tool opens a pull request against the GitOps
-repository:
+Guard the tools that change state, and only those.
+
+- **Reads stay unguarded.** Give the agent a read-only account for looking at things, and let it
+  read freely. A check on every read adds a round trip and nothing else.
+- **Each write tool gets one check**, just before it acts.
+- **Fewer write tools is better.** If the agent changes production only by opening a pull request,
+  there is one tool to guard, and the merge stays with your reviewers.
+
+For example, an ops agent with one read tool and one write tool:
 
 ```python
 @tool
 def service_health(service: str) -> str:
-    """Error counts, metrics, events, restarts and node status for a service."""
+    """Errors, metrics, events and restarts for a service."""
     ...  # read-only account, no check
 
 @tool
 @guarded(hp, "github-main", "repo.push", "repo:{owner}/{repo}", user=current_user, fresh=True)
 def open_config_pr(owner: str, repo: str, title: str, patch: str) -> str:
-    """Push a branch with the change and open a pull request for it."""
-    ...  # the agent's own token; runs only when GitHub says this user may push to that repository
+    """Push a branch with the change and open a pull request."""
+    ...  # runs only if GitHub says this user may push to the repository
 ```
 
-Match the action to what the tool really does. This tool pushes a branch into the repository
-before it opens the pull request, so the question is whether the user may push there:
-`repo.push`, answered from GitHub's collaborator permission on that repository. `pr.create` is
-the weaker question, and deliberately so: GitHub lets a user with only `pull` open a pull
-request from a fork, so `pr.create` allows them when forking is enabled. Use it only for a tool
-that forks rather than pushes. Add `@{branch}` to the resource when the tool pushes to a
-protected branch directly, so the branch's rules are applied too.
+Ask about what the tool really does. This tool pushes a branch, so it asks for `repo.push`.
+`pr.create` would be too weak: GitHub lets a user with read access open a pull request from a fork.
 
-## The client
+Use `fresh=True` on tools with lasting effect (delete, merge, scale, push). It makes hallpass ask
+the system now instead of reusing a cached answer.
 
-The Python client is the [`hallpass-client`](../../sdk/python) package, with no
-dependencies beyond the standard library:
+## 3. Set the user from your login, not from the model
 
-```sh
-pip install hallpass-client
-```
+The user must come from your own authentication: the SSO session, the Slack user who wrote the
+message. Never from a tool argument or the message text, because the model writes those and could
+be talked into writing an admin's email.
 
-```python
-from hallpass_client import Hallpass
-
-hp = Hallpass()  # HALLPASS_URL and HALLPASS_API_KEY from the environment
-
-d = hp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
-d.decision  # "allow", "deny" or "unknown"
-d.reason    # "denied: dana@example.com lacks DELETE_ISSUES on PAY"
-d.allowed   # True only for allow
-
-hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
-# raises PermissionDenied unless the answer is allow
-```
-
-`check` never raises on transport problems; every failure is an `unknown`
-decision with the code `client_error`. Pass `groups=[...]` for systems that
-grant by group, such as Kubernetes.
-
-Pass `fresh=True` for an answer straight from the upstream system. hallpass
-caches allow and deny answers for 30 seconds by default; a fresh check
-skips its caches for that one request and asks now, then stores what it
-learned so reads keep using the cache. Make it the default for destructive
-actions (delete, merge, scale):
-
-```python
-hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", fresh=True)
-jira.delete_issue("PAY-123")
-```
-
-A fresh check narrows the window between the check and the action to the
-time between the two; it does not close it. Closing it needs a conditional
-write in the upstream system (for example `If-Match` with an ETag), which
-only some APIs support. A hallpass built before `fresh` existed rejects a
-request that carries it, which the clients report as `unknown`: upgrade the
-service before turning `fresh` on.
-
-hallpass never sees the write itself, so `guarded` records it: after the
-body has run it logs one line on the Python logger `hallpass` (INFO) with
-the decision and reason, the time the check was made, whether it was fresh,
-and that the write was unconditional, with no `If-Match` on the state
-hallpass saw. Nobody reading the logs later should take check and write for
-one atomic step. A refused call logs nothing; a body that raises still
-logs, since the write may have happened.
-
-```
-unconditional write: dana@example.com ran DELETE_ISSUES on issue:PAY-123 in jira-main;
-hallpass said allow (allowed: dana may delete issues in PAY) at 2026-09-24T10:00:00.412+00:00,
-fresh=True; the write was not conditioned on the state hallpass saw (no If-Match),
-so check and write were not atomic
-```
-
-## The `guarded` decorator
-
-`guarded` wraps a function so that its body runs only after hallpass allowed
-it. A framework's `@tool` decorator goes directly on top.
+Set it where you handle the request, before the agent runs:
 
 ```python
 from contextvars import ContextVar
+
+current_user: ContextVar[str] = ContextVar("current_user")
+
+@app.post("/chat")
+async def chat(body: ChatIn, user: User = Depends(authenticated_user)):  # your auth
+    current_user.set(user.email)
+    agent = Agent(tools=tools)          # one agent per request
+    return {"reply": str(await agent.invoke_async(body.message))}
+```
+
+In a Slack bot, take the user from the event Slack signed:
+
+```python
+@app.event("app_mention")
+async def on_mention(event, client, say):
+    info = await client.users_info(user=event["user"])  # needs the users:read.email scope
+    current_user.set(info["user"]["profile"]["email"])
+    ...  # run the agent
+```
+
+In a shared thread, the user is whoever wrote the message the agent is acting on, not whoever
+started the thread.
+
+In Node, use `AsyncLocalStorage` the same way:
+`currentUser.run(req.user.email, () => runAgent(...))`.
+
+## 4. Wrap the write tool
+
+Put `guarded` directly under your framework's tool decorator:
+
+```python
 from hallpass_client import Hallpass, guarded
 
 hp = Hallpass()
-current_user: ContextVar[str] = ContextVar("current_user")
 
-@tool  # LangChain, Strands, MCPServer, ...
+@tool
 @guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
 def delete_issue(key: str) -> str:
+    """Delete a Jira issue."""
     jira.delete_issue(key)  # the agent's own credential
     return f"deleted {key}"
 ```
 
-`fresh=True` is right for a destructive tool like this one: the check asks
-the upstream system now instead of a cached answer.
+- `"jira-main"` is the connection id in `hallpass.yaml`.
+- `"DELETE_ISSUES"` is the action. `hallpass catalog jira` lists them.
+- `"issue:{key}"` builds the resource from the tool's arguments.
 
-Your application sets `current_user` for the session before the agent runs:
+If the answer is not `allow`, the body never runs and `PermissionDenied` is raised. That includes
+`unknown` and hallpass being unreachable. The tool's signature does not change, so the model never
+sees a `user` field.
+
+## 5. Tell the model why
+
+The refusal text names the user, the action and hallpass's reason, so the model can explain it to
+the person. Some frameworks hide exception text from the model, so for those, return the refusal
+instead of raising it, with `deny=`:
 
 ```python
-current_user.set(request.user.email)
+@guarded(..., deny=lambda e: f"refused: {e}")
 ```
 
-| Parameter | Meaning |
+| Framework | Use |
 |---|---|
-| `hp` | The `Hallpass` client. |
-| `connection`, `action` | The connection id from `hallpass.yaml` and one of its actions (`hallpass catalog jira` lists them). |
-| `resource` | A format string over the call's arguments, e.g. `"issue:{key}"`. A call that cannot fill it makes no request and runs nothing. |
-| `user` | Where the acting user comes from: a string, a zero-argument callable, or a `ContextVar`. Resolved on every call. Never read from the arguments. |
-| `groups` | The user's groups, from the same kinds of source. Must yield a list. |
-| `deny` | Optional. Called with the `PermissionDenied`; its return value is returned instead of raising. For frameworks that hide an exception's text from the model. |
-| `fresh` | Optional. `True` makes every check skip hallpass's caches and ask the upstream system now. Use it for delete, merge and scale-type actions. |
+| LangChain, LangGraph | `deny=` (an unexpected exception ends the run) |
+| MCP server (`mcp` package) | `deny=` (the server hides exception text) |
+| Strands Agents | raise (reported as a tool error with the text) |
+| Claude Agent SDK | raise (reported as an `is_error` result with the text) |
+| Vercel AI SDK | `deny:` (so the model reads the reason whatever the SDK does with errors) |
+| MCP TypeScript SDK | raise (becomes an `isError` result with the text) |
 
-What the decorator guarantees:
+## Framework recipes
 
-- The decorated function's signature is exactly the original's. There is no
-  `user` parameter for a framework to expose in the tool schema. A stray
-  `user` keyword argument is a `TypeError` before any request is made; a
-  `user` key in a dict of arguments is ignored.
-- The check happens before the body, on every call, with the user from the
-  application. Any answer other than `allow` raises `PermissionDenied`
-  (or returns what `deny` gives) and the body never runs.
-- A function with ordinary parameters is called with keyword arguments
-  (LangChain, Strands, MCP). A function whose only parameter is a dict, the
-  Claude Agent SDK handler shape, receives all the arguments in it. The
-  shape is fixed by the signature, so a call in the wrong shape is a
-  `TypeError`, not a check on one resource and an action on another.
-- `async def` is supported. The check then runs in a worker thread, so the
-  event loop is not blocked by the HTTP call.
+Each recipe is a complete, tested file. They define two tools against the `demo` connection:
+`check_permission`, so the model can ask before proposing something, and a guarded `write_thing`.
 
-`current(source)` resolves a user or groups source the same way `guarded`
-does, for code outside a guarded function such as a `check_permission` tool;
-a `ContextVar` with nothing set for the session gives a clear error naming
-it.
-
-## What the model sees on a refusal
-
-Each framework reports a raised exception differently, so the examples pick
-per framework whether `guarded` raises or returns:
-
-| Framework | On `PermissionDenied` | The model reads |
+| Framework | File | Notes |
 |---|---|---|
-| Strands Agents | raise | a tool error carrying the text |
-| Claude Agent SDK | raise | an `is_error` result carrying the text |
-| MCPServer (`mcp` package) | `deny=` returns `refused: ...` | the refusal as the result; the server would otherwise mask the text |
-| LangChain / LangGraph | `deny=` returns `refused: ...` | the refusal as the observation; an unknown exception would end the run |
+| LangChain | [`langchain_tool.py`](../../examples/agent/langchain_tool.py) | `@tool` over `guarded`, with `deny=` |
+| LangGraph | [`langgraph_agent.py`](../../examples/agent/langgraph_agent.py) | the LangChain tools in `create_agent` or a `ToolNode` |
+| Strands Agents | [`strands_tool.py`](../../examples/agent/strands_tool.py) | `@tool` over `guarded` |
+| Claude Agent SDK | [`claude_agent_sdk_tool.py`](../../examples/agent/claude_agent_sdk_tool.py) | handler takes `args: dict`; see below |
+| MCP server, any host | [`mcp_server.py`](../../examples/agent/mcp_server.py) | user from `AGENT_USER`; see below |
+| Vercel AI SDK | [`ai_sdk_tool.ts`](../../examples/agent-ts/ai_sdk_tool.ts) | `guarded(...)` as the tool's `execute` |
+| MCP TypeScript SDK | [`mcp_server.ts`](../../examples/agent-ts/mcp_server.ts) | user from `AGENT_USER` |
 
-In every case the text names the user, action, resource and hallpass's
-reason, so the model can tell the person why.
-
-## Where the user comes from
-
-The user must come from something the model cannot write: your own
-authentication. Set `current_user` in the code that handles the incoming
-request, from the identity that request was authenticated as, then run the
-agent in that same request. Each request runs in its own task, so parallel
-requests keep their own user.
-
-A web app, where your auth dependency has already verified the session
-(Strands shown; any framework works the same way):
+**Claude Agent SDK.** The handler receives one dict, and `guarded` reads the resource from it.
+With a long-lived `ClaudeSDKClient`, set the user before `connect()` and use one client per user.
 
 ```python
-from fastapi import Depends, FastAPI
-from strands import Agent
-from strands_tool import current_groups, current_user, tools
-
-app = FastAPI()
-
-@app.post("/chat")
-async def chat(body: ChatIn, user: User = Depends(authenticated_user)):  # your SSO / session auth
-    current_user.set(user.email)
-    current_groups.set(tuple(user.groups))
-    agent = Agent(tools=tools)               # one agent per request: no history shared between users
-    result = await agent.invoke_async(body.message)
-    return {"reply": str(result)}
-```
-
-A Slack bot, where Slack signs the event and names the user who wrote it
-(Claude Agent SDK shown; needs the `users:read.email` scope):
-
-```python
-from slack_bolt.async_app import AsyncApp
-from claude_agent_sdk import ClaudeAgentOptions, query
-from claude_agent_sdk_tool import current_user, server
-
-app = AsyncApp(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)  # Bolt verifies the signature
-options = ClaudeAgentOptions(
-    mcp_servers={"hallpass": server},
-    allowed_tools=["mcp__hallpass__check_permission", "mcp__hallpass__write_thing"],
-)
-
-@app.event("app_mention")
-async def on_mention(event, client, say):
-    info = await client.users_info(user=event["user"])   # the Slack user who wrote the message
-    current_user.set(info["user"]["profile"]["email"])
-    async for message in query(prompt=event["text"], options=options):
-        ...                                              # post the answer with say(...)
-```
-
-Never take the user from the message text, a tool argument or anything else
-the model or the requester can type.
-
-With a long-lived `ClaudeSDKClient`, set `current_user` before `connect()`:
-its tool calls run in the context it was connected in. Use one client per
-user's conversation, never one shared between users.
-
-## Frameworks
-
-Every example below defines two tools: `check_permission`, so the model can
-ask before proposing something, and a guarded `write_thing` action against
-the `demo` connection of `examples/hallpass.yaml`, where `admin@example.com`
-may write and `dana@example.com` may not. Replace `demo`, `thing.write` and
-`thing:{thing_id}` with your connection, action and resource.
-
-### LangChain
-
-[`langchain_tool.py`](../../examples/agent/langchain_tool.py)
-
-```python
-@tool
-@guarded(hp, "demo", "thing.write", "thing:{thing_id}", user=current_user, groups=current_groups,
-         deny=lambda e: f"refused: {e}")
-def write_thing(thing_id: str, content: str) -> str:
-    """Write content to a thing in the demo system."""
-    ...
-
-tools = [check_permission, write_thing]
-```
-
-```python
-current_user.set(user.email)  # from your auth, see above
-agent = create_agent(model, tools=tools)   # or any LangChain agent constructor
-```
-
-### LangGraph
-
-[`langgraph_agent.py`](../../examples/agent/langgraph_agent.py) uses the
-LangChain tools unchanged. `create_agent` from LangChain 1.x is built on
-LangGraph and gives a ready tool-calling loop; `ToolNode(tools)` is the same
-tools as a node for a graph you assemble yourself.
-
-```python
-from langchain.agents import create_agent
-from langgraph.prebuilt import ToolNode
-from langchain_tool import current_user, tools
-
-current_user.set(user.email)  # from your auth, see above
-agent = create_agent("anthropic:claude-opus-5", tools=tools)
-agent.invoke({"messages": [("user", "Write 'hello' to thing 1.")]})
-
-tool_node = ToolNode(tools)  # for a hand-built StateGraph
-```
-
-### Strands Agents
-
-[`strands_tool.py`](../../examples/agent/strands_tool.py)
-
-```python
-from strands import Agent, tool
-
-@tool
-@guarded(hp, "demo", "thing.write", "thing:{thing_id}", user=current_user, groups=current_groups)
-def write_thing(thing_id: str, content: str) -> str:
-    """Write content to a thing in the demo system.
-
-    Args:
-        thing_id: the thing to write to
-        content: what to write
-    """
-    ...
-
-current_user.set(user.email)  # from your auth, see above
-Agent(tools=[check_permission, write_thing])("Write 'hello' to thing 1.")
-```
-
-The tool schema Strands derives has only `thing_id` and `content`. A refusal
-is reported to the model as a tool error with hallpass's reason.
-
-### Claude Agent SDK
-
-[`claude_agent_sdk_tool.py`](../../examples/agent/claude_agent_sdk_tool.py)
-
-The SDK hands a handler one dict of arguments; `guarded` formats the
-resource from it.
-
-```python
-from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, query, tool
-
-@tool("write_thing", "Write content to a thing in the demo system.", {"thing_id": str, "content": str})
-@guarded(hp, "demo", "thing.write", "thing:{thing_id}", user=current_user, groups=current_groups)
+@tool("write_thing", "Write content to a thing.", {"thing_id": str, "content": str})
+@guarded(hp, "demo", "thing.write", "thing:{thing_id}", user=current_user)
 async def write_thing(args: dict) -> dict:
     ...
     return {"content": [{"type": "text", "text": f"wrote to thing:{args['thing_id']}"}]}
-
-server = create_sdk_mcp_server(name="hallpass", version="1.0.0", tools=[check_permission, write_thing])
-
-current_user.set(user.email)  # from your auth, see above
-options = ClaudeAgentOptions(
-    mcp_servers={"hallpass": server},
-    allowed_tools=["mcp__hallpass__check_permission", "mcp__hallpass__write_thing"],
-)
-async for message in query(prompt="Write 'hello' to thing 1.", options=options):
-    ...
 ```
 
-A refusal reaches the model as an `is_error` result with hallpass's reason.
-
-### MCP server, for any host
-
-[`mcp_server.py`](../../examples/agent/mcp_server.py) is a standalone server
-over stdio for Claude Code, Claude Desktop, Cursor or any other MCP host.
-The host launches one process per user session and names the user in
-`AGENT_USER`; the tools never take a user argument. Its Python environment
-needs `hallpass-client` and `mcp` (`pip install hallpass-client "mcp>=2,<3"`).
-
-```python
-mcp = MCPServer("hallpass")
-
-@mcp.tool()
-@guarded(hp, "demo", "thing.write", "thing:{thing_id}", user=AGENT_USER, groups=AGENT_GROUPS,
-         deny=lambda e: f"refused: {e}")
-def write_thing(thing_id: str, content: str) -> str:
-    """Write content to a thing in the demo system."""
-    ...
-```
-
-```sh
-claude mcp add hallpass \
-  -e HALLPASS_URL=http://localhost:8080 -e HALLPASS_API_KEY=change-me \
-  -e AGENT_USER=dana@example.com \
-  -- /path/to/.venv/bin/python /path/to/hallpass/examples/agent/mcp_server.py
-```
-
-Or in any host that takes an `mcpServers` JSON block:
-
-```json
-{
-  "mcpServers": {
-    "hallpass": {
-      "command": "/path/to/.venv/bin/python",
-      "args": ["/path/to/hallpass/examples/agent/mcp_server.py"],
-      "env": {
-        "HALLPASS_URL": "http://localhost:8080",
-        "HALLPASS_API_KEY": "change-me",
-        "AGENT_USER": "dana@example.com"
-      }
-    }
-  }
-}
-```
-
-`AGENT_GROUPS` (comma-separated) passes group memberships.
-
-## TypeScript
-
-The same client for Node is the [`hallpass-client`](../../sdk/node) npm package,
-on the built-in `fetch` with no dependencies (`npm install hallpass-client`).
-It follows the rules above to the letter: a
-transport failure, a redirect, a non-JSON body or an `allow` with a non-200
-status is an `unknown` decision with the code `client_error` (a 400 or 401
-keeps hallpass's own reason), and `guarded` never reads the user from the
-arguments.
+**Vercel AI SDK.**
 
 ```ts
-import { Hallpass, current, guarded } from "hallpass-client";
-
-const hp = new Hallpass(); // HALLPASS_URL and HALLPASS_API_KEY from the environment
-
-const d = await hp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123");
-d.decision; // "allow", "deny" or "unknown"
-d.allowed;  // true only for allow
-
-await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123");
-// rejects with PermissionDenied unless the answer is allow
-
-await hp.require("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", { fresh: true });
-// fresh: skips hallpass's caches and asks Jira now, for a destructive action
-```
-
-The fifth argument of `check`, `allowed` and `require` is the user's groups
-or an options object, `{ groups, fresh }`, with the meaning described for
-the Python client above.
-
-Every Node agent framework calls a tool with one object of arguments, so
-`guarded` wraps a function of that shape and returns one with the same
-signature. The user comes from a string, a zero-argument function, or an
-`AsyncLocalStorage` your request handler enters, the Node counterpart of
-the `ContextVar` above. `resource` is the same `"issue:{key}"` template.
-
-```ts
-import { AsyncLocalStorage } from "node:async_hooks";
-
-const session = new AsyncLocalStorage<{ user: string; groups?: string[] }>();
-const user = () => current(session).user;
-const groups = () => current(session).groups ?? [];
-
-const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user, fresh: true })(
-  async ({ key }: { key: string }) => {
-    await jira.deleteIssue(key); // the agent's own credential
-    return `deleted ${key}`;
-  },
-);
-
-// In the request handler, from the identity your auth verified:
-app.post("/chat", auth, (req, res) =>
-  session.run({ user: req.user.email, groups: req.user.groups }, () => runAgent(req, res)));
-```
-
-A `user` key the model puts in the arguments is ignored; a call whose
-arguments cannot fill the template makes no request and runs nothing.
-`fresh: true` in the options makes every check ask the upstream system now,
-right for a destructive tool like this one.
-
-### Vercel AI SDK
-
-[`ai_sdk_tool.ts`](../../examples/agent-ts/ai_sdk_tool.ts)
-
-```ts
-import { generateText, tool } from "ai";
-import { z } from "zod";
-
 const writeThing = tool({
-  description: "Write content to a thing in the demo system.",
+  description: "Write content to a thing.",
   inputSchema: z.object({ thing_id: z.string(), content: z.string() }),
-  execute: guarded(hp, "demo", "thing.write", "thing:{thing_id}", { user, groups, deny: (e) => `refused: ${e.message}` })(
-    async ({ thing_id, content }: { thing_id: string; content: string }) => { ... },
+  execute: guarded(hp, "demo", "thing.write", "thing:{thing_id}", { user, deny: (e) => `refused: ${e.message}` })(
+    async ({ thing_id, content }) => { ... },
   ),
 });
-
-const tools = { check_permission: checkPermission, write_thing: writeThing };
-session.run({ user: req.user.email }, () => generateText({ model, tools, prompt }));
 ```
 
-The schema the model sees has only `thing_id` and `content`; a `user` the
-model sends anyway is stripped by the schema before `execute` runs. The
-refusal is returned as the tool's output rather than thrown, so the model
-reads hallpass's reason whatever the SDK does with a thrown error.
-Anything that takes AI SDK tools (`streamText`, `ToolLoopAgent`, Mastra)
-works the same way.
-
-### MCP server in TypeScript, for any host
-
-[`mcp_server.ts`](../../examples/agent-ts/mcp_server.ts) is the TypeScript
-version of the server above. The host launches one process per user session
-and names the user in `AGENT_USER`; the tools never take a user argument. A
-thrown `PermissionDenied` becomes an `isError` result carrying its message,
-so the model learns why.
-
-```ts
-server.registerTool(
-  "write_thing",
-  { description: "Write content to a thing in the demo system.", inputSchema: { thing_id: z.string(), content: z.string() } },
-  guarded(hp, "demo", "thing.write", "thing:{thing_id}", { user: AGENT_USER, groups: AGENT_GROUPS })(
-    async ({ thing_id, content }: { thing_id: string; content: string }) => ({ content: [{ type: "text", text: `wrote to thing:${thing_id}` }] }),
-  ),
-);
-```
+**MCP servers** (Claude Code, Claude Desktop, Cursor and other hosts). The host starts one server
+process per user and names the user in its environment, so the tools never take a user argument:
 
 ```sh
+pip install hallpass-client "mcp>=2,<3"
 claude mcp add hallpass \
   -e HALLPASS_URL=http://localhost:8080 -e HALLPASS_API_KEY=change-me \
   -e AGENT_USER=dana@example.com \
-  -- node /path/to/hallpass/examples/agent-ts/mcp_server.ts
+  -- python /path/to/hallpass/examples/agent/mcp_server.py
 ```
 
-Node 22.18 or later runs the `.ts` file directly.
+`AGENT_GROUPS` (comma-separated) passes group memberships. The TypeScript server runs the same way
+with `node /path/to/hallpass/examples/agent-ts/mcp_server.ts` (Node 22.18 or later).
 
-## Running the examples
-
-Start hallpass with the example config:
+## Run the examples
 
 ```sh
 export HALLPASS_API_KEY=change-me
-go run ./cmd/hallpass serve -config examples/hallpass.yaml
+go run ./cmd/hallpass serve -config examples/hallpass.yaml      # or the Docker command from the quickstart
+
+export HALLPASS_URL=http://localhost:8080
+python examples/agent/langchain_tool.py dana@example.com        # refused
+python examples/agent/langchain_tool.py admin@example.com       # allowed
+node examples/agent-ts/ai_sdk_tool.ts dana@example.com
 ```
 
-Install the frameworks and run the tests, which drive every example through
-its framework's own tool-invocation path against a fake hallpass:
+These call the tools directly, with no model. The LangGraph, Strands and Claude Agent SDK
+examples run a prompt through a model when you run them, so they need a provider configured.
+
+The tests drive every example through its framework's own tool path and check that the schema has
+no `user` field, that a `user` sent anyway changes nothing, that `deny` and `unknown` stop the
+action, and that `allow` runs it:
 
 ```sh
-python3 -m venv .venv && . .venv/bin/activate
 pip install -e ./sdk/python -r examples/agent/requirements.txt
 python3 -m unittest discover -s examples/agent -v
-```
-
-The TypeScript examples have their own tests, through `generateText` with a
-mock model and through an MCP client over an in-memory transport:
-
-```sh
 cd examples/agent-ts && npm ci && npm test
 ```
 
-Without the Python frameworks installed the client tests still run and the rest
-skip. Each example also runs as a script against the live server; the
-LangGraph, Strands and Claude Agent SDK ones need a model provider
-configured, the others need none:
+## Checklist
 
-```sh
-export HALLPASS_URL=http://localhost:8080 HALLPASS_API_KEY=change-me
-python examples/agent/langchain_tool.py dana@example.com    # tools called directly, no LLM
-python examples/agent/langchain_tool.py admin@example.com
-node examples/agent-ts/ai_sdk_tool.ts dana@example.com     # same, in TypeScript
-```
+- [ ] Only write tools are guarded, one check each, with `fresh=True` where the effect lasts.
+- [ ] The user comes from your authentication, set per request, never from the model.
+- [ ] Anything other than `allow` stops the tool, including hallpass being unreachable.
+- [ ] The model gets the refusal text, so it can tell the person why.
+- [ ] Only the tool layer holds the hallpass API key.
 
-The tests assert, for each framework, that the tool schema has no `user`
-field, that a `user` the model sends anyway does not change who is checked,
-that `deny` and `unknown` stop the action, and that `allow` runs it.
+Every client option, the `guarded` parameters and the write log line are in the
+[client reference](../reference/client.md).

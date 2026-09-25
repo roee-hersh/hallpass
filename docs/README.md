@@ -17,8 +17,8 @@ this resource in this system?* It asks the system itself, live, and answers `all
 
 - [Deploy](guides/deploy.md): sidecar or shared service, TLS, Docker, a binary, Kubernetes with Helm,
   scaling and a production checklist.
-- [Agent tools](guides/agent-tools.md): where the user comes from, where to put the check, and
-  working code for LangChain, LangGraph, Strands, the Claude Agent SDK, MCP and the Vercel AI SDK.
+- [Add hallpass to your agent](guides/agent-tools.md): which tools to guard, where the user comes
+  from, and recipes for LangChain, LangGraph, Strands, the Claude Agent SDK, MCP and the Vercel AI SDK.
 - [Operating](guides/operating.md): health, the decision log, what each `unknown` means, and
   rotating secrets.
 
@@ -28,7 +28,8 @@ this resource in this system?* It asks the system itself, live, and answers `all
 - [Configuration](reference/configuration.md): `hallpass.yaml`, top-level and per-connection keys.
 - [Command line](reference/cli.md): `serve`, `validate`, `probe`, `check` and `catalog`.
 - [Integrations](integrations/README.md): the twenty-one systems, their status, and one page each.
-- [Client SDKs](../sdk/README.md): `hallpass-client` for Python and Node.
+- [Client](reference/client.md): `hallpass-client` for Python and Node, `check`, `require` and `guarded`.
+- [Client SDK packaging](../sdk/README.md).
 - [Helm chart values](../deploy/helm/hallpass/README.md).
 
 ## Development

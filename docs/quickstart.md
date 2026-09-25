@@ -105,7 +105,7 @@ dana@example.com -> refused: denied: dana@example.com is not an admin
 ```
 
 In a real agent, put your framework's tool decorator on top of `guarded` (`@tool` in LangChain or
-Strands, `tool()` in the Vercel AI SDK). The [agent tools guide](guides/agent-tools.md) covers each
+Strands, `tool()` in the Vercel AI SDK). The [agent guide](guides/agent-tools.md) covers each
 framework and where the user comes from.
 
 ## 4. Connect a real system
@@ -137,4 +137,4 @@ hallpass check    -config hallpass.yaml -connection jira-main \
 
 - [Architecture](concepts/architecture.md): how a check flows, what is cached, and the trust boundaries.
 - [Deploy](guides/deploy.md): Docker, a binary, or Kubernetes with Helm, and how to reach hallpass over TLS.
-- [Agent tools](guides/agent-tools.md): the full guide for LangChain, LangGraph, Strands, the Claude Agent SDK, MCP and the Vercel AI SDK.
+- [Add hallpass to your agent](guides/agent-tools.md): the full guide for LangChain, LangGraph, Strands, the Claude Agent SDK, MCP and the Vercel AI SDK.

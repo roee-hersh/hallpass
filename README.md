@@ -142,7 +142,7 @@ against the vendors' published API descriptions, and six are marked beta.
 | [Quickstart](docs/quickstart.md) | Run it, ask a question, guard a tool |
 | [Architecture](docs/concepts/architecture.md) | How a check flows, caching, trust boundaries |
 | [Deploy](docs/guides/deploy.md) | Docker, binary, Kubernetes with Helm, TLS, production checklist |
-| [Agent tools](docs/guides/agent-tools.md) | Where the user comes from and where to put the check, per framework |
+| [Add hallpass to your agent](docs/guides/agent-tools.md) | Which tools to guard, where the user comes from, per framework |
 | [Operating](docs/guides/operating.md) | Decision log, health, what each `unknown` means |
 | [API](docs/reference/api.md), [configuration](docs/reference/configuration.md), [CLI](docs/reference/cli.md) | Reference |
 | [All docs](docs/README.md) | The full index |

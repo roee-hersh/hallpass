@@ -128,7 +128,7 @@ decides anything.
 - **Whoever holds the API key names the user.** hallpass answers "may *this* user…". It does not
   authenticate the user. Your agent's tool layer does, and passes the user from its session (the
   Slack user, the SSO login), never from anything the model wrote. The
-  [agents guide](../guides/agent-tools.md#where-the-user-comes-from) shows how. Give the API key only to that tool
+  [agent guide](../guides/agent-tools.md#3-set-the-user-from-your-login-not-from-the-model) shows how. Give the API key only to that tool
   layer.
 - **The model never chooses the user.** `guarded` binds the user when the tool is built, and a
   `user` field in the tool's arguments is ignored.
