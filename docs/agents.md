@@ -534,7 +534,7 @@ its framework's own tool-invocation path against a fake hallpass:
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-pip install ./sdk/python -r examples/agent/requirements.txt
+pip install -e ./sdk/python -r examples/agent/requirements.txt
 python3 -m unittest discover -s examples/agent -v
 ```
 

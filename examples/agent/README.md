@@ -26,7 +26,7 @@ go run ./cmd/hallpass serve -config examples/hallpass.yaml
 
 # the examples' dependencies and tests
 python3 -m venv .venv && . .venv/bin/activate
-pip install ./sdk/python -r examples/agent/requirements.txt
+pip install -e ./sdk/python -r examples/agent/requirements.txt
 python3 -m unittest discover -s examples/agent -v
 
 # a script against the live server, no LLM needed

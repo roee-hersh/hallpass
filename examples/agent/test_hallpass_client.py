@@ -20,11 +20,10 @@ import unittest
 from contextvars import ContextVar
 
 sys.path.insert(0, os.path.dirname(__file__))
-try:
-    import hallpass_client  # noqa: F401  the installed package (CI installs the built wheel)
-except ImportError:
-    # Not installed: use the package source in this repository.
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "sdk", "python", "src"))
+# Always the package source in this repository, ahead of any installed copy,
+# so these tests check the code being changed. The built wheel is tested in
+# sdk/python/tests.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "sdk", "python", "src"))
 
 from hallpass_client import Decision, Hallpass, PermissionDenied, current, guarded  # noqa: E402
 
