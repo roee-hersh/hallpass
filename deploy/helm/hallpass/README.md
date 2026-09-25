@@ -7,8 +7,8 @@ read-only-root-filesystem security context.
 
 ## Try it
 
-Each release publishes the chart to GitHub's container registry, with the chart version equal to
-the hallpass version. From a clone of the repository, use `deploy/helm/hallpass` instead of the
+Each release from 0.4.1 on publishes the chart to GitHub's container registry, with the chart
+version equal to the hallpass version. From a clone of the repository, use `deploy/helm/hallpass` instead of the
 `oci://` reference.
 
 ```sh

@@ -40,7 +40,7 @@ Change the user to `admin@example.com` and the answer is `allow`. Try `nobody@ex
 Wrap the function your agent calls, so it runs only after hallpass said `allow`. The user comes from
 your application, never from the model.
 
-**Python**
+**Python**, saved as `quickstart.py`:
 
 ```sh
 pip install hallpass-client
@@ -65,7 +65,7 @@ for who in ["admin@example.com", "dana@example.com"]:
         print(who, "-> refused:", e.decision.reason)
 ```
 
-**Node**
+**Node**, saved as `quickstart.mjs` (the `.mjs` extension lets it use `import`):
 
 ```sh
 npm install hallpass-client
@@ -92,7 +92,12 @@ for (const who of ["admin@example.com", "dana@example.com"]) {
 }
 ```
 
-Run either with `HALLPASS_URL=http://localhost:8080 HALLPASS_API_KEY=change-me`:
+Run either one:
+
+```sh
+export HALLPASS_URL=http://localhost:8080 HALLPASS_API_KEY=change-me
+python quickstart.py     # or: node quickstart.mjs
+```
 
 ```text
 admin@example.com -> wrote thing 1

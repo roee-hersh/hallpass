@@ -55,7 +55,8 @@ After=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/hallpass serve -config /etc/hallpass/hallpass.yaml
-EnvironmentFile=/etc/hallpass/env        # HALLPASS_API_KEY=..., JIRA_TOKEN=...
+# HALLPASS_API_KEY=... and each env: credential, one per line
+EnvironmentFile=/etc/hallpass/env
 DynamicUser=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -68,8 +69,8 @@ WantedBy=multi-user.target
 ## Kubernetes with Helm
 
 The chart runs hallpass as a non-root Deployment with a read-only root filesystem, probes on
-`/healthz`, the config in a ConfigMap and the API key in a Secret. Every release publishes it to
-GitHub's container registry:
+`/healthz`, the config in a ConfigMap and the API key in a Secret. Every release from 0.4.1 on
+publishes it to GitHub's container registry:
 
 ```sh
 kubectl create namespace hallpass

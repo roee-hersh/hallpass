@@ -1,6 +1,6 @@
 # Command-line reference
 
-One binary, `hallpass`, with five commands. Every command that reads a config takes
+One binary, `hallpass`, with five commands plus `hallpass version`. Every command that reads a config takes
 `-config FILE`, defaulting to `/etc/hallpass/hallpass.yaml`.
 
 | Command | What it does |
