@@ -74,8 +74,11 @@ The Python client is the [`hallpass-client`](../sdk/python) package, with no
 dependencies beyond the standard library:
 
 ```sh
-pip install hallpass-client
+pip install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz
 ```
+
+That URL always gives the latest release. In a project, pin a version by
+replacing `latest/download` with `download/v0.4.0`.
 
 ```python
 from hallpass_client import Hallpass
@@ -366,7 +369,7 @@ A refusal reaches the model as an `is_error` result with hallpass's reason.
 over stdio for Claude Code, Claude Desktop, Cursor or any other MCP host.
 The host launches one process per user session and names the user in
 `AGENT_USER`; the tools never take a user argument. Its Python environment
-needs `hallpass-client` and `mcp` (`pip install hallpass-client "mcp>=2,<3"`).
+needs `hallpass-client` and `mcp` (`pip install "mcp>=2,<3" https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz`).
 
 ```python
 mcp = MCPServer("hallpass")
@@ -409,7 +412,8 @@ Or in any host that takes an `mcpServers` JSON block:
 ## TypeScript
 
 The same client for Node is the [`hallpass-client`](../sdk/node) npm package,
-on the built-in `fetch` with no dependencies (`npm install hallpass-client`).
+on the built-in `fetch` with no dependencies. Install it from the release,
+pinned to a version: `npm install https://github.com/roee-hersh/hallpass/releases/download/v0.4.0/hallpass-client-node.tgz`.
 It follows the rules above to the letter: a
 transport failure, a redirect, a non-JSON body or an `allow` with a non-200
 status is an `unknown` decision with the code `client_error` (a 400 or 401

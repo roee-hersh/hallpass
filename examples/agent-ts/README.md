@@ -4,7 +4,8 @@ Runnable examples for [docs/agents.md](../../docs/agents.md), which explains
 the pattern: check with hallpass before acting, treat `unknown` as deny, and
 never let the model choose the user. The Python versions are in
 [`../agent`](../agent); these follow the same contract. The client they use is
-the [`hallpass-client`](../../sdk/node) package (`npm install hallpass-client`);
+the [`hallpass-client`](../../sdk/node) package, attached to every release
+(see [sdk/node](../../sdk/node));
 here they import its source from `sdk/node` directly.
 
 | File | What it is |

@@ -32,8 +32,10 @@ Actions → release → Run workflow). For a minor or major bump you can also ru
 
 ## 4. Verify
 
-- The run's `tag`, `binaries` and `image` jobs all succeed; if one fails, read its log and fix.
+- The run's `tag`, `binaries`, `image` and `sdk` jobs all succeed; if one fails, read its log and fix.
 - The release page lists `linux`/`darwin`/`windows` × `amd64`/`arm64` archives and `checksums.txt`.
 - `ghcr.io/roee-hersh/hallpass:<version>` and `:latest` exist.
+- The `sdk` job succeeded and the release lists `hallpass-client-python.tar.gz`,
+  `hallpass_client-<version>-py3-none-any.whl`, `hallpass-client-node.tgz` and `sdk-checksums.txt`.
 
 Reply with the release link, the version, and a short list of what it contains (PR titles).

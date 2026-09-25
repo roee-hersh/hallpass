@@ -4,8 +4,13 @@ The Node.js and TypeScript client for [hallpass](https://github.com/roee-hersh/h
 your AI agent acts for a user, ask the system that owns the resource whether that user may do it.
 
 ```sh
-npm install hallpass-client
+npm install https://github.com/roee-hersh/hallpass/releases/download/v0.4.0/hallpass-client-node.tgz
 ```
+
+Every [release](https://github.com/roee-hersh/hallpass/releases) carries the package. Pin a version
+as above rather than using `latest/download`: npm records the tarball's checksum in
+`package-lock.json`, so a URL whose content changes with each release would fail `npm ci` later.
+The package name is `hallpass-client`, so imports read `from "hallpass-client"`.
 
 It needs a running hallpass service. The client has no dependencies; it uses Node's built-in `fetch`
 (Node 18.17 or later). It ships as an ES module with type declarations.
