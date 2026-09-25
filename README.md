@@ -145,11 +145,11 @@ goes straight on top:
 
 ```sh
 pip install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz
-npm install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-node.tgz
+npm install https://github.com/roee-hersh/hallpass/releases/download/v0.4.0/hallpass-client-node.tgz
 ```
 
-Both are attached to every [release](https://github.com/roee-hersh/hallpass/releases). In a project,
-pin one by replacing `latest/download` with `download/v0.4.0`; see [sdk/](sdk).
+Both are attached to every [release](https://github.com/roee-hersh/hallpass/releases). Pin a version
+in a project (`download/v0.4.0`, as the npm line does); see [sdk/](sdk).
 
 ```python
 from contextvars import ContextVar
