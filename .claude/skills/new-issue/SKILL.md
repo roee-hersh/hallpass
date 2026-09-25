@@ -31,7 +31,7 @@ Body, in this order, leaving out sections that do not apply:
   cannot see.
 - **Resources**: the `type:id` forms and the actions, following existing integrations' naming.
 - **Scope** for non-integration work: a short bullet list of what is in and what is out.
-- A link to [docs/integration-authoring.md](../blob/main/docs/integration-authoring.md) for
+- A link to [docs/development/integration-authoring.md](../blob/main/docs/development/integration-authoring.md) for
   integrations: docs page, fake-upstream tests, vendor API description in `test/specs/fetch.sh`.
 - For roadmap integrations, a line linking the epic (#19).
 

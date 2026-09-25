@@ -34,7 +34,7 @@ if __name__ == "__main__":
 
     model = sys.argv[1] if len(sys.argv) > 1 else "anthropic:claude-opus-5"
     # Demo only: the command line stands in for the user a real request was
-    # authenticated as (see docs/agents.md, "Where the user comes from").
+    # authenticated as (see docs/guides/agent-tools.md, "Set the user from your login").
     current_user.set(sys.argv[2] if len(sys.argv) > 2 else "dana@example.com")
     result = build_agent(model).invoke({"messages": [("user", "Write 'hello' to thing 1.")]})
     print(result["messages"][-1].content)

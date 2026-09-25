@@ -23,7 +23,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/roee-hersh/hallpass"
-Documentation = "https://github.com/roee-hersh/hallpass/blob/main/docs/agents.md"
+Documentation = "https://github.com/roee-hersh/hallpass/blob/main/docs/guides/agent-tools.md"
 Issues = "https://github.com/roee-hersh/hallpass/issues"
 Source = "https://github.com/roee-hersh/hallpass/tree/main/sdk/python"
 

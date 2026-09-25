@@ -29,6 +29,9 @@ jobs:
       - run: go test -race -count=1 ./...
       - run: go build -o /dev/null ./cmd/hallpass
         if: runner.os == 'Linux'
+      - name: docs links
+        if: runner.os == 'Linux'
+        run: python3 test/docs/linkcheck.py
       - name: agent example
         if: runner.os == 'Linux'
         run: |

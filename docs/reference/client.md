@@ -1,0 +1,104 @@
+# Client reference
+
+The `hallpass-client` package for Python (`pip install hallpass-client`) and Node
+(`npm install hallpass-client`). Both have no runtime dependencies and follow the same rules. For
+how to use them in an agent, see the [agent tools guide](../guides/agent-tools.md).
+
+## Hallpass
+
+```python
+from hallpass_client import Hallpass
+
+hp = Hallpass()  # HALLPASS_URL (default http://localhost:8080) and HALLPASS_API_KEY
+```
+
+```ts
+import { Hallpass } from "hallpass-client";
+
+const hp = new Hallpass(); // same variables; or new Hallpass({ url, apiKey, timeoutMs })
+```
+
+The URL must be `https://`, or `http://` on localhost or a loopback address, because the API key
+travels in a header. Redirects are never followed.
+
+## check, allowed, require
+
+```python
+d = hp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
+d.decision  # "allow", "deny" or "unknown"
+d.reason    # "denied: dana@example.com lacks DELETE_ISSUES on PAY"
+d.code      # "denied"
+d.allowed   # True only for allow
+
+hp.allowed(...)   # True or False
+hp.require(...)   # returns the decision on allow, raises PermissionDenied otherwise
+```
+
+In Node the same three methods return promises, and `require` rejects with `PermissionDenied`.
+
+| Option | Python | Node | Meaning |
+|---|---|---|---|
+| Groups | `groups=[...]` | `{ groups: [...] }` | For systems that grant by group, such as Kubernetes |
+| Fresh | `fresh=True` | `{ fresh: true }` | Skip hallpass's caches and ask the system now |
+
+`check` never raises on a transport problem. A connection error, a timeout, a redirect, a body that
+is not JSON, or an `allow` with a non-200 status all become `unknown` with the code `client_error`.
+
+## guarded
+
+Wraps a function so its body runs only after hallpass said `allow`.
+
+```python
+@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
+def delete_issue(key: str) -> str: ...
+```
+
+```ts
+const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user, fresh: true })(
+  async ({ key }: { key: string }) => { ... },
+);
+```
+
+| Parameter | Meaning |
+|---|---|
+| `connection`, `action` | The connection id and one of its actions (`hallpass catalog <integration>` lists them) |
+| `resource` | A template over the call's arguments, such as `"issue:{key}"`. A call that cannot fill it makes no request and runs nothing |
+| `user` | A string, a zero-argument function, or a `ContextVar` (Python) or `AsyncLocalStorage` (Node) your application sets. Read on every call, never from the arguments |
+| `groups` | The user's groups, from the same kinds of source |
+| `deny` | Optional. Called with the `PermissionDenied`; its return value is returned instead of raising |
+| `fresh` | Optional. Every check skips hallpass's caches |
+
+What it guarantees:
+
+- The wrapped function keeps its exact signature, so no `user` field appears in a tool schema. A
+  stray `user` keyword argument is a `TypeError` before any request; a `user` key inside a dict of
+  arguments (the Claude Agent SDK shape, or Node) is ignored.
+- Anything but `allow` stops the call before the body runs.
+- Python: a function with normal parameters is called with keyword arguments (LangChain, Strands,
+  MCP); a function whose one parameter is a dict gets all the arguments in it (the Claude Agent SDK
+  handler shape). `async def` works, and the check runs in a worker thread.
+- Node: the function takes one object of arguments, which is what every Node agent framework passes.
+
+`current(source)` resolves a user or groups source the same way, for code outside a guarded
+function. A `ContextVar` or `AsyncLocalStorage` with nothing set gives a clear error.
+
+## The write log line (Python)
+
+hallpass never sees the write itself, so after a guarded body runs, the Python client logs one line
+on the `hallpass` logger at INFO:
+
+```text
+unconditional write: dana@example.com ran DELETE_ISSUES on issue:PAY-123 in jira-main;
+hallpass said allow (allowed: dana may delete issues in PAY) at 2026-09-24T10:00:00.412+00:00,
+fresh=True; the write was not conditioned on the state hallpass saw (no If-Match),
+so check and write were not atomic
+```
+
+A refused call logs nothing. A body that raises still logs, since the write may have happened.
+
+## Fresh checks and atomicity
+
+A fresh check narrows the gap between the check and the action; it does not close it. Closing it
+needs a conditional write in the upstream system, such as `If-Match` with an ETag. A hallpass older
+than the `fresh` field rejects it, which the clients report as `unknown`, so upgrade the service
+before turning `fresh` on. The [API reference](api.md#fresh-checks) has the details.

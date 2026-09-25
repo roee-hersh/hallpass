@@ -11,7 +11,7 @@ before it runs a query, so the acting user is never chosen by the model:
     )
     async for message in query(prompt="...", options=options): ...
 
-See docs/agents.md, "Where the user comes from", for a Slack bot example.
+See docs/guides/agent-tools.md, "Set the user from your login", for a Slack bot example.
 
 Needs ``claude-agent-sdk`` (pip install -r requirements.txt).
 """
@@ -74,7 +74,7 @@ if __name__ == "__main__":
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
     # Demo only: the command line stands in for the user a real request was
-    # authenticated as (see docs/agents.md, "Where the user comes from").
+    # authenticated as (see docs/guides/agent-tools.md, "Set the user from your login").
     current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
 
     async def main():

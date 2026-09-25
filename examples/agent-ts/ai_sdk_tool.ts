@@ -64,7 +64,7 @@ export const tools = { check_permission: checkPermission, write_thing: writeThin
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   // Smoke test without an LLM: call the tools' execute directly.
   // Demo only: the command line stands in for the user a real request was
-  // authenticated as (see docs/agents.md, "Where the user comes from").
+  // authenticated as (see docs/guides/agent-tools.md, "Set the user from your login").
   const who = process.argv[2] ?? "dana@example.com";
   await session.run({ user: who }, async () => {
     const opts = { toolCallId: "smoke", messages: [], context: {} };

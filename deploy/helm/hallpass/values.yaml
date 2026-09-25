@@ -37,7 +37,7 @@ apiKey:
 
 # The hallpass.yaml the pod runs with, mounted read-only from a ConfigMap at
 # /etc/hallpass/hallpass.yaml. Rendered as YAML exactly as given, so anything
-# docs/operating.md documents under "Configuration" works here. `listen` is ignored:
+# docs/reference/configuration.md documents works here. `listen` is ignored:
 # the container always listens on containerPort.
 #
 # Replace the demo connection with your own. Credentials must be references:

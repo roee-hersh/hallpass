@@ -45,4 +45,4 @@ hp.require(...)             # raises PermissionDenied unless allow
 ```
 
 Framework examples: [examples/agent](https://github.com/roee-hersh/hallpass/tree/main/examples/agent).
-The guide: [docs/agents.md](https://github.com/roee-hersh/hallpass/blob/main/docs/agents.md).
+The guide: [docs/guides/agent-tools.md](https://github.com/roee-hersh/hallpass/blob/main/docs/guides/agent-tools.md).
