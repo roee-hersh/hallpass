@@ -14,6 +14,10 @@ release (03:00 UTC), so merge only complete, working changes.
    - when `examples/agent` changed: `pip install -r examples/agent/requirements.txt`
      then `HALLPASS_EXAMPLE_REQUIRE_DEPS=1 python3 -m unittest discover -s examples/agent`
    - when `examples/agent-ts` changed: `cd examples/agent-ts && npm ci && npm test`
+   - when `sdk/python` changed: `python3 -m build sdk/python -o /tmp/sdk`, install the wheel into a
+     fresh venv, then run `sdk/python/tests` with that venv's Python from outside the repository
+   - when `sdk/node` changed: `cd sdk/node && npm ci && npm test`, and run the `examples/agent-ts`
+     tests, which exercise it
    - when `deploy/helm` changed: `helm lint deploy/helm/hallpass --strict --set apiKey.value=x`
 4. Open a pull request using `.github/pull_request_template.md`. Mention the
    issue it closes when there is one.

@@ -1,4 +1,5 @@
-# hallpass_client.py needs nothing beyond the standard library. The tests
+# The client is sdk/python (pip install ./sdk/python, or hallpass-client from
+# PyPI) and needs nothing beyond the standard library. The tests
 # reach into each framework's tool shapes, so the majors are pinned.
 mcp>=2,<3                  # mcp_server.py
 langchain-core>=1,<2       # langchain_tool.py

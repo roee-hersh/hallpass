@@ -2,11 +2,11 @@
 
 Runnable examples for [docs/agents.md](../../docs/agents.md), which explains
 the pattern: check with hallpass before acting, treat `unknown` as deny, and
-never let the model choose the user.
+never let the model choose the user. The client they use is the
+[`hallpass-client`](../../sdk/python) package (`pip install hallpass-client`).
 
 | File | What it is |
 |---|---|
-| `hallpass_client.py` | `POST /check` wrapper and the `guarded` decorator. Standard library only; copy it into your project. |
 | `langchain_tool.py` | The two tools as LangChain tools. |
 | `langgraph_agent.py` | A LangGraph agent (`create_agent`) and a `ToolNode` built from those tools. |
 | `strands_tool.py` | The two tools for Strands Agents. |
@@ -26,7 +26,7 @@ go run ./cmd/hallpass serve -config examples/hallpass.yaml
 
 # the examples' dependencies and tests
 python3 -m venv .venv && . .venv/bin/activate
-pip install -r examples/agent/requirements.txt
+pip install ./sdk/python -r examples/agent/requirements.txt
 python3 -m unittest discover -s examples/agent -v
 
 # a script against the live server, no LLM needed

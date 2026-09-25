@@ -70,9 +70,12 @@ protected branch directly, so the branch's rules are applied too.
 
 ## The client
 
-[`examples/agent/hallpass_client.py`](../examples/agent/hallpass_client.py)
-is one file with no dependencies beyond the standard library. Copy it into
-your project.
+The Python client is the [`hallpass-client`](../sdk/python) package, with no
+dependencies beyond the standard library:
+
+```sh
+pip install hallpass-client
+```
 
 ```python
 from hallpass_client import Hallpass
@@ -362,7 +365,8 @@ A refusal reaches the model as an `is_error` result with hallpass's reason.
 [`mcp_server.py`](../examples/agent/mcp_server.py) is a standalone server
 over stdio for Claude Code, Claude Desktop, Cursor or any other MCP host.
 The host launches one process per user session and names the user in
-`AGENT_USER`; the tools never take a user argument.
+`AGENT_USER`; the tools never take a user argument. Its Python environment
+needs `hallpass-client` and `mcp` (`pip install hallpass-client "mcp>=2,<3"`).
 
 ```python
 mcp = MCPServer("hallpass")
@@ -404,16 +408,16 @@ Or in any host that takes an `mcpServers` JSON block:
 
 ## TypeScript
 
-[`examples/agent-ts/hallpass_client.ts`](../examples/agent-ts/hallpass_client.ts)
-is the same client for Node, on the built-in `fetch` with no dependencies.
-Copy it into your project. It follows the rules above to the letter: a
+The same client for Node is the [`hallpass-client`](../sdk/node) npm package,
+on the built-in `fetch` with no dependencies (`npm install hallpass-client`).
+It follows the rules above to the letter: a
 transport failure, a redirect, a non-JSON body or an `allow` with a non-200
 status is an `unknown` decision with the code `client_error` (a 400 or 401
 keeps hallpass's own reason), and `guarded` never reads the user from the
 arguments.
 
 ```ts
-import { Hallpass, current, guarded } from "./hallpass_client.ts";
+import { Hallpass, current, guarded } from "hallpass-client";
 
 const hp = new Hallpass(); // HALLPASS_URL and HALLPASS_API_KEY from the environment
 
@@ -530,7 +534,7 @@ its framework's own tool-invocation path against a fake hallpass:
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-pip install -r examples/agent/requirements.txt
+pip install ./sdk/python -r examples/agent/requirements.txt
 python3 -m unittest discover -s examples/agent -v
 ```
 

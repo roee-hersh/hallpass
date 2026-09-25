@@ -81,3 +81,65 @@ jobs:
           build-args: VERSION=${{ env.VERSION }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  pypi:
+    # Publishes sdk/python as hallpass-client with PyPI trusted publishing
+    # (no stored token). Runs once the repository variable PUBLISH_PYPI is
+    # "true", after the publisher is registered on PyPI; see sdk/README.md.
+    needs: tag
+    if: vars.PUBLISH_PYPI == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.VERSION }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: build
+        run: |
+          set -eu
+          v="${VERSION#v}"
+          sed -i "s/^version = \"0.0.0\"$/version = \"$v\"/" sdk/python/pyproject.toml
+          grep -q "^version = \"$v\"$" sdk/python/pyproject.toml
+          python -m pip install --quiet build
+          python -m build sdk/python -o dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  npm:
+    # Publishes sdk/node as hallpass-client with npm trusted publishing and
+    # provenance. Runs once the repository variable PUBLISH_NPM is "true";
+    # see sdk/README.md.
+    needs: tag
+    if: vars.PUBLISH_NPM == 'true'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: publish
+        working-directory: sdk/node
+        env:
+          # Only for the very first publish, before the package exists and
+          # trusted publishing can be set up; delete the secret afterwards.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eu
+          npm install --global npm@^11.5.1
+          npm ci
+          npm version --no-git-tag-version "${VERSION#v}"
+          npm test
+          case "${VERSION#v}" in *-*) tag=next ;; *) tag=latest ;; esac
+          npm publish --provenance --access public --tag "$tag"

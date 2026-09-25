@@ -1,5 +1,5 @@
 /**
- * A minimal hallpass client for agents. Node's built-in fetch, no dependencies.
+ * The hallpass client for agents. Node's built-in fetch, no dependencies.
  *
  * The one rule an agent has to follow: perform an action on behalf of a user
  * only when hallpass answered `allow`. `deny` and `unknown` both mean "do not
@@ -22,9 +22,10 @@
  *
  * The user comes from the application, never from the tool's arguments.
  *
- * This is the TypeScript counterpart of ../agent/hallpass_client.py and
- * follows the same contract; the tests in hallpass_client.test.ts spell it
- * out. Copy this file into your project.
+ * Install it with `npm install hallpass-client`. This is the TypeScript
+ * counterpart of the Python package (sdk/python) and follows the same
+ * contract; the tests in examples/agent-ts/hallpass_client.test.ts spell it
+ * out.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";

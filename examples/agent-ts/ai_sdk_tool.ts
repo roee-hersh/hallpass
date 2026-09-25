@@ -16,7 +16,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
 import { tool } from "ai";
 import { z } from "zod";
-import { Hallpass, current, guarded } from "./hallpass_client.ts";
+import { Hallpass, current, guarded } from "../../sdk/node/src/index.ts"; // in your project: from "hallpass-client"
 
 export const hp = new Hallpass();
 

@@ -139,8 +139,13 @@ curl -X POST localhost:8080/check \
 ## Use from an AI agent
 
 Wrap any tool that acts for a person so it runs only after hallpass said `allow`. The `guarded`
-decorator lives in [`examples/agent/hallpass_client.py`](examples/agent/hallpass_client.py), one
-standard-library file you can copy into your project, and a framework's `@tool` goes straight on top:
+decorator comes with the client package, [`hallpass-client`](sdk/python) for Python
+(standard library only) and [`hallpass-client`](sdk/node) for Node, and a framework's `@tool`
+goes straight on top:
+
+```sh
+pip install hallpass-client     # or: npm install hallpass-client
+```
 
 ```python
 from contextvars import ContextVar
