@@ -3,8 +3,8 @@
 Runnable examples for [docs/agents.md](../../docs/agents.md), which explains
 the pattern: check with hallpass before acting, treat `unknown` as deny, and
 never let the model choose the user. The client they use is the
-[`hallpass-client`](../../sdk/python) package, attached to every release
-(`pip install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz`).
+[`hallpass-client`](../../sdk/python) package
+(`pip install hallpass-client`).
 
 | File | What it is |
 |---|---|

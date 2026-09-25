@@ -1,6 +1,6 @@
 """The hallpass client for agents. Standard library only.
 
-    pip install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz
+    pip install hallpass-client
 
 The one rule an agent has to follow: perform an action on behalf of a user
 only when hallpass answered ``allow``. ``deny`` and ``unknown`` both mean
