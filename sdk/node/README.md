@@ -7,8 +7,9 @@ your AI agent acts for a user, ask the system that owns the resource whether tha
 npm install hallpass-client
 ```
 
-It is on [npm](https://www.npmjs.com/package/hallpass-client), published with provenance by the
-hallpass release workflow. Its version matches the hallpass release, so pin the one you run.
+It is on [npm](https://www.npmjs.com/package/hallpass-client). Its version matches the hallpass
+release, so in a project pin the one you run (`npm install hallpass-client@0.4.0`). From 0.4.1 on,
+the hallpass release workflow publishes it with npm provenance.
 
 It needs a running hallpass service. The client has no dependencies; it uses Node's built-in `fetch`
 (Node 18.17 or later). It ships as an ES module with type declarations.

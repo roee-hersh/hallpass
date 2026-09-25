@@ -83,12 +83,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
   sdk:
-    # Attaches both client packages to the GitHub release, under fixed names
-    # so the install commands in the docs always get the latest release:
-    #   hallpass-client-python.tar.gz  (pip install <url>)
-    #   hallpass-client-node.tgz       (npm install <url>)
-    # plus the versioned wheel and sdk-checksums.txt. Needs no registry
-    # account; the pypi and npm jobs below publish to the registries later.
+    # Attaches both client packages to the GitHub release as a registry-free
+    # copy (pip install <url>, npm install <url>), under fixed names so
+    # releases/latest/download/... works:
+    #   hallpass-client-python.tar.gz, hallpass-client-node.tgz
+    # plus the versioned wheel and sdk-checksums.txt. The docs install from
+    # PyPI and npm, which the pypi and npm jobs below publish to.
     needs: binaries
     runs-on: ubuntu-latest
     steps:

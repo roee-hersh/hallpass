@@ -32,9 +32,13 @@ Actions → release → Run workflow). For a minor or major bump you can also ru
 
 ## 4. Verify
 
-- The run's `tag`, `binaries`, `image` and `sdk` jobs all succeed; if one fails, read its log and fix.
+- The run's `tag`, `binaries`, `image`, `sdk`, `pypi` and `npm` jobs all succeed; if one fails, read its log and fix.
 - The release page lists `linux`/`darwin`/`windows` × `amd64`/`arm64` archives and `checksums.txt`.
 - `ghcr.io/roee-hersh/hallpass:<version>` and `:latest` exist.
+- The `pypi` and `npm` jobs succeeded, not skipped (skipped means the `PUBLISH_PYPI` or
+  `PUBLISH_NPM` variable is unset), and the registries serve the new version:
+  `https://pypi.org/pypi/hallpass-client/json` and `https://registry.npmjs.org/hallpass-client`.
+  The docs tell users to install from both, so a missing version is a failed release.
 - The `sdk` job succeeded and the release lists `hallpass-client-python.tar.gz`,
   `hallpass_client-<version>-py3-none-any.whl`, `hallpass-client-node.tgz` and `sdk-checksums.txt`.
 

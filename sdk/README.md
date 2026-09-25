@@ -30,8 +30,9 @@ This needs no registry account.
 ### Publishing to PyPI and npm
 
 The release workflow also publishes both packages to the registries as `hallpass-client`, with
-trusted publishing, so no long-lived token is stored. Both registries are set up and publish on
-every release.
+trusted publishing, so no long-lived token is stored. Both registries are set up. The jobs run only
+while the Actions variables `PUBLISH_PYPI` and `PUBLISH_NPM` are `true`; unset, they are skipped
+and the release still succeeds, so the release skill checks the registries after every release.
 
 How each registry was set up, for reference:
 
