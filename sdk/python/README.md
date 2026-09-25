@@ -4,16 +4,12 @@ The Python client for [hallpass](https://github.com/roee-hersh/hallpass): before
 acts for a user, ask the system that owns the resource whether that user may do it.
 
 ```sh
-pip install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz
+pip install hallpass-client
 ```
 
-That URL always gives the latest [release](https://github.com/roee-hersh/hallpass/releases). In a
-project, pin a version by replacing `latest/download` with `download/v0.4.0`, in `requirements.txt`
-too:
-
-```
-hallpass-client @ https://github.com/roee-hersh/hallpass/releases/download/v0.4.0/hallpass-client-python.tar.gz
-```
+It is on [PyPI](https://pypi.org/project/hallpass-client/), and every hallpass
+[release](https://github.com/roee-hersh/hallpass/releases) also carries it as a download. Its version
+matches the hallpass release, so pin the one you run, e.g. `hallpass-client==0.4.0`.
 
 It needs a running hallpass service. The client has no dependencies beyond the standard library.
 

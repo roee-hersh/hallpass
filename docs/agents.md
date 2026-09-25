@@ -74,11 +74,8 @@ The Python client is the [`hallpass-client`](../sdk/python) package, with no
 dependencies beyond the standard library:
 
 ```sh
-pip install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz
+pip install hallpass-client
 ```
-
-That URL always gives the latest release. In a project, pin a version by
-replacing `latest/download` with `download/v0.4.0`.
 
 ```python
 from hallpass_client import Hallpass
@@ -369,7 +366,7 @@ A refusal reaches the model as an `is_error` result with hallpass's reason.
 over stdio for Claude Code, Claude Desktop, Cursor or any other MCP host.
 The host launches one process per user session and names the user in
 `AGENT_USER`; the tools never take a user argument. Its Python environment
-needs `hallpass-client` and `mcp` (`pip install "mcp>=2,<3" https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz`).
+needs `hallpass-client` and `mcp` (`pip install hallpass-client "mcp>=2,<3"`).
 
 ```python
 mcp = MCPServer("hallpass")

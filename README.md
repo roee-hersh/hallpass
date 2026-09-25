@@ -144,12 +144,12 @@ decorator comes with the client package, [`hallpass-client`](sdk/python) for Pyt
 goes straight on top:
 
 ```sh
-pip install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz
+pip install hallpass-client
 npm install https://github.com/roee-hersh/hallpass/releases/download/v0.4.0/hallpass-client-node.tgz
 ```
 
-Both are attached to every [release](https://github.com/roee-hersh/hallpass/releases). Pin a version
-in a project (`download/v0.4.0`, as the npm line does); see [sdk/](sdk).
+The Python package is [on PyPI](https://pypi.org/project/hallpass-client/). The npm package is attached
+to every [release](https://github.com/roee-hersh/hallpass/releases); see [sdk/](sdk).
 
 ```python
 from contextvars import ContextVar

@@ -2,7 +2,7 @@
 
 | Package | Directory | Install |
 |---|---|---|
-| Python | [`python`](python) | `pip install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz` |
+| Python | [`python`](python) | `pip install hallpass-client` ([PyPI](https://pypi.org/project/hallpass-client/)) |
 | Node and TypeScript | [`node`](node) | `npm install https://github.com/roee-hersh/hallpass/releases/download/v0.4.0/hallpass-client-node.tgz` |
 
 Both packages are named `hallpass-client`. They are thin clients of a running hallpass service:
@@ -27,21 +27,23 @@ carry the same version as the service:
 
 This needs no registry account.
 
-### Publishing to PyPI and npm as well (optional)
+### Publishing to PyPI and npm
 
-The release workflow can also publish both packages to the registries as `hallpass-client`, with
-trusted publishing, so no long-lived token is stored. It is off until set up once per registry;
-until then, the names are not reserved, so do not point users at `pip install hallpass-client` or
-`npm install hallpass-client`.
+The release workflow also publishes both packages to the registries as `hallpass-client`, with
+trusted publishing, so no long-lived token is stored. PyPI is set up and publishes on every
+release. npm is not yet: until `hallpass-client` exists on npm, the docs point Node users at the
+release download instead of `npm install hallpass-client`.
 
-**PyPI**
+How each registry was set up, for reference:
+
+**PyPI** (done)
 
 1. On pypi.org, under Your projects → Publishing, add a pending trusted publisher: project
    `hallpass-client`, owner `roee-hersh`, repository `hallpass`, workflow `release.yaml`,
    environment `pypi`.
 2. In the GitHub repository, set the Actions variable `PUBLISH_PYPI` to `true`.
 
-**npm**
+**npm** (not published yet)
 
 1. Create a granular access token on npmjs.com that can publish new packages, and store it as the
    Actions secret `NPM_TOKEN`. npm can only configure trusted publishing for a package that
