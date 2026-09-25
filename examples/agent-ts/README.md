@@ -3,11 +3,13 @@
 Runnable examples for [docs/agents.md](../../docs/agents.md), which explains
 the pattern: check with hallpass before acting, treat `unknown` as deny, and
 never let the model choose the user. The Python versions are in
-[`../agent`](../agent); these follow the same contract.
+[`../agent`](../agent); these follow the same contract. The client they use is
+the [`hallpass-client`](../../sdk/node) package, attached to every release
+(see [sdk/node](../../sdk/node));
+here they import its source from `sdk/node` directly.
 
 | File | What it is |
 |---|---|
-| `hallpass_client.ts` | `POST /check` wrapper and the `guarded` wrapper. Node's `fetch` only, no dependencies; copy it into your project. |
 | `ai_sdk_tool.ts` | The two tools as Vercel AI SDK `tool()` definitions, for `generateText`, `streamText` and anything built on them. |
 | `mcp_server.ts` | A standalone MCP server over stdio for any MCP host. |
 | `fake_hallpass.ts` | The fake hallpass the tests run against. |

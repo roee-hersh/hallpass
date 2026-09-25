@@ -1,4 +1,6 @@
-"""A minimal hallpass client for agents. Standard library only.
+"""The hallpass client for agents. Standard library only.
+
+    pip install https://github.com/roee-hersh/hallpass/releases/latest/download/hallpass-client-python.tar.gz
 
 The one rule an agent has to follow: perform an action on behalf of a user
 only when hallpass answered ``allow``. ``deny`` and ``unknown`` both mean
@@ -44,6 +46,19 @@ import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, TypeVar, Union
+
+__all__ = [
+    "ALLOW",
+    "DENY",
+    "UNKNOWN",
+    "Decision",
+    "GroupsSource",
+    "Hallpass",
+    "PermissionDenied",
+    "UserSource",
+    "current",
+    "guarded",
+]
 
 ALLOW = "allow"
 DENY = "deny"
