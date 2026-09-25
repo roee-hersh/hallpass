@@ -409,8 +409,7 @@ Or in any host that takes an `mcpServers` JSON block:
 ## TypeScript
 
 The same client for Node is the [`hallpass-client`](../sdk/node) npm package,
-on the built-in `fetch` with no dependencies. Install it from the release,
-pinned to a version: `npm install https://github.com/roee-hersh/hallpass/releases/download/v0.4.0/hallpass-client-node.tgz`.
+on the built-in `fetch` with no dependencies (`npm install hallpass-client`).
 It follows the rules above to the letter: a
 transport failure, a redirect, a non-JSON body or an `allow` with a non-200
 status is an `unknown` decision with the code `client_error` (a 400 or 401

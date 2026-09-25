@@ -3,7 +3,7 @@
 | Package | Directory | Install |
 |---|---|---|
 | Python | [`python`](python) | `pip install hallpass-client` ([PyPI](https://pypi.org/project/hallpass-client/)) |
-| Node and TypeScript | [`node`](node) | `npm install https://github.com/roee-hersh/hallpass/releases/download/v0.4.0/hallpass-client-node.tgz` |
+| Node and TypeScript | [`node`](node) | `npm install hallpass-client` ([npm](https://www.npmjs.com/package/hallpass-client)) |
 
 Both packages are named `hallpass-client`. They are thin clients of a running hallpass service:
 `POST /check` and the `guarded` wrapper that puts the check in front of a tool. They follow the
@@ -30,9 +30,9 @@ This needs no registry account.
 ### Publishing to PyPI and npm
 
 The release workflow also publishes both packages to the registries as `hallpass-client`, with
-trusted publishing, so no long-lived token is stored. PyPI is set up and publishes on every
-release. npm is not yet: until `hallpass-client` exists on npm, the docs point Node users at the
-release download instead of `npm install hallpass-client`.
+trusted publishing, so no long-lived token is stored. Both registries are set up. The jobs run only
+while the Actions variables `PUBLISH_PYPI` and `PUBLISH_NPM` are `true`; unset, they are skipped
+and the release still succeeds, so the release skill checks the registries after every release.
 
 How each registry was set up, for reference:
 
@@ -43,12 +43,13 @@ How each registry was set up, for reference:
    environment `pypi`.
 2. In the GitHub repository, set the Actions variable `PUBLISH_PYPI` to `true`.
 
-**npm** (not published yet)
+**npm** (done)
 
-1. Create a granular access token on npmjs.com that can publish new packages, and store it as the
-   Actions secret `NPM_TOKEN`. npm can only configure trusted publishing for a package that
-   already exists, so the first publish needs the token.
-2. Set the Actions variable `PUBLISH_NPM` to `true`.
-3. After the first release, on npmjs.com open `hallpass-client` → Settings → Trusted publishing,
-   add GitHub Actions with owner `roee-hersh`, repository `hallpass`, workflow `release.yaml`,
-   environment `npm`, then delete the `NPM_TOKEN` secret.
+1. npm can only configure trusted publishing for a package that exists, so the first version,
+   0.4.0, was published by hand from the release's `hallpass-client-node.tgz`, with
+   `npm publish hallpass-client-node.tgz --access public --otp=<code>` (the account needs
+   two-factor authentication).
+2. On npmjs.com, `hallpass-client` → Settings → Trusted publishing: GitHub Actions, owner
+   `roee-hersh`, repository `hallpass`, workflow `release.yaml`, environment `npm`.
+3. In the GitHub repository, set the Actions variable `PUBLISH_NPM` to `true`. No token is
+   stored; the workflow authenticates with its OpenID Connect token.
