@@ -34,14 +34,16 @@ trusted publishing, so no long-lived token is stored. PyPI is set up and publish
 release. npm is not yet: until `hallpass-client` exists on npm, the docs point Node users at the
 release download instead of `npm install hallpass-client`.
 
-**PyPI**
+How each registry was set up, for reference:
+
+**PyPI** (done)
 
 1. On pypi.org, under Your projects → Publishing, add a pending trusted publisher: project
    `hallpass-client`, owner `roee-hersh`, repository `hallpass`, workflow `release.yaml`,
    environment `pypi`.
 2. In the GitHub repository, set the Actions variable `PUBLISH_PYPI` to `true`.
 
-**npm**
+**npm** (not published yet)
 
 1. Create a granular access token on npmjs.com that can publish new packages, and store it as the
    Actions secret `NPM_TOKEN`. npm can only configure trusted publishing for a package that

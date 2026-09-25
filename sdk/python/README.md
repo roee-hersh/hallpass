@@ -8,7 +8,8 @@ pip install hallpass-client
 ```
 
 It is on [PyPI](https://pypi.org/project/hallpass-client/), and every hallpass
-[release](https://github.com/roee-hersh/hallpass/releases) also carries it as a download.
+[release](https://github.com/roee-hersh/hallpass/releases) also carries it as a download. Its version
+matches the hallpass release, so pin the one you run, e.g. `hallpass-client==0.4.0`.
 
 It needs a running hallpass service. The client has no dependencies beyond the standard library.
 
