@@ -145,11 +145,11 @@ goes straight on top:
 
 ```sh
 pip install hallpass-client
-npm install https://github.com/roee-hersh/hallpass/releases/download/v0.4.0/hallpass-client-node.tgz
+npm install hallpass-client
 ```
 
-The Python package is [on PyPI](https://pypi.org/project/hallpass-client/). The npm package is attached
-to every [release](https://github.com/roee-hersh/hallpass/releases); see [sdk/](sdk).
+Both are published with every release, [on PyPI](https://pypi.org/project/hallpass-client/) and
+[on npm](https://www.npmjs.com/package/hallpass-client); see [sdk/](sdk).
 
 ```python
 from contextvars import ContextVar

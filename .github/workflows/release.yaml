@@ -155,9 +155,9 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   npm:
-    # Publishes sdk/node as hallpass-client with npm trusted publishing and
-    # provenance. Runs once the repository variable PUBLISH_NPM is "true";
-    # see sdk/README.md.
+    # Publishes sdk/node as hallpass-client with npm trusted publishing
+    # (OpenID Connect, no stored token) and provenance. Runs when the
+    # repository variable PUBLISH_NPM is "true"; see sdk/README.md.
     needs: tag
     if: vars.PUBLISH_NPM == 'true'
     runs-on: ubuntu-latest
@@ -175,10 +175,6 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: publish
         working-directory: sdk/node
-        env:
-          # Only for the very first publish, before the package exists and
-          # trusted publishing can be set up; delete the secret afterwards.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -eu
           npm install --global npm@^11.5.1
