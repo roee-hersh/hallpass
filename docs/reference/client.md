@@ -71,7 +71,8 @@ const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { u
 What it guarantees:
 
 - The wrapped function keeps its exact signature, so no `user` field appears in a tool schema. A
-  `user` key in the arguments is ignored.
+  stray `user` keyword argument is a `TypeError` before any request; a `user` key inside a dict of
+  arguments (the Claude Agent SDK shape, or Node) is ignored.
 - Anything but `allow` stops the call before the body runs.
 - Python: a function with normal parameters is called with keyword arguments (LangChain, Strands,
   MCP); a function whose one parameter is a dict gets all the arguments in it (the Claude Agent SDK

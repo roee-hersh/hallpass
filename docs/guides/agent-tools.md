@@ -181,6 +181,15 @@ with `node /path/to/hallpass/examples/agent-ts/mcp_server.ts` (Node 22.18 or lat
 
 ## Run the examples
 
+From a clone of the repository, install the examples' dependencies first:
+
+```sh
+pip install -e ./sdk/python -r examples/agent/requirements.txt
+(cd examples/agent-ts && npm ci)
+```
+
+Then start hallpass and call the tools:
+
 ```sh
 export HALLPASS_API_KEY=change-me
 go run ./cmd/hallpass serve -config examples/hallpass.yaml      # or the Docker command from the quickstart
@@ -199,9 +208,8 @@ no `user` field, that a `user` sent anyway changes nothing, that `deny` and `unk
 action, and that `allow` runs it:
 
 ```sh
-pip install -e ./sdk/python -r examples/agent/requirements.txt
 python3 -m unittest discover -s examples/agent -v
-cd examples/agent-ts && npm ci && npm test
+cd examples/agent-ts && npm test
 ```
 
 ## Checklist
