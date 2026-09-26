@@ -142,7 +142,9 @@ class GoogleCloud(Integration):
                 name="scope",
                 required=True,
                 validate=validate_scope,
-                description="organization:<number>, folder:<number> or project:<id> under which hallpass's credential can read IAM policies; the probe checks it",
+                description=(
+                    "organization:<number>, folder:<number> or project:<id> under which hallpass's credential can read IAM policies; the probe checks it"
+                ),
             ),
             Field(
                 name="auth_mode",
@@ -251,12 +253,14 @@ def api_error(resp: httpx.Response) -> HallpassError:
             return wrap_error(
                 Code.CREDENTIAL_REJECTED,
                 cause,
-                "the Policy Troubleshooter refused the call (HTTP 403): enable the API, grant the service account roles/iam.securityReviewer, or set quota_project",
+                "the Policy Troubleshooter refused the call (HTTP 403): enable the API, grant the service "
+                "account roles/iam.securityReviewer, or set quota_project",
             )
         return wrap_error(
             Code.CREDENTIAL_REJECTED,
             cause,
-            f"the Policy Troubleshooter refused the call (HTTP 403, {reason}): enable the API, grant the service account roles/iam.securityReviewer, or set quota_project",
+            f"the Policy Troubleshooter refused the call (HTTP 403, {reason}): enable the API, grant the "
+            "service account roles/iam.securityReviewer, or set quota_project",
         )
     if resp.status == 401:
         return wrap_error(Code.CREDENTIAL_REJECTED, cause, "the Policy Troubleshooter rejected the access token twice")
@@ -264,7 +268,8 @@ def api_error(resp: httpx.Response) -> HallpassError:
         return wrap_error(
             Code.INVALID_REQUEST,
             cause,
-            "the Policy Troubleshooter rejected the request: check the permission name, the resource and that the principal is a Google Account or service account",
+            "the Policy Troubleshooter rejected the request: check the permission name, the resource and "
+            "that the principal is a Google Account or service account",
         )
     if resp.status == 404:
         return wrap_error(Code.RESOURCE_NOT_VISIBLE, cause, "the Policy Troubleshooter found no such resource")
@@ -479,7 +484,8 @@ class GoogleCloudConnection(Connection):
             # policy.
             return unknown_decision(
                 Code.RESOURCE_NOT_VISIBLE,
-                f"hallpass cannot read every policy that applies to {r.resource.raw}, or the resource does not exist; the service account needs roles/iam.securityReviewer above it",
+                f"hallpass cannot read every policy that applies to {r.resource.raw}, or the resource does not exist; "
+                "the service account needs roles/iam.securityReviewer above it",
             )
         raise errorf(Code.UPSTREAM_ERROR, "the Policy Troubleshooter returned an unknown access state")
 

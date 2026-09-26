@@ -372,7 +372,7 @@ def test_live_claude(hp: Hallpass) -> None:
     anthropic_llms = pytest.importorskip("llama_index.llms.anthropic")
 
     t = Tools()
-    llm = anthropic_llms.Anthropic(model=os.environ.get("HALLPASS_LIVE_MODEL", "claude-haiku-4-5"), max_tokens=1024)
+    llm = anthropic_llms.Anthropic(model=os.environ.get("HALLPASS_LIVE_MODEL", "claude-sonnet-5"), max_tokens=1024)
     agent = FunctionAgent(
         tools=HallpassAuthorization(hp, RULES, user=WHO).wrap(t.all()),
         llm=llm,

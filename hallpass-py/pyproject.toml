@@ -29,6 +29,10 @@ classifiers = [
 # GitHub App, Google service accounts, Snowflake key pair, Salesforce JWT,
 # Microsoft 365 certificates.
 crypto = ["cryptography>=42"]
+# Agent framework adapters: hallpass.strands, hallpass.langchain, hallpass.mcp, ...
+strands = ["strands-agents>=1.57.1"]
+langchain = ["langchain>=1.4", "langgraph>=1.2"]
+mcp = ["mcp>=2.1"]
 
 [project.scripts]
 hallpass = "hallpass.cli:main"

@@ -206,9 +206,16 @@ class Rules:
         user, groups = kw.pop("user"), kw.pop("groups", None)
         try:
             user = current(user, "user")
-            groups = None if groups is None else current(groups, "groups")
         except (RuntimeError, LookupError) as e:
             return Outcome(False, f"no user for this request: {e}")
+        if groups is not None:
+            # Resolved here, validated here: a groups source that yields
+            # nothing refuses, as decide does, rather than checking without
+            # groups (decide reads groups=None as "none were asked for").
+            try:
+                groups = _group_list(current(groups, "groups"))
+            except (RuntimeError, LookupError, TypeError) as e:
+                return Outcome(False, f"no groups for this request: {e}")
         return await asyncio.to_thread(self.decide, tool, tool_input, user=user, groups=groups, resolve=False, **kw)
 
 

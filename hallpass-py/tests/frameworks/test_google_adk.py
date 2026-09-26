@@ -16,6 +16,10 @@ import contextvars
 import json
 import logging
 import os
+import shutil
+import subprocess
+import time
+import urllib.request
 import warnings
 from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
@@ -363,6 +367,74 @@ def test_real_upstream() -> None:
         assert [c.q("query") for c in srv.calls() if c.path == "/users"] == ["resp@example.com", "owner@example.com"]
     finally:
         srv.close()
+
+
+# -- a real upstream: HashiCorp Vault in docker ------------------------------------
+
+VAULT_IMAGE = "hashicorp/vault:1.17"
+VAULT_TOKEN = itest.CANARY + "root"
+
+
+@pytest.fixture(scope="module")
+def vault() -> Iterator[str]:
+    """A real Vault dev server in docker. The entity of admin@example.com (an
+    alias on userpass/) has a policy that may write secret/app/*; alice's has none."""
+    if shutil.which("docker") is None:
+        pytest.skip("needs docker")
+    if subprocess.run(["docker", "image", "inspect", VAULT_IMAGE], capture_output=True, check=False).returncode != 0:
+        pytest.skip(f"needs the docker image {VAULT_IMAGE}")
+    run = ["docker", "run", "-d", "--rm", "--cap-add=IPC_LOCK", "-e", "VAULT_DEV_ROOT_TOKEN_ID=" + VAULT_TOKEN, "-p", "127.0.0.1::8200", VAULT_IMAGE]
+    cid = subprocess.run(run, check=True, capture_output=True, text=True).stdout.strip()
+    try:
+        port = subprocess.run(["docker", "port", cid, "8200/tcp"], check=True, capture_output=True, text=True).stdout.split(":")[-1].strip()
+        base = f"http://127.0.0.1:{port}"
+
+        def api(method: str, path: str, body: Any = None) -> Any:
+            data = None if body is None else json.dumps(body).encode()
+            req = urllib.request.Request(base + "/v1/" + path, method=method, data=data, headers={"X-Vault-Token": VAULT_TOKEN})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                raw = r.read()
+                return json.loads(raw) if raw else None
+
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                api("GET", "sys/health")
+                break
+            except (OSError, ValueError):
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.1)
+        api("POST", "sys/auth/userpass", {"type": "userpass"})
+        accessor = api("GET", "sys/auth")["data"]["userpass/"]["accessor"]
+        api("PUT", "sys/policies/acl/app-writer", {"policy": 'path "secret/data/app/*" { capabilities = ["create", "update", "read"] }'})
+        for name, email, policies in (("admin", ADMIN, ["app-writer"]), ("alice", ALICE, [])):
+            entity = api("POST", "identity/entity", {"name": name, "policies": policies})["data"]["id"]
+            api("POST", "identity/entity-alias", {"name": email, "canonical_id": entity, "mount_accessor": accessor})
+        yield base
+    finally:
+        subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
+
+
+def vault_hallpass(base: str) -> Hallpass:
+    return Hallpass(connections=[{"id": "vault", "integration": "vault", "url": base, "credential": literal(VAULT_TOKEN), "alias_mount": "userpass/"}])
+
+
+def write_secret(path: str, value: str) -> str:
+    """Write a secret under secret/."""
+    RAN.append(("write_secret", path))
+    return f"wrote secret/{path}"
+
+
+def test_real_vault(vault: str) -> None:
+    hooks = HallpassCallbacks(vault_hallpass(vault), {"write_secret": Rule("vault", "secret.write", "kv:secret/{path}", fresh=True)})
+    outs = [
+        drive(hooks, [("write_secret", {"path": path, "value": "x"})], user_id=user, tools=[write_secret]).responses["call_0_0"]
+        for user, path in ((ADMIN, "app/db"), (ALICE, "app/db"), (ADMIN, "other/db"))
+    ]
+    assert RAN == [("write_secret", "app/db")] and outs[0] == {"result": "wrote secret/app/db"}
+    assert refused(outs[1]).startswith(f"hallpass refused this call: {ALICE} may not secret.write on kv:secret/app/db in vault: deny")
+    assert refused(outs[2]).startswith(f"hallpass refused this call: {ADMIN} may not secret.write on kv:secret/other/db in vault: deny")
 
 
 # -- live: Claude drives the agent --------------------------------------------------

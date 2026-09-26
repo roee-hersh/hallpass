@@ -44,7 +44,7 @@ async def main() -> None:
     current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
     agent = FunctionAgent(
         tools=hallpass.wrap([write_thing]),
-        llm=Anthropic(model="claude-haiku-4-5", max_tokens=1024),
+        llm=Anthropic(model="claude-sonnet-5", max_tokens=1024),
         system_prompt="You write things for the user. If a tool refuses, say why.",
     )
     print(await agent.run("Write 'hello' to thing 1."))

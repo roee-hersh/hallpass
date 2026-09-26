@@ -302,5 +302,6 @@ def full_resource_name(r: Resource) -> str:
             raise _invalid("name: id must be a full resource name such as //cloudresourcemanager.googleapis.com/projects/my-project")
         return id
     raise _invalid(
-        f"resource type {go_quote(t)} is not one of project, folder, organization, bucket, object, dataset, table, secret, serviceaccount, instance, service, cluster, name"
+        f"resource type {go_quote(t)} is not one of project, folder, organization, bucket, object, dataset, "
+        "table, secret, serviceaccount, instance, service, cluster, name"
     )

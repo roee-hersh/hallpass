@@ -325,13 +325,12 @@ def gmail_refused(err: BaseException, sub: str) -> Decision:
         # UNVERIFIED: an account without a Gmail licence is assumed to answer
         # 400 failedPrecondition ("Mail service not enabled").
         return unsupported(f"Gmail is not enabled for {sub}")
-    if st == 403:
-        # UNVERIFIED: a Gmail 403 forbidden or without a reason as the user
-        # ("Delegation denied for <user>") is assumed to be about that
-        # account, not hallpass's credential; only insufficientPermissions
-        # and accessNotConfigured are.
-        if r not in RATE_LIMIT_REASONS and r != "insufficientPermissions" and r != "accessNotConfigured":
-            return unsupported(f"Gmail refused the call as {sub} ({_reason_or(r, 'no reason')}): the account may have no Gmail licence or a policy blocks it")
+    # UNVERIFIED: a Gmail 403 forbidden or without a reason as the user
+    # ("Delegation denied for <user>") is assumed to be about that account,
+    # not hallpass's credential; only insufficientPermissions and
+    # accessNotConfigured are.
+    if st == 403 and r not in RATE_LIMIT_REASONS and r != "insufficientPermissions" and r != "accessNotConfigured":
+        return unsupported(f"Gmail refused the call as {sub} ({_reason_or(r, 'no reason')}): the account may have no Gmail licence or a policy blocks it")
     raise classify(err)
 
 
@@ -784,7 +783,8 @@ class GoogleWorkspaceConnection(Connection):
                 self.source(self.admin, sc).get(ctx)
             except Exception as e:  # noqa: BLE001 - reported as a warning
                 warnings.append(
-                    f"scope {sc} could not be minted as {self.admin}: add it to the domain-wide delegation allowlist ({self.token_error(e, self.admin).code.value})"
+                    f"scope {sc} could not be minted as {self.admin}: add it to the domain-wide delegation "
+                    f"allowlist ({self.token_error(e, self.admin).code.value})"
                 )
         warnings.append("domain-wide delegation lets this credential act as any user within the allowlisted scopes; keep the key tightly held")
         return ProbeResult(summary=summary, warnings=tuple(warnings))
