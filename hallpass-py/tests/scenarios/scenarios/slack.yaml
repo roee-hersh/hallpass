@@ -1,0 +1,252 @@
+# Slack: each connection has its own URL prefix on the fake upstream, so one
+# static body per prefix can play one user and one channel. The body carries
+# every method's fields at once (user, channel, channels, members,
+# usergroups, who_can_post_general); each method reads only its own.
+x-bodies:
+  dana: &dana
+    ok: true
+    user: &dana-user
+      id: U0000FULL1
+      team_id: T0000TEAM1
+      name: dana
+      real_name: Dana Scully
+      deleted: false
+      is_admin: false
+      is_owner: false
+      is_restricted: false
+      is_ultra_restricted: false
+      is_bot: false
+      is_invited_user: false
+      profile: {email: dana@example.com, real_name: Dana Scully}
+    channel: &public
+      id: C0000PUBLC
+      name: public
+      is_archived: false
+      is_private: false
+      is_general: false
+      properties: {posting_restricted_to: {type: [], user: []}}
+    channels: [{id: C0000PUBLC}]
+    members: [U0000FULL1]
+    usergroups: [{id: S0000GROUP, handle: oncall, users: [U0000FULL1]}]
+    who_can_post_general: {type: [admin], user: []}
+    response_metadata: {next_cursor: ""}
+connections:
+  - id: slack-dana
+    integration: slack
+    url: "{{url}}/dana/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-guest
+    integration: slack
+    url: "{{url}}/guest/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-general
+    integration: slack
+    url: "{{url}}/general/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-restricted
+    integration: slack
+    url: "{{url}}/restricted/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-noprops
+    integration: slack
+    url: "{{url}}/noprops/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-noprops-assume
+    integration: slack
+    url: "{{url}}/noprops/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+    assume_default_prefs: "true"
+  - id: slack-admin
+    integration: slack
+    url: "{{url}}/admin/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-grid
+    integration: slack
+    url: "{{url}}/grid/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+    team_id: T0000OTHR1
+  - id: slack-dead
+    integration: slack
+    url: "{{url}}/dead/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-stranger
+    integration: slack
+    url: "{{url}}/stranger/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-hidden
+    integration: slack
+    url: "{{url}}/hidden/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-missing
+    integration: slack
+    url: "{{url}}/missing/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-ratelimited
+    integration: slack
+    url: "{{url}}/ratelimited/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-revoked
+    integration: slack
+    url: "{{url}}/revoked/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-scope
+    integration: slack
+    url: "{{url}}/scope/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-weird
+    integration: slack
+    url: "{{url}}/weird/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-500
+    integration: slack
+    url: "{{url}}/e500/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-401
+    integration: slack
+    url: "{{url}}/e401/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-garbage
+    integration: slack
+    url: "{{url}}/garbage/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-badtype
+    integration: slack
+    url: "{{url}}/badtype/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_TOKEN
+  - id: slack-usertoken
+    integration: slack
+    url: "{{url}}/dana/api"
+    ca_file: "{{ca_file}}"
+    credential: env:SLACK_PARITY_USER_TOKEN
+env:
+  SLACK_PARITY_TOKEN: xoxb-parity-token
+  SLACK_PARITY_USER_TOKEN: xoxp-parity-token
+upstream:
+  - {path: "/dana/api/*", json: *dana}
+  - path: "/guest/api/*"
+    json:
+      <<: *dana
+      user: {<<: *dana-user, id: U0000GUEST, is_restricted: true}
+      channels: []
+      members: []
+  - path: "/general/api/*"
+    json:
+      <<: *dana
+      channel: {<<: *public, id: C0000GENRL, name: general, is_general: true}
+      channels: [{id: C0000GENRL}]
+  - path: "/restricted/api/*"
+    json:
+      <<: *dana
+      channel: {<<: *public, id: C0000RSTRC, name: announcements, properties: {posting_restricted_to: {type: [admin, weird], user: [U0000OTHER]}}}
+      channels: [{id: C0000RSTRC}]
+  - path: "/noprops/api/*"
+    json:
+      <<: *dana
+      channel: {id: C0000NOPRP, name: plain, is_archived: false, is_private: false, is_general: false}
+      channels: [{id: C0000NOPRP}]
+  - path: "/admin/api/*"
+    json:
+      <<: *dana
+      user: {<<: *dana-user, id: U0000ADMIN, is_admin: true, is_owner: true, real_name: ""}
+      channel: {<<: *public, id: G0000PRIVT, name: secret, is_private: true, is_archived: true}
+      channels: []
+      members: []
+  - path: "/grid/api/*"
+    json:
+      <<: *dana
+      user: {<<: *dana-user, enterprise_user: {id: U0000FULL1, enterprise_id: E0000ENTRP, is_admin: true, is_owner: false}}
+  - path: "/dead/api/*"
+    json:
+      <<: *dana
+      user: {<<: *dana-user, deleted: true}
+  - path: "/stranger/api/*"
+    json:
+      <<: *dana
+      user: {<<: *dana-user, is_stranger: true}
+  - {path: "/hidden/api/*", json: *dana}
+  - {path: "/hidden/api/conversations.info", json: {ok: false, error: channel_not_found}}
+  - {path: "/missing/api/*", json: {ok: false, error: users_not_found}}
+  - {path: "/ratelimited/api/*", json: {ok: false, error: ratelimited}}
+  - {path: "/revoked/api/*", json: {ok: false, error: token_revoked}}
+  - {path: "/scope/api/*", json: *dana}
+  - {path: "/scope/api/usergroups.list", json: {ok: false, error: missing_scope, needed: usergroups:read}}
+  - {path: "/weird/api/*", json: *dana}
+  - {path: "/weird/api/users.lookupByEmail", json: {ok: false, error: fatal_error}}
+  - {path: "/e500/api/*", status: 500, body: "boom"}
+  - {path: "/e401/api/*", status: 401, body: "{}"}
+  - {path: "/garbage/api/*", body: "<html>not json</html>"}
+  - path: "/badtype/api/*"
+    json:
+      <<: *dana
+      user: {<<: *dana-user, is_admin: "yes"}
+checks:
+  - {user: dana@example.com, action: user.active, resource: workspace, want: allowed}
+  - {user: dana@example.com, action: workspace.admin, resource: workspace, want: denied}
+  - {user: dana@example.com, action: org.admin, resource: workspace, want: unsupported}
+  - {user: dana@example.com, action: channel.read, resource: "channel:C0000PUBLC", want: allowed}
+  - {user: dana@example.com, action: channel.join, resource: "channel:C0000PUBLC", want: allowed}
+  - {user: dana@example.com, action: message.post, resource: "channel:C0000PUBLC", want: allowed}
+  - {user: dana@example.com, action: message.post_thread, resource: "channel:C0000PUBLC", want: allowed}
+  - {user: dana@example.com, action: file.upload, resource: "channel:C0000PUBLC", want: allowed}
+  - {user: dana@example.com, action: channel.create, resource: workspace, want: unsupported}
+  - {user: dana@example.com, action: channel.invite, resource: "channel:C0000PUBLC", want: unsupported}
+  - {user: dana@example.com, action: usergroup.member, resource: "usergroup:S0000GROUP", want: allowed}
+  - {user: dana@example.com, action: usergroup.member, resource: "usergroup:S0000OTHER", want: resource_not_visible}
+  - {user: dana@example.com, action: channel.read, resource: "channel:general", want: invalid_request}
+  - {user: dana@example.com, action: channel.read, resource: workspace, want: invalid_request}
+  - {user: dana@example.com, action: channel.read, resource: "channel:C0000PUBLC?x=1", want: invalid_request}
+  - {user: dana@example.com, action: user.active, resource: "workspace:acme", want: invalid_request}
+  - {user: guest@example.com, connection: slack-guest, action: user.active, resource: workspace, want: allowed}
+  - {user: guest@example.com, connection: slack-guest, action: channel.read, resource: "channel:C0000PUBLC", want: denied}
+  - {user: guest@example.com, connection: slack-guest, action: channel.join, resource: "channel:C0000PUBLC", want: denied}
+  - {user: guest@example.com, connection: slack-guest, action: message.post, resource: "channel:C0000PUBLC", want: denied}
+  - {user: guest@example.com, connection: slack-guest, action: channel.create, resource: workspace, want: denied}
+  - {user: guest@example.com, connection: slack-guest, action: usergroup.member, resource: "usergroup:S0000GROUP", want: denied}
+  - {user: dana@example.com, connection: slack-general, action: message.post, resource: "channel:C0000GENRL", want: denied}
+  - {user: dana@example.com, connection: slack-general, action: channel.archive, resource: "channel:C0000GENRL", want: denied}
+  - {user: dana@example.com, connection: slack-restricted, action: message.post, resource: "channel:C0000RSTRC", want: unsupported}
+  - {user: dana@example.com, connection: slack-restricted, action: message.post_thread, resource: "channel:C0000RSTRC", want: allowed}
+  - {user: dana@example.com, connection: slack-noprops, action: message.post, resource: "channel:C0000NOPRP", want: unsupported}
+  - {user: dana@example.com, connection: slack-noprops-assume, action: message.post, resource: "channel:C0000NOPRP", want: allowed}
+  - {user: dana@example.com, connection: slack-noprops-assume, action: channel.rename, resource: "channel:C0000NOPRP", want: allowed}
+  - {user: admin@example.com, connection: slack-admin, action: workspace.admin, resource: workspace, want: allowed}
+  - {user: admin@example.com, connection: slack-admin, action: channel.read, resource: "channel:G0000PRIVT", want: denied}
+  - {user: admin@example.com, connection: slack-admin, action: channel.join, resource: "channel:G0000PRIVT", want: denied}
+  - {user: admin@example.com, connection: slack-admin, action: channel.archive, resource: "channel:G0000PRIVT", want: denied}
+  - {user: admin@example.com, connection: slack-admin, action: channel.create, resource: workspace, want: allowed}
+  - {user: dana@example.com, connection: slack-grid, action: org.admin, resource: workspace, want: allowed}
+  - {user: dana@example.com, connection: slack-grid, action: channel.read, resource: "channel:C0000PUBLC", want: unsupported}
+  - {user: dead@example.com, connection: slack-dead, action: user.active, resource: workspace, want: denied}
+  - {user: dead@example.com, connection: slack-dead, action: channel.read, resource: "channel:C0000PUBLC", want: denied}
+  - {user: x@example.com, connection: slack-stranger, action: channel.read, resource: "channel:C0000PUBLC", want: unsupported}
+  - {user: dana@example.com, connection: slack-hidden, action: channel.read, resource: "channel:G0000HIDDN", want: resource_not_visible}
+  - {user: nobody@example.com, connection: slack-missing, action: user.active, resource: workspace, want: user_not_found}
+  - {user: dana@example.com, connection: slack-ratelimited, action: user.active, resource: workspace, want: upstream_rate_limited}
+  - {user: dana@example.com, connection: slack-revoked, action: user.active, resource: workspace, want: credential_rejected}
+  - {user: dana@example.com, connection: slack-scope, action: usergroup.member, resource: "usergroup:S0000GROUP", want: credential_rejected}
+  - {user: dana@example.com, connection: slack-weird, action: user.active, resource: workspace, want: upstream_error}
+  - {user: dana@example.com, connection: slack-500, action: user.active, resource: workspace, want: upstream_error}
+  - {user: dana@example.com, connection: slack-401, action: user.active, resource: workspace, want: credential_rejected}
+  - {user: dana@example.com, connection: slack-garbage, action: user.active, resource: workspace, want: upstream_error}
+  - {user: dana@example.com, connection: slack-badtype, action: user.active, resource: workspace, want: upstream_error}
+  - {user: dana@example.com, connection: slack-usertoken, action: user.active, resource: workspace, want: credential_rejected}

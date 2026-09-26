@@ -1,0 +1,164 @@
+# The kubernetes integration against a static fake of the API server's
+# SubjectAccessReview endpoint. Each connection's URL carries its own path
+# prefix so it gets its own answer: k8s-allow and k8s-deny (a reason longer
+# than 200 bytes, cut in the middle of a two-byte rune, checks the
+# truncation), k8s-eval (evaluationError), k8s-prefix (username_template,
+# group_prefix and no system:authenticated; the fake answers only when the
+# review body carries exactly the expected subject, so the request encoding
+# is compared too), k8s-nonres (a non-resource review) and upstream
+# failures. Kubernetes has no user directory, so user_not_found cannot occur.
+connections:
+  - id: k8s-allow
+    integration: kubernetes
+    url: "{{url}}/allow"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-deny
+    integration: kubernetes
+    url: "{{url}}/deny"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-long
+    integration: kubernetes
+    url: "{{url}}/long"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-eval
+    integration: kubernetes
+    url: "{{url}}/eval"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-prefix
+    integration: kubernetes
+    url: "{{url}}/prefix"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+    username_template: "oidc:{local}"
+    group_prefix: "oidc:"
+    add_authenticated_group: "false"
+  - id: k8s-nonres
+    integration: kubernetes
+    url: "{{url}}/nonres"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-forbidden
+    integration: kubernetes
+    url: "{{url}}/forbidden"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-unauth
+    integration: kubernetes
+    url: "{{url}}/unauth"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-broken
+    integration: kubernetes
+    url: "{{url}}/broken"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-limited
+    integration: kubernetes
+    url: "{{url}}/limited"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-badjson
+    integration: kubernetes
+    url: "{{url}}/badjson"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+  - id: k8s-badtype
+    integration: kubernetes
+    url: "{{url}}/badtype"
+    ca_file: "{{ca_file}}"
+    credential: env:K8S_TOKEN
+env:
+  K8S_TOKEN: parity-sa-token
+upstream:
+  - method: POST
+    path: /allow/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 201
+    json: {apiVersion: authorization.k8s.io/v1, kind: SubjectAccessReview, status: {allowed: true, reason: 'RBAC: allowed by RoleBinding "dev/payments" of Role "dev" to User "dana@example.com"'}}
+  - method: POST
+    path: /deny/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 201
+    json: {status: {allowed: false, reason: "  "}}
+  - method: POST
+    path: /long/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 201
+    json: {status: {allowed: false, reason: "xéééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}}
+  - method: POST
+    path: /eval/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 201
+    json: {status: {allowed: false, evaluationError: "webhook authorizer unavailable"}}
+  - method: POST
+    path: /prefix/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 201
+    when_body_contains: '"spec":{"user":"oidc:dana","groups":["oidc:platform-team"],"resourceAttributes":{"namespace":"payments","verb":"update","group":"apps","resource":"deployments","subresource":"scale","name":"api"}}'
+    json: {status: {allowed: true}}
+  - method: POST
+    path: /nonres/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 201
+    when_body_contains: '"spec":{"user":"dana@example.com","groups":["system:authenticated"],"nonResourceAttributes":{"path":"/healthz","verb":"get"}}'
+    json: {status: {allowed: true, reason: "RBAC: allowed by ClusterRoleBinding system:public-info-viewer"}}
+  - method: POST
+    path: /forbidden/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 403
+    json: {kind: Status, message: forbidden, code: 403}
+  - method: POST
+    path: /unauth/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 401
+    json: {kind: Status, message: Unauthorized, code: 401}
+  - method: POST
+    path: /broken/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 500
+    json: {kind: Status, message: internal error, code: 500}
+  - method: POST
+    path: /limited/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 429
+    headers: {Retry-After: "30"}
+    json: {kind: Status, message: too many requests, code: 429}
+  - method: POST
+    path: /badjson/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 201
+    body: "<html>not json</html>"
+  - method: POST
+    path: /badtype/apis/authorization.k8s.io/v1/subjectaccessreviews
+    status: 201
+    json: {status: {allowed: "yes"}}
+checks:
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments?name=api-0", connection: k8s-allow, want: allowed}
+  - {user: dana@example.com, groups: [platform-team], action: pods.exec, resource: "namespace:payments?name=api-0", connection: k8s-allow, want: allowed}
+  - {user: dana@example.com, action: "raw:create:deployments.apps/scale", resource: "namespace:payments?name=api", connection: k8s-allow, want: allowed}
+  - {user: dana@example.com, action: scale, resource: "cluster?resource=nodes.metrics.k8s.io&name=n1", connection: k8s-allow, want: allowed}
+  - {user: dana@example.com, action: impersonate, resource: "cluster?name=admin", connection: k8s-allow, want: allowed}
+  - {user: dana@example.com, action: impersonate, resource: "cluster?resource=groups&name=admins", connection: k8s-allow, want: allowed}
+  - {user: dana@example.com, action: "raw:get", resource: "namespace:payments?resource=pods", connection: k8s-allow, want: allowed}
+  - {user: dana@example.com, action: rbac.bind, resource: "namespace:payments", connection: k8s-allow, want: allowed}
+  - {user: dana@example.com, action: "raw:delete:pods", resource: "namespace:payments", connection: k8s-deny, want: denied}
+  - {user: bob@example.com, action: pods.logs, resource: "namespace:payments?name=api-0", connection: k8s-deny, want: denied}
+  - {user: bob@example.com, action: secrets.read, resource: "namespace:kube-system?name=db", connection: k8s-long, want: denied}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments", connection: k8s-eval, want: unsupported}
+  - {user: dana@example.com, groups: [platform-team], action: scale, resource: "namespace:payments?resource=deployments.apps&name=api", connection: k8s-prefix, want: allowed}
+  - {user: dana@example.com, groups: [platform-team, system:masters], action: "raw:get:pods", resource: "namespace:payments", connection: k8s-prefix, want: upstream_error}
+  - {user: dana@example.com, action: "raw:get", resource: "nonresource:/healthz", connection: k8s-nonres, want: allowed}
+  - {user: dana@example.com, action: "raw:get", resource: "nonresource:/metrics", connection: k8s-nonres, want: upstream_error}
+  - {user: dana@example.com, groups: [system:masters], action: "raw:get:pods", resource: "namespace:payments", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:Bad_NS", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments?resource=deployments.apps", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get:pods/log", resource: "namespace:payments?subresource=exec", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: scale, resource: "namespace:payments", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get", resource: "namespace:payments", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "nonresource:/metrics", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "nonresource:metrics", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments?name=bad%20name", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments?namespace=other", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "cluster:x", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "pod:x", connection: k8s-allow, want: invalid_request}
+  - {user: dana@example.com, action: "raw:Get:pods", resource: "namespace:payments", connection: k8s-allow, want: unknown_action}
+  - {user: dana@example.com, action: pods.delete, resource: "namespace:payments", connection: k8s-allow, want: unknown_action}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments", connection: k8s-forbidden, want: credential_rejected}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments", connection: k8s-unauth, want: credential_rejected}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments", connection: k8s-broken, want: upstream_error}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments", connection: k8s-limited, want: upstream_rate_limited}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments", connection: k8s-badjson, want: upstream_error}
+  - {user: dana@example.com, action: "raw:get:pods", resource: "namespace:payments", connection: k8s-badtype, want: upstream_error}

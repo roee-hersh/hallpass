@@ -1,0 +1,122 @@
+# The datadog integration: role permissions, legacy restricted_roles,
+# restriction policies, user states and upstream failures, against a static
+# fake of the v1 and v2 APIs.
+connections:
+  - id: dd
+    integration: datadog
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    api_key: env:DD_API_KEY
+    credential: env:DD_APP_KEY
+  - id: dd-broken
+    integration: datadog
+    url: "{{url}}/broken"
+    ca_file: "{{ca_file}}"
+    api_key: env:DD_API_KEY
+    credential: env:DD_APP_KEY
+  - id: dd-forbidden
+    integration: datadog
+    url: "{{url}}/forbidden"
+    ca_file: "{{ca_file}}"
+    api_key: env:DD_API_KEY
+    credential: env:DD_APP_KEY
+env:
+  DD_API_KEY: parity-datadog-api-key
+  DD_APP_KEY: parity-datadog-app-key
+upstream:
+  - method: GET
+    path: /api/v2/users
+    json:
+      data:
+        - {id: d1d1d1d1-0000-0000-0000-000000000001, type: users, attributes: {email: dana@example.com, handle: Dana@Example.com, status: Active, disabled: false}, relationships: {roles: {data: [{id: 22222222-2222-2222-2222-222222222222, type: roles}]}}}
+        - {id: b0b0b0b0-0000-0000-0000-000000000002, type: users, attributes: {email: bob@example.com, handle: bob@example.com, status: Active, disabled: false}, relationships: {roles: {data: [{id: 11111111-1111-1111-1111-111111111111, type: roles}]}}}
+        - {id: 0ff00000-0000-0000-0000-000000000004, type: users, attributes: {email: off@example.com, handle: off@example.com, status: Disabled, disabled: true}, relationships: {roles: {data: [{id: 22222222-2222-2222-2222-222222222222, type: roles}]}}}
+        - {id: 0ff00000-0000-0000-0000-000000000005, type: users, attributes: {email: pending@example.com, handle: pending, status: Pending, disabled: false}, relationships: {roles: {data: [{id: 22222222-2222-2222-2222-222222222222, type: roles}]}}}
+        - {id: 0ff00000-0000-0000-0000-000000000006, type: users, attributes: {email: nostatus@example.com, handle: nostatus, status: Active}, relationships: {roles: {data: [{id: 22222222-2222-2222-2222-222222222222, type: roles}]}}}
+        - {id: 0ff00000-0000-0000-0000-000000000007, type: users, attributes: {email: lost@example.com, handle: lost, status: Active, disabled: false}, relationships: {roles: {data: [{id: 55555555-5555-5555-5555-555555555555, type: roles}]}}}
+        - {id: dup1, type: users, attributes: {email: dup@example.com, handle: d1, status: Active, disabled: false}}
+        - {id: dup2, type: users, attributes: {email: DUP@example.com, handle: d2, status: Active, disabled: false}}
+        - {id: eeeeeeee-0000-0000-0000-000000000008, type: users, attributes: {email: dana@example.com.au, handle: dana2, status: Active, disabled: false}}
+      meta: {page: {total_count: 9, total_filtered_count: 9}}
+  - method: GET
+    path: /api/v2/roles/22222222-2222-2222-2222-222222222222/permissions
+    json:
+      data:
+        - {id: p1, type: permissions, attributes: {name: monitors_read}}
+        - {id: p2, type: permissions, attributes: {name: monitors_write}}
+        - {id: p3, type: permissions, attributes: {name: logs_read_data}}
+        - {id: p4, type: permissions, attributes: {name: dashboards_write}}
+  - method: GET
+    path: /api/v2/roles/11111111-1111-1111-1111-111111111111/permissions
+    json:
+      data:
+        - {id: p1, type: permissions, attributes: {name: monitors_read}}
+        - {id: p3, type: permissions, attributes: {name: logs_read_data}}
+  - method: GET
+    path: /api/v2/roles/55555555-5555-5555-5555-555555555555/permissions
+    status: 404
+    json: {errors: [Not found]}
+  - method: GET
+    path: /api/v1/monitor/1
+    json: {id: 1, restricted_roles: null, creator: {email: someone@example.com, handle: someone@example.com}}
+  - method: GET
+    path: /api/v1/monitor/2
+    json: {id: 2, restricted_roles: [44444444-4444-4444-4444-444444444444]}
+  - method: GET
+    path: /api/v1/monitor/3
+    json: {id: 3, restricted_roles: null}
+  - method: GET
+    path: /api/v1/monitor/404
+    status: 404
+    json: {errors: [Monitor not found]}
+  - method: GET
+    path: /api/v1/dashboard/abc-def
+    json: {id: abc-def, restricted_roles: [44444444-4444-4444-4444-444444444444], author_handle: dana@example.com}
+  - method: GET
+    path: /api/v2/restriction_policy/*
+    json: {data: {type: restriction_policy, id: x, attributes: {bindings: []}}}
+  - method: GET
+    path: /api/v2/restriction_policy/monitor:3
+    json:
+      data:
+        type: restriction_policy
+        id: "monitor:3"
+        attributes:
+          bindings:
+            - {relation: editor, principals: ["team:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]}
+            - {relation: viewer, principals: ["org:99999999-9999-9999-9999-999999999999"]}
+  - method: GET
+    path: /api/v2/team/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/memberships
+    json: {data: []}
+  - method: GET
+    path: /broken/*
+    status: 500
+    body: ""
+  - method: GET
+    path: /forbidden/*
+    status: 403
+    json: {errors: [Forbidden]}
+checks:
+  - {user: dana@example.com, action: logs.read, resource: org, want: allowed}
+  - {user: bob@example.com, action: users.manage, resource: org, want: denied}
+  - {user: off@example.com, action: logs.read, resource: org, want: denied}
+  - {user: pending@example.com, action: logs.read, resource: org, want: denied}
+  - {user: nostatus@example.com, action: logs.read, resource: org, want: unsupported}
+  - {user: ghost@example.com, action: logs.read, resource: org, want: user_not_found}
+  - {user: dup@example.com, action: logs.read, resource: org, want: user_ambiguous}
+  - {user: lost@example.com, action: logs.read, resource: org, want: resource_not_visible}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:1", want: allowed}
+  - {user: bob@example.com, action: monitor.edit, resource: "monitor:1", want: denied}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:2", want: denied}
+  - {user: bob@example.com, action: monitor.read, resource: "monitor:2", want: allowed}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:3", want: denied}
+  - {user: bob@example.com, action: monitor.read, resource: "monitor:3", want: allowed}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:404", want: resource_not_visible}
+  - {user: dana@example.com, action: dashboard.edit, resource: "dashboard:abc-def", want: allowed}
+  - {user: dana@example.com, action: "raw:monitors_write", resource: "monitor:2", want: denied}
+  - {user: dana@example.com, action: "raw:monitors_read", resource: "monitor:3", want: allowed}
+  - {user: dana@example.com, action: "raw:Monitors", resource: org, want: unknown_action}
+  - {user: dana@example.com, action: monitor.edit, resource: "dashboard:abc-def", want: invalid_request}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:-1", want: invalid_request}
+  - {user: dana@example.com, action: logs.read, resource: org, connection: dd-broken, want: upstream_error}
+  - {user: dana@example.com, action: logs.read, resource: org, connection: dd-forbidden, want: credential_rejected}

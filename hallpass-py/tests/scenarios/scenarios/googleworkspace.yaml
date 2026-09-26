@@ -1,0 +1,133 @@
+# googleworkspace: keyless auth (metadata token, IAM Credentials signJwt, JWT
+# bearer exchange) and the Directory, Drive, Calendar, Gmail and Groups calls,
+# every endpoint pointed at the fake upstream.
+connections:
+  - id: gws
+    integration: googleworkspace
+    admin_email: admin@example.com
+    auth_mode: keyless
+    service_account_email: hallpass@proj.iam.gserviceaccount.com
+    enable_gmail_settings: "true"
+    token_url: "{{url}}/token"
+    api_url: "{{url}}"
+    metadata_url: "{{url}}"
+    iamcredentials_url: "{{url}}"
+    ca_file: "{{ca_file}}"
+  # The token endpoint refuses to let hallpass act as the admin.
+  - id: gws-nodelegation
+    integration: googleworkspace
+    admin_email: admin@example.com
+    auth_mode: keyless
+    service_account_email: hallpass@proj.iam.gserviceaccount.com
+    token_url: "{{url}}/badtoken"
+    api_url: "{{url}}"
+    metadata_url: "{{url}}"
+    iamcredentials_url: "{{url}}"
+    ca_file: "{{ca_file}}"
+  # A credential that is not a key JSON.
+  - id: gws-badkey
+    integration: googleworkspace
+    admin_email: admin@example.com
+    credential: env:HP_PARITY_GWS_BADKEY
+    token_url: "{{url}}/token"
+    api_url: "{{url}}"
+    ca_file: "{{ca_file}}"
+  # Gmail settings off.
+  - id: gws-nogmail
+    integration: googleworkspace
+    admin_email: admin@example.com
+    auth_mode: keyless
+    service_account_email: hallpass@proj.iam.gserviceaccount.com
+    token_url: "{{url}}/token"
+    api_url: "{{url}}"
+    metadata_url: "{{url}}"
+    iamcredentials_url: "{{url}}"
+    ca_file: "{{ca_file}}"
+env:
+  HP_PARITY_GWS_BADKEY: not json
+upstream:
+  - {method: GET, path: /computeMetadata/v1/instance/service-accounts/default/token, json: {access_token: meta, expires_in: 3599, token_type: Bearer}}
+  - {method: POST, path: "/v1/projects/-/serviceAccounts/hallpass@proj.iam.gserviceaccount.com:signJwt", json: {keyId: k1, signedJwt: a.b.c}}
+  - {method: POST, path: /token, json: {access_token: tok, expires_in: 3599, token_type: Bearer}}
+  - {method: POST, path: /badtoken, status: 400, json: {error: invalid_grant, error_description: not allowed}}
+  - {method: GET, path: /admin/directory/v1/users/dana@example.com, json: {id: "100", primaryEmail: dana@example.com, suspended: false, archived: false}}
+  - {method: GET, path: /admin/directory/v1/users/bob@example.com, json: {id: "101", primaryEmail: Bob@Example.com, suspended: false, archived: false}}
+  - {method: GET, path: /admin/directory/v1/users/sus@example.com, json: {id: "102", primaryEmail: sus@example.com, suspended: true, archived: false}}
+  - {method: GET, path: /admin/directory/v1/users/arch@example.com, json: {id: "103", primaryEmail: arch@example.com, suspended: false, archived: true}}
+  - {method: GET, path: /admin/directory/v1/users/nostatus@example.com, json: {id: "104", primaryEmail: nostatus@example.com}}
+  - {method: GET, path: /admin/directory/v1/users/noprimary@example.com, json: {id: "105", suspended: false, archived: false}}
+  - {method: GET, path: /admin/directory/v1/users/forbidden@example.com, status: 403, json: {error: {code: 403, message: no, errors: [{reason: forbidden}]}}}
+  - method: GET
+    path: /drive/v3/files/1AbCdEfGhIjKlMnOpQrStUvWxYz
+    json: {capabilities: {canDownload: true, canEdit: true, canShare: false}, trashed: false}
+  - method: GET
+    path: /drive/v3/files/1BbCdEfGhIjKlMnOpQrStUvWxYz
+    json: {capabilities: {canEdit: false}, trashed: true}
+  - {method: GET, path: /drive/v3/files/1CbCdEfGhIjKlMnOpQrStUvWxYz, status: 404, json: {error: {code: 404, message: x, errors: [{domain: global, reason: notFound}]}}}
+  - {method: GET, path: /drive/v3/files/1DbCdEfGhIjKlMnOpQrStUvWxYz, status: 404, json: {error: {code: 404, message: x}}}
+  - {method: GET, path: /drive/v3/files/1EbCdEfGhIjKlMnOpQrStUvWxYz, status: 403, json: {error: {code: 403, message: x, errors: [{domain: global, reason: insufficientPermissions}]}}}
+  - {method: GET, path: /drive/v3/files/1FbCdEfGhIjKlMnOpQrStUvWxYz, status: 403, json: {error: {code: 403, message: x, errors: [{domain: global, reason: domainPolicy}]}}}
+  - {method: GET, path: /drive/v3/files/1GbCdEfGhIjKlMnOpQrStUvWxYz, status: 403, json: {error: {code: 403, message: x, errors: [{domain: usageLimits, reason: userRateLimitExceeded}]}}}
+  - {method: GET, path: /drive/v3/files/1HbCdEfGhIjKlMnOpQrStUvWxYz, status: 500, json: {error: {code: 500, message: boom}}}
+  - {method: GET, path: /drive/v3/files/1IbCdEfGhIjKlMnOpQrStUvWxYz, status: 429, headers: {Retry-After: "30"}, json: {error: {code: 429, message: slow}}}
+  - {method: GET, path: /calendar/v3/users/me/calendarList/ro@example.com, json: {id: ro@example.com, accessRole: reader}}
+  - {method: GET, path: /calendar/v3/users/me/calendarList/odd@example.com, json: {id: odd@example.com, accessRole: editor}}
+  - {method: GET, path: /admin/directory/v1/groups/eng@example.com/hasMember/dana@example.com, json: {isMember: true}}
+  - {method: GET, path: /admin/directory/v1/groups/eng@example.com/hasMember/bob@example.com, json: {isMember: false}}
+  - {method: GET, path: /admin/directory/v1/groups/eng@example.com/hasMember/nostatus@example.com, json: {}}
+  - {method: GET, path: /admin/directory/v1/groups/external@other.com/hasMember/dana@example.com, status: 400, json: {error: {code: 400, message: x, errors: [{reason: invalid}]}}}
+  - method: GET
+    path: /gmail/v1/users/me/settings/sendAs
+    json:
+      sendAs:
+        - {sendAsEmail: dana@example.com, isPrimary: true}
+        - {sendAsEmail: support@example.com, verificationStatus: accepted}
+        - {sendAsEmail: pending@example.com, verificationStatus: pending}
+        - {sendAsEmail: blank@example.com, treatAsAlias: true}
+  - method: GET
+    path: /gmail/v1/users/me/settings/delegates
+    json:
+      delegates:
+        - {delegateEmail: dana@example.com, verificationStatus: accepted}
+        - {delegateEmail: bob@example.com, verificationStatus: expired}
+checks:
+  - {user: dana@example.com, action: user.active, resource: "user:dana@example.com", want: allowed}
+  - {user: Dana@Example.com, action: user.active, resource: "user:bob@example.com", want: unsupported}
+  - {user: sus@example.com, action: drive.file.read, resource: "file:1AbCdEfGhIjKlMnOpQrStUvWxYz", want: denied}
+  - {user: arch@example.com, action: user.active, resource: "user:arch@example.com", want: denied}
+  - {user: nostatus@example.com, action: user.active, resource: "user:nostatus@example.com", want: unsupported}
+  - {user: nobody@example.com, action: user.active, resource: "user:nobody@example.com", want: user_not_found}
+  - {user: noprimary@example.com, action: user.active, resource: "user:noprimary@example.com", want: upstream_error}
+  - {user: forbidden@example.com, action: user.active, resource: "user:forbidden@example.com", want: credential_rejected}
+  - {user: dana@example.com, action: drive.file.read, resource: "file:1AbCdEfGhIjKlMnOpQrStUvWxYz", want: allowed}
+  - {user: dana@example.com, action: drive.file.edit, resource: "file:1AbCdEfGhIjKlMnOpQrStUvWxYz", want: allowed}
+  - {user: dana@example.com, action: drive.file.share, resource: "file:1AbCdEfGhIjKlMnOpQrStUvWxYz", want: denied}
+  - {user: dana@example.com, action: drive.file.delete, resource: "file:1AbCdEfGhIjKlMnOpQrStUvWxYz", want: unsupported}
+  - {user: bob@example.com, action: drive.file.edit, resource: "file:1BbCdEfGhIjKlMnOpQrStUvWxYz", want: denied}
+  - {user: bob@example.com, action: drive.file.read, resource: "file:1BbCdEfGhIjKlMnOpQrStUvWxYz", want: allowed}
+  - {user: dana@example.com, action: drive.file.read, resource: "file:1CbCdEfGhIjKlMnOpQrStUvWxYz", want: denied}
+  - {user: dana@example.com, action: drive.file.read, resource: "file:1DbCdEfGhIjKlMnOpQrStUvWxYz", want: resource_not_visible}
+  - {user: dana@example.com, action: drive.file.read, resource: "file:1EbCdEfGhIjKlMnOpQrStUvWxYz", want: credential_rejected}
+  - {user: dana@example.com, action: drive.file.read, resource: "file:1FbCdEfGhIjKlMnOpQrStUvWxYz", want: unsupported}
+  - {user: dana@example.com, action: drive.file.read, resource: "file:1GbCdEfGhIjKlMnOpQrStUvWxYz", want: upstream_rate_limited}
+  - {user: dana@example.com, action: drive.file.read, resource: "file:1HbCdEfGhIjKlMnOpQrStUvWxYz", want: upstream_error}
+  - {user: dana@example.com, action: drive.file.read, resource: "file:1IbCdEfGhIjKlMnOpQrStUvWxYz", want: upstream_rate_limited}
+  - {user: dana@example.com, action: drive.file.read, resource: "file:short", want: invalid_request}
+  - {user: dana@example.com, action: calendar.read, resource: "calendar:ro@example.com", want: allowed}
+  - {user: dana@example.com, action: calendar.event.write, resource: "calendar:ro@example.com", want: denied}
+  - {user: dana@example.com, action: calendar.share, resource: "calendar:primary", want: allowed}
+  - {user: dana@example.com, action: calendar.read, resource: "calendar:odd@example.com", want: unsupported}
+  - {user: dana@example.com, action: calendar.read, resource: "calendar:gone@example.com", want: unsupported}
+  - {user: dana@example.com, action: group.member, resource: "group:Eng@example.com", want: allowed}
+  - {user: bob@example.com, action: group.member, resource: "group:eng@example.com", want: denied}
+  - {user: dana@example.com, action: group.member, resource: "group:external@other.com", want: unsupported}
+  - {user: dana@example.com, action: mail.send_as, resource: "mailbox:dana@example.com", want: allowed}
+  - {user: dana@example.com, action: mail.send_as, resource: "mailbox:support@example.com", want: allowed}
+  - {user: dana@example.com, action: mail.send_as, resource: "mailbox:pending@example.com", want: denied}
+  - {user: dana@example.com, action: mail.send_as, resource: "mailbox:blank@example.com", want: unsupported}
+  - {user: dana@example.com, action: mail.send_as, resource: "mailbox:other@example.com", want: denied}
+  - {user: dana@example.com, action: mail.delegate_access, resource: "mailbox:boss@example.com", want: allowed}
+  - {user: bob@example.com, action: mail.delegate_access, resource: "mailbox:boss@example.com", want: denied}
+  - {user: dana@example.com, action: mail.send_as, resource: "mailbox:support@example.com", connection: gws-nogmail, want: unsupported}
+  - {user: dana@example.com, action: user.active, resource: "user:dana@example.com", connection: gws-nodelegation, want: credential_rejected}
+  - {user: dana@example.com, action: user.active, resource: "user:dana@example.com", connection: gws-badkey, want: credential_rejected}

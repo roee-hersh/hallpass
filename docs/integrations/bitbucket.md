@@ -176,7 +176,7 @@ Error bodies are never copied into a decision text.
 
 ## Unverified
 
-Marked `// UNVERIFIED:` in the code:
+Marked `# UNVERIFIED:` in the code:
 
 - Cloud: the filter grammar `q=user.account_id="..."` on the repository permissions list; the spec
   says the list "may be filtered by user" and documents only `permission>"read"`. A 400 falls back to

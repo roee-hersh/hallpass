@@ -33,24 +33,21 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git tag -a "$VERSION" -m "hallpass $VERSION"
           git push origin "refs/tags/$VERSION"
-
-  binaries:
-    needs: tag
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: refs/tags/${{ env.VERSION }}
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: release --clean
+      - name: create release
+        # The GitHub release the assets job uploads to, with notes generated
+        # from the merged pull requests. A version with a suffix (v1.2.3-rc.1)
+        # is a prerelease.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            echo "release $VERSION exists"
+            exit 0
+          fi
+          pre=""
+          case "$VERSION" in *-*) pre="--prerelease" ;; esac
+          gh release create "$VERSION" --verify-tag --title "hallpass $VERSION" --generate-notes $pre
 
   image:
     needs: tag
@@ -105,14 +102,13 @@ jobs:
           echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           helm push "out/hallpass-$v.tgz" "oci://ghcr.io/${OWNER,,}/charts"
 
-  sdk:
-    # Attaches both client packages to the GitHub release as a registry-free
-    # copy (pip install <url>, npm install <url>), under fixed names so
-    # releases/latest/download/... works:
-    #   hallpass-client-python.tar.gz, hallpass-client-node.tgz
-    # plus the versioned wheel and sdk-checksums.txt. The docs install from
-    # PyPI and npm, which the pypi and npm jobs below publish to.
-    needs: binaries
+  assets:
+    # Attaches the packages to the GitHub release as a registry-free copy
+    # (pip install <url>, npm install <url>), under fixed names so
+    # releases/latest/download/... works: hallpass-python.tar.gz and
+    # hallpass-client-node.tgz, plus the versioned wheel and checksums.txt. The docs install from PyPI and npm,
+    # which the pypi and npm jobs below publish to.
+    needs: tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -127,32 +123,29 @@ jobs:
       - name: build
         run: |
           set -eu
-          v="${VERSION#v}"
           mkdir out npmdist
-          sed -i "s/^version = \"0.0.0\"$/version = \"$v\"/" sdk/python/pyproject.toml
-          grep -q "^version = \"$v\"$" sdk/python/pyproject.toml
-          python -m pip install --quiet build
-          python -m build sdk/python -o pydist
+          .github/scripts/build-python.sh "${VERSION#v}" pydist
           cp pydist/*.whl out/
-          cp pydist/*.tar.gz out/hallpass-client-python.tar.gz
-          cd sdk/node
+          cp pydist/hallpass-[0-9]*.tar.gz out/hallpass-python.tar.gz
+          cd hallpass-ts
           npm ci
-          npm version --no-git-tag-version "$v"
+          npm version --no-git-tag-version "${VERSION#v}"
           npm test
-          npm pack --pack-destination ../../npmdist
-          cd ../..
+          npm pack --pack-destination ../npmdist
+          cd ..
           cp npmdist/*.tgz out/hallpass-client-node.tgz
-          (cd out && sha256sum * > sdk-checksums.txt)
-          cat out/sdk-checksums.txt
+          (cd out && sha256sum * > checksums.txt)
+          cat out/checksums.txt
       - name: upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$VERSION" out/* --clobber
 
   pypi:
-    # Publishes sdk/python as hallpass-client with PyPI trusted publishing
-    # (no stored token). Runs once the repository variable PUBLISH_PYPI is
-    # "true", after the publisher is registered on PyPI; see sdk/README.md.
+    # Publishes hallpass (hallpass-py) with PyPI trusted publishing (no
+    # stored token). Runs once the repository variable PUBLISH_PYPI is
+    # "true", after the publisher is registered on PyPI; see
+    # hallpass-py/RELEASING.md.
     needs: tag
     if: vars.PUBLISH_PYPI == 'true'
     runs-on: ubuntu-latest
@@ -167,20 +160,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: build
-        run: |
-          set -eu
-          v="${VERSION#v}"
-          sed -i "s/^version = \"0.0.0\"$/version = \"$v\"/" sdk/python/pyproject.toml
-          grep -q "^version = \"$v\"$" sdk/python/pyproject.toml
-          python -m pip install --quiet build
-          python -m build sdk/python -o dist
+      - run: .github/scripts/build-python.sh "${VERSION#v}" dist
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   npm:
-    # Publishes sdk/node as hallpass-client with npm trusted publishing
+    # Publishes hallpass-ts as hallpass-client with npm trusted publishing
     # (OpenID Connect, no stored token) and provenance. Runs when the
-    # repository variable PUBLISH_NPM is "true"; see sdk/README.md.
+    # repository variable PUBLISH_NPM is "true"; see hallpass-py/RELEASING.md.
     needs: tag
     if: vars.PUBLISH_NPM == 'true'
     runs-on: ubuntu-latest
@@ -197,7 +183,7 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - name: publish
-        working-directory: sdk/node
+        working-directory: hallpass-ts
         run: |
           set -eu
           npm install --global npm@^11.5.1

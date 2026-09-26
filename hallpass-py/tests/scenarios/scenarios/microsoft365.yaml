@@ -1,0 +1,125 @@
+# microsoft365: Microsoft Graph with the client credentials grant, both
+# endpoints (authority_url and url) pointed at the fake upstream.
+connections:
+  - id: m365
+    integration: microsoft365
+    tenant_id: 11111111-1111-1111-1111-111111111111
+    client_id: 22222222-2222-2222-2222-222222222222
+    credential: env:HP_PARITY_M365_SECRET
+    authority_url: "{{url}}"
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+  # A second Graph base under the same fake, whose user filter finds two users.
+  - id: m365-amb
+    integration: microsoft365
+    tenant_id: 11111111-1111-1111-1111-111111111111
+    client_id: 22222222-2222-2222-2222-222222222222
+    credential: env:HP_PARITY_M365_SECRET
+    authority_url: "{{url}}"
+    url: "{{url}}/amb"
+    ca_file: "{{ca_file}}"
+  # A tenant whose token endpoint rejects the client.
+  - id: m365-badcred
+    integration: microsoft365
+    tenant_id: contoso.onmicrosoft.com
+    client_id: 22222222-2222-2222-2222-222222222222
+    credential: env:HP_PARITY_M365_SECRET
+    authority_url: "{{url}}"
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+env:
+  HP_PARITY_M365_SECRET: s3cret
+upstream:
+  - {method: POST, path: /11111111-1111-1111-1111-111111111111/oauth2/v2.0/token, json: {access_token: tok, token_type: Bearer, expires_in: 3599}}
+  - {method: POST, path: /contoso.onmicrosoft.com/oauth2/v2.0/token, status: 401, json: {error: invalid_client, error_description: bad secret}}
+  - method: GET
+    path: /v1.0/users/dana@example.com
+    json: {id: aaaaaaaa-0000-0000-0000-000000000001, userPrincipalName: dana@example.com, mail: dana@example.com, accountEnabled: true, userType: Member}
+  - method: GET
+    path: /v1.0/users/bob@example.com
+    json: {id: aaaaaaaa-0000-0000-0000-000000000002, userPrincipalName: bob@example.com, mail: bob@example.com, accountEnabled: true, userType: Member}
+  - method: GET
+    path: /v1.0/users/guest@example.com
+    json: {id: aaaaaaaa-0000-0000-0000-000000000003, userPrincipalName: "guest_gmail.com#EXT#@example.onmicrosoft.com", mail: guest@example.com, accountEnabled: true, userType: Guest}
+  - method: GET
+    path: /v1.0/users/off@example.com
+    json: {id: aaaaaaaa-0000-0000-0000-000000000004, userPrincipalName: off@example.com, mail: off@example.com, accountEnabled: false, userType: Member}
+  - method: GET
+    path: /v1.0/users/nostate@example.com
+    json: {id: aaaaaaaa-0000-0000-0000-000000000005, userPrincipalName: nostate@example.com, mail: nostate@example.com, userType: Member}
+  # The mail and proxyAddresses filters find nobody (nobody@example.com has no
+  # direct route, so its lookup answers 404 first).
+  - {method: GET, path: /v1.0/users, json: {value: []}}
+  - method: GET
+    path: /amb/v1.0/users
+    json:
+      value:
+        - {id: aaaaaaaa-0000-0000-0000-000000000001, userPrincipalName: dana@example.com, accountEnabled: true}
+        - {id: aaaaaaaa-0000-0000-0000-000000000002, userPrincipalName: bob@example.com, accountEnabled: true}
+  - {method: GET, path: /v1.0/groups/bbbbbbbb-0000-0000-0000-000000000001, json: {id: bbbbbbbb-0000-0000-0000-000000000001, visibility: Private}}
+  - {method: GET, path: /v1.0/groups/bbbbbbbb-0000-0000-0000-000000000003, json: {id: bbbbbbbb-0000-0000-0000-000000000003, visibility: HiddenMembership}}
+  - {method: GET, path: /v1.0/groups/bbbbbbbb-0000-0000-0000-000000000099, status: 404, json: {error: {code: Request_ResourceNotFound, message: gone}}}
+  - {method: POST, path: /v1.0/users/aaaaaaaa-0000-0000-0000-000000000001/checkMemberGroups, json: {value: [bbbbbbbb-0000-0000-0000-000000000001]}}
+  - {method: POST, path: /v1.0/users/aaaaaaaa-0000-0000-0000-000000000002/checkMemberGroups, json: {value: []}}
+  - {method: GET, path: /v1.0/users/aaaaaaaa-0000-0000-0000-000000000001/transitiveMemberOf/microsoft.graph.directoryRole, json: {value: [{roleTemplateId: cccccccc-0000-0000-0000-000000000001}]}}
+  - method: GET
+    path: /v1.0/users/aaaaaaaa-0000-0000-0000-000000000002/transitiveMemberOf/microsoft.graph.directoryRole
+    status: 403
+    json: {error: {code: Authorization_RequestDenied, message: denied}}
+  - method: GET
+    path: /v1.0/teams/dddddddd-0000-0000-0000-000000000001/members
+    json:
+      value:
+        - {userId: aaaaaaaa-0000-0000-0000-000000000001, roles: [owner]}
+        - {userId: aaaaaaaa-0000-0000-0000-000000000002, roles: []}
+  - {method: GET, path: /v1.0/teams/dddddddd-0000-0000-0000-000000000002/members, status: 500, json: {error: {code: InternalServerError, message: boom}}}
+  - {method: GET, path: /v1.0/teams/dddddddd-0000-0000-0000-000000000003/members, status: 429, headers: {Retry-After: "30"}, json: {error: {code: TooManyRequests, message: slow}}}
+  - {method: GET, path: "/v1.0/teams/dddddddd-0000-0000-0000-000000000001/channels/19:priv@thread.tacv2", json: {id: "19:priv@thread.tacv2", membershipType: private}}
+  - {method: GET, path: "/v1.0/teams/dddddddd-0000-0000-0000-000000000001/channels/19:priv@thread.tacv2/members", json: {value: [{userId: aaaaaaaa-0000-0000-0000-000000000001, roles: []}]}}
+  - {method: GET, path: "/v1.0/teams/dddddddd-0000-0000-0000-000000000001/channels/19:odd@thread.tacv2", json: {id: "19:odd@thread.tacv2", membershipType: unknownFutureValue}}
+  - method: GET
+    path: "/v1.0/drives/b!drive1/items/item1/permissions"
+    json:
+      value:
+        - {roles: [read], grantedToV2: {user: {id: aaaaaaaa-0000-0000-0000-000000000001}}}
+        - {roles: [write], link: {scope: organization}}
+  - method: GET
+    path: "/v1.0/drives/b!drive1/items/item2/permissions"
+    json:
+      value:
+        - {roles: [read], link: {scope: existingAccess}}
+  - {method: GET, path: "/v1.0/drives/b!drive1", json: {id: "b!drive1"}}
+checks:
+  - {user: dana@example.com, action: user.active, resource: "user:dana@example.com", want: allowed}
+  - {user: dana@example.com, action: user.active, resource: "user:bob@example.com", want: unsupported}
+  - {user: off@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: denied}
+  - {user: nostate@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: unsupported}
+  - {user: nobody@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: user_not_found}
+  - {user: shared@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", connection: m365-amb, want: user_ambiguous}
+  - {user: dana@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: allowed}
+  - {user: bob@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: denied}
+  - {user: guest@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000003", want: resource_not_visible}
+  - {user: bob@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000003", want: unsupported}
+  - {user: dana@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000099", want: resource_not_visible}
+  - {user: dana@example.com, action: group.member, resource: "group:not-a-guid", want: invalid_request}
+  - {user: dana@example.com, action: role.member, resource: "role:CCCCCCCC-0000-0000-0000-000000000001", want: allowed}
+  - {user: bob@example.com, action: role.member, resource: "role:cccccccc-0000-0000-0000-000000000001", want: credential_rejected}
+  - {user: dana@example.com, action: team.owner, resource: "team:dddddddd-0000-0000-0000-000000000001", want: allowed}
+  - {user: bob@example.com, action: team.owner, resource: "team:dddddddd-0000-0000-0000-000000000001", want: denied}
+  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000001", want: allowed}
+  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000002", want: upstream_error}
+  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000003", want: upstream_rate_limited}
+  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000009", want: resource_not_visible}
+  - {user: dana@example.com, action: channel.read, resource: "team:dddddddd-0000-0000-0000-000000000001/channel/19:priv@thread.tacv2", want: allowed}
+  - {user: bob@example.com, action: channel.read, resource: "team:dddddddd-0000-0000-0000-000000000001/channel/19:priv@thread.tacv2", want: denied}
+  - {user: bob@example.com, action: channel.read, resource: "team:dddddddd-0000-0000-0000-000000000001/channel/19:odd@thread.tacv2", want: unsupported}
+  - {user: dana@example.com, action: file.read, resource: "drive:b!drive1/item/item1", want: allowed}
+  - {user: bob@example.com, action: file.edit, resource: "drive:b!drive1/item/item1", want: allowed}
+  - {user: guest@example.com, action: file.read, resource: "drive:b!drive1/item/item1", want: denied}
+  - {user: dana@example.com, action: file.share, resource: "drive:b!drive1/item/item1", want: unsupported}
+  - {user: dana@example.com, action: file.read, resource: "drive:b!drive1/item/item2", want: unsupported}
+  - {user: dana@example.com, action: file.read, resource: "drive:b!drive1/item/missing", want: resource_not_visible}
+  - {user: dana@example.com, action: mail.send_as_self, resource: "mailbox:Dana@Example.com", want: allowed}
+  - {user: dana@example.com, action: mail.send_as, resource: "mailbox:bob@example.com", want: unsupported}
+  - {user: dana@example.com, action: calendar.write, resource: "mailbox:bob@example.com", want: unsupported}
+  - {user: dana@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", connection: m365-badcred, want: credential_rejected}

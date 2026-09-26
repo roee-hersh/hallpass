@@ -1,0 +1,192 @@
+# The confluence integration with auth_mode basic, users resolved by email
+# through a jira identity connection on the same fake site: the content
+# permission check, space permission lists (direct, group, administrator,
+# unresolved principals), exact space keys and upstream failures. Each
+# connection's site URL carries its own path prefix so it gets its own
+# routes.
+connections:
+  - id: jira-id
+    integration: jira
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    username: jirabot@example.com
+    credential: env:JIRA_TOKEN
+  - id: conf
+    integration: confluence
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    auth_mode: basic
+    username: confbot@example.com
+    credential: env:CONF_TOKEN
+    identity_connection: jira-id
+  - id: conf-noid
+    integration: confluence
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    username: confbot@example.com
+    credential: env:CONF_TOKEN
+  - id: conf-admin
+    integration: confluence
+    url: "{{url}}/admin"
+    ca_file: "{{ca_file}}"
+    username: confbot@example.com
+    credential: env:CONF_TOKEN
+    identity_connection: jira-id
+  - id: conf-forbidden
+    integration: confluence
+    url: "{{url}}/forbidden"
+    ca_file: "{{ca_file}}"
+    username: confbot@example.com
+    credential: env:CONF_TOKEN
+    identity_connection: jira-id
+  - id: conf-dup
+    integration: confluence
+    url: "{{url}}/dup"
+    ca_file: "{{ca_file}}"
+    username: confbot@example.com
+    credential: env:CONF_TOKEN
+    identity_connection: jira-id
+  - id: conf-rejected
+    integration: confluence
+    url: "{{url}}/rejected"
+    ca_file: "{{ca_file}}"
+    username: confbot@example.com
+    credential: env:CONF_TOKEN
+    identity_connection: jira-id
+  - id: conf-broken
+    integration: confluence
+    url: "{{url}}/broken"
+    ca_file: "{{ca_file}}"
+    username: confbot@example.com
+    credential: env:CONF_TOKEN
+    identity_connection: jira-id
+env:
+  JIRA_TOKEN: parity-jira-token
+  CONF_TOKEN: parity-confluence-token
+upstream:
+  # the identity connection's user search
+  - method: GET
+    path: /rest/api/3/user/search
+    json:
+      - {accountId: acc-dana, accountType: atlassian, active: true, emailAddress: dana@example.com, displayName: Dana}
+      - {accountId: acc-noname, accountType: atlassian, active: true, emailAddress: noname@example.com}
+      - {accountId: acc-twin1, accountType: atlassian, active: true, emailAddress: twin@example.com, displayName: Twin 1}
+      - {accountId: acc-twin2, accountType: atlassian, active: true, emailAddress: twin@example.com, displayName: Twin 2}
+  # conf: content checks, one answer per content id
+  - method: POST
+    path: /wiki/rest/api/content/100/permission/check
+    json: {hasPermission: true, errors: []}
+  - method: POST
+    path: /wiki/rest/api/content/200/permission/check
+    json: {hasPermission: false, errors: []}
+  - method: POST
+    path: /wiki/rest/api/content/300/permission/check
+    json: {hasPermission: false, errors: [{message: {key: not.applicable, args: []}}, {message: {key: other}}]}
+  - method: POST
+    path: /wiki/rest/api/content/403/permission/check
+    status: 403
+    json: {message: forbidden}
+  - method: POST
+    path: /wiki/rest/api/content/500/permission/check
+    status: 500
+    body: oops
+  - method: POST
+    path: /wiki/rest/api/content/600/permission/check
+    json: {hasPermission: "true"}
+  # conf: space DEV
+  - method: GET
+    path: /wiki/api/v2/spaces
+    json: {results: [{id: "98307", key: DEV, name: Development}], _links: {}}
+  - method: GET
+    path: /wiki/api/v2/spaces/98307/permissions
+    json:
+      results:
+        - {id: "1", principal: {type: user, id: acc-dana}, operation: {key: export, targetType: space}}
+        - {id: "2", principal: {type: user, id: acc-other}, operation: {key: administer, targetType: space}}
+        - {id: "3", principal: {type: group, id: grp-eng}, operation: {key: create, targetType: page}}
+        - {id: "4", principal: {type: group, id: grp-x}, operation: {key: create, targetType: blogpost}}
+        - {id: "5", principal: {type: anonymous}, operation: {key: read, targetType: space}}
+        - {id: "6", principal: {type: role, id: site-admins}, operation: {key: read, targetType: space}}
+      _links: {}
+  - method: GET
+    path: /wiki/rest/api/user/memberof
+    json:
+      results:
+        - {type: group, id: grp-a, name: alpha}
+        - {type: group, id: grp-eng, name: engineering}
+      _links: {base: "https://example.atlassian.net/wiki"}
+  # conf-admin: administer/space through a group
+  - method: GET
+    path: /admin/wiki/api/v2/spaces
+    json: {results: [{id: "98308", key: OPS}], _links: {}}
+  - method: GET
+    path: /admin/wiki/api/v2/spaces/98308/permissions
+    json:
+      results:
+        - {principal: {type: group, id: grp-admins}, operation: {key: administer, targetType: space}}
+        - {principal: {type: group, id: grp-eng}, operation: {key: read, targetType: space}}
+      _links: {}
+  - method: GET
+    path: /admin/wiki/rest/api/user/memberof
+    json:
+      results:
+        - {type: group, id: grp-admins}
+      _links: {}
+  # conf-forbidden: the permission list may not be read
+  - method: GET
+    path: /forbidden/wiki/api/v2/spaces
+    json: {results: [{id: "98307", key: DEV}], _links: {}}
+  - method: GET
+    path: /forbidden/wiki/api/v2/spaces/98307/permissions
+    status: 403
+    json: {message: forbidden}
+  # conf-dup: two spaces with the same key
+  - method: GET
+    path: /dup/wiki/api/v2/spaces
+    json: {results: [{id: "98307", key: DEV}, {id: "98308", key: DEV}], _links: {}}
+  # conf-rejected: the credential is refused
+  - method: POST
+    path: /rejected/wiki/rest/api/content/100/permission/check
+    status: 401
+    json: {message: unauthorized}
+  - method: GET
+    path: /rejected/wiki/api/v2/spaces
+    status: 404
+    json: {message: gone}
+  # conf-broken: the space lookup fails
+  - method: GET
+    path: /broken/wiki/api/v2/spaces
+    status: 502
+    body: bad gateway
+checks:
+  - {user: dana@example.com, action: page.read, resource: "page:100", connection: conf, want: allowed}
+  - {user: noname@example.com, action: blogpost.update, resource: "blogpost:100", connection: conf, want: allowed}
+  - {user: dana@example.com, action: page.update, resource: "page:200", connection: conf, want: denied}
+  - {user: dana@example.com, action: blogpost.read, resource: "blogpost:300", connection: conf, want: unsupported}
+  - {user: dana@example.com, action: page.read, resource: "page:999", connection: conf, want: resource_not_visible}
+  - {user: dana@example.com, action: page.delete, resource: "page:403", connection: conf, want: credential_rejected}
+  - {user: dana@example.com, action: page.read, resource: "page:500", connection: conf, want: upstream_error}
+  - {user: dana@example.com, action: page.read, resource: "page:600", connection: conf, want: upstream_error}
+  - {user: dana@example.com, action: space.export, resource: "space:DEV", connection: conf, want: allowed}
+  - {user: dana@example.com, action: page.create, resource: "space:DEV", connection: conf, want: allowed}
+  - {user: dana@example.com, action: blogpost.create, resource: "space:DEV", connection: conf, want: denied}
+  - {user: dana@example.com, action: comment.create, resource: "space:DEV", connection: conf, want: denied}
+  - {user: dana@example.com, action: space.admin, resource: "space:DEV", connection: conf, want: denied}
+  - {user: dana@example.com, action: space.read, resource: "space:DEV", connection: conf, want: unsupported}
+  - {user: dana@example.com, action: space.export, resource: "space:dev", connection: conf, want: unsupported}
+  - {user: twin@example.com, action: page.read, resource: "page:100", connection: conf, want: user_ambiguous}
+  - {user: nobody@example.com, action: page.read, resource: "page:100", connection: conf, want: user_not_found}
+  - {user: dana@example.com, action: page.read, resource: "space:DEV", connection: conf, want: invalid_request}
+  - {user: dana@example.com, action: page.create, resource: "page:100", connection: conf, want: invalid_request}
+  - {user: dana@example.com, action: page.read, resource: "page:0", connection: conf, want: invalid_request}
+  - {user: dana@example.com, action: space.read, resource: "space:bad key", connection: conf, want: invalid_request}
+  - {user: dana@example.com, action: page.read, resource: "global", connection: conf, want: invalid_request}
+  - {user: dana@example.com, action: page.move, resource: "page:100", connection: conf, want: unknown_action}
+  - {user: dana@example.com, action: page.read, resource: "page:100", connection: conf-noid, want: unsupported}
+  - {user: dana@example.com, action: space.export, resource: "space:OPS", connection: conf-admin, want: allowed}
+  - {user: noname@example.com, action: page.restrict, resource: "space:OPS", connection: conf-admin, want: allowed}
+  - {user: dana@example.com, action: space.export, resource: "space:DEV", connection: conf-forbidden, want: credential_rejected}
+  - {user: dana@example.com, action: space.export, resource: "space:DEV", connection: conf-dup, want: unsupported}
+  - {user: dana@example.com, action: page.read, resource: "page:100", connection: conf-rejected, want: credential_rejected}
+  - {user: dana@example.com, action: space.read, resource: "space:DEV", connection: conf-rejected, want: resource_not_visible}
+  - {user: dana@example.com, action: space.read, resource: "space:DEV", connection: conf-broken, want: upstream_error}

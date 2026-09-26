@@ -145,8 +145,9 @@ account. Marked `UNVERIFIED` in the code:
 
 ## Test
 
-`go test ./internal/integrations/zendesk/` runs a fake Zendesk validated against the Support API
+`python -m pytest tests/integrations/zendesk` (in `hallpass-py`) runs a fake Zendesk validated against the Support API
 OpenAPI description when `HALLPASS_SPECS_DIR` holds `zendesk.spec` (`test/specs/fetch.sh`). The
 fake has an administrator, three custom-role agents (within-groups, assigned-only, within-organization),
-a light agent, a plain agent restricted to groups and two end users. `FuzzParseTarget` checks that
+a light agent, a plain agent restricted to groups and two end users. A property test
+(`test_fuzz_parse_target`) checks that
 only plain decimal ids reach the API.

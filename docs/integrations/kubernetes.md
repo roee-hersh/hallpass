@@ -119,4 +119,5 @@ anything beyond that one rule, listing the extra verbs and resources.
 ## Test
 
 Unit tests run against a fake API server. `test/kind/run.sh` creates a kind cluster, applies
-`test/kind/hallpass-rbac.yaml` and `test/kind/fixtures.yaml`, and runs `test/e2e` against it.
+`test/kind/hallpass-rbac.yaml` and `test/kind/fixtures.yaml`, and runs the end-to-end tests
+(`hallpass-py/tests/e2e`) against it.

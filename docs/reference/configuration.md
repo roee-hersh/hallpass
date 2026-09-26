@@ -1,6 +1,8 @@
 # Configuration reference
 
-hallpass reads one YAML file, `/etc/hallpass/hallpass.yaml` by default (`-config` changes it).
+hallpass reads one YAML file: `/etc/hallpass/hallpass.yaml` by default for the command (`-config`
+changes it), or the path given to `Hallpass.from_config`. The same connections can also be given in
+code ([below](#connections-in-code)).
 [`examples/hallpass.yaml`](../../examples/hallpass.yaml) has a commented example for every
 integration, and `hallpass catalog <integration>` prints an integration's keys and actions.
 
@@ -38,8 +40,8 @@ at the smaller of 5 s and the timeout. URLs must be `https://`; plain `http://` 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `api_key` | required | The bearer key callers send, as `env:NAME` or `file:/path` |
-| `listen` | `:8080` | Address `serve` listens on. `-listen` overrides it |
+| `api_key` | required for `serve` | The bearer key callers send, as `env:NAME` or `file:/path`. `Hallpass.from_config` does not need it |
+| `listen` | `:8080` | Address `serve` listens on (`:8080` is every IPv4 and IPv6 address). `-listen` overrides it |
 | `decision_log` | `stderr` | A path, `stderr`, `stdout` or `none`. See [Decision log](../guides/operating.md#decision-log) |
 | `decision_cache_seconds` | `30` | How long `allow` and `deny` answers are reused. `0` disables |
 | `identity_cache_seconds` | `900` | How long an email-to-account lookup is reused, per connection, user and groups |
@@ -58,6 +60,32 @@ at the smaller of 5 s and the timeout. URLs must be `https://`; plain `http://` 
 
 Every other key belongs to the integration and is listed on its page under
 [integrations](../integrations/README.md).
+
+## Connections in code
+
+`Hallpass(connections=[...])` takes the connections as a list of mappings with exactly the keys of
+the file, validated the same way (with `<connections>` in place of the file name in errors). A
+secret key takes a reference:
+
+| Value | Reads |
+|---|---|
+| `hallpass.env("JIRA_TOKEN")` or `"env:JIRA_TOKEN"` | the environment variable |
+| `hallpass.file("/run/secrets/jira")` or `"file:/run/secrets/jira"` | the file, on every use |
+| `hallpass.literal(token)` | a value your code already holds; never printed or logged |
+
+A plain string is rejected there as in the file. The top-level keys are keyword arguments:
+`decision_cache_seconds=30`, `identity_cache_seconds=900`, `decision_log="none"`; `listen` and
+`api_key` belong to the server.
+
+```python
+import hallpass
+
+hp = hallpass.Hallpass(connections=[
+    {"id": "jira-main", "integration": "jira", "url": "https://acme.atlassian.net",
+     "username": "hallpass-bot@acme.com", "credential": hallpass.env("JIRA_TOKEN")},
+    {"id": "pagerduty", "integration": "pagerduty", "credential": "file:/run/secrets/pagerduty"},
+], decision_log="stderr")
+```
 
 ## Checking a file
 

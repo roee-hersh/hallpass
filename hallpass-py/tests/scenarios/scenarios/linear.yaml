@@ -1,0 +1,204 @@
+# Linear: every query POSTs to one GraphQL endpoint, so each connection gets
+# its own URL prefix and one static response whose data carries the answer
+# to every query at once (users, user.teamMemberships, teams, issue,
+# project); each query decodes only its own field.
+x-teams:
+  eng: &eng {id: 10000000-0000-4000-8000-000000000001, key: ENG, name: Engineering, visibility: public, archivedAt: null}
+  sec: &sec {id: 10000000-0000-4000-8000-000000000002, key: SEC, name: Security, visibility: private, archivedAt: null}
+  rst: &rst {id: 10000000-0000-4000-8000-000000000003, key: RST, name: Restricted, visibility: restricted, archivedAt: null}
+  old: &old {id: 10000000-0000-4000-8000-000000000004, key: OLD, name: Old, visibility: public, archivedAt: "2026-01-01T00:00:00.000Z"}
+x-users:
+  bob: &bob {id: 00000000-0000-4000-8000-000000000004, email: bob@example.com, name: Bob, active: true, admin: false, owner: false, guest: false, app: false, disableReason: null}
+x-data:
+  bob: &bob-data
+    users: {nodes: [*bob]}
+    user: {teamMemberships: {nodes: [], pageInfo: {hasNextPage: false, endCursor: null}}}
+    teams: {nodes: [*eng]}
+    issue: {id: 30000000-0000-4000-8000-000000000001, identifier: ENG-1, trashed: false, archivedAt: null, team: *eng}
+    project: {id: 20000000-0000-4000-8000-000000000002, name: Sec, slugId: sec-proj, trashed: false, archivedAt: null, teams: {nodes: [*sec]}}
+connections:
+  - {id: linear-bob, integration: linear, url: "{{url}}/bob/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-dana, integration: linear, url: "{{url}}/dana/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-guest, integration: linear, url: "{{url}}/guest/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-admin, integration: linear, url: "{{url}}/admin/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY, auth_mode: oauth}
+  - {id: linear-susp, integration: linear, url: "{{url}}/susp/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-app, integration: linear, url: "{{url}}/app/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-restricted, integration: linear, url: "{{url}}/restricted/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-archived, integration: linear, url: "{{url}}/archived/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-trashed, integration: linear, url: "{{url}}/trashed/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-empty, integration: linear, url: "{{url}}/empty/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-vanished, integration: linear, url: "{{url}}/vanished/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-dup, integration: linear, url: "{{url}}/dup/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-badid, integration: linear, url: "{{url}}/badid/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-ratelimited, integration: linear, url: "{{url}}/ratelimited/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-ratelimited-text, integration: linear, url: "{{url}}/rltext/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-forbidden, integration: linear, url: "{{url}}/forbidden/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-gqlerror, integration: linear, url: "{{url}}/gqlerror/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-401, integration: linear, url: "{{url}}/e401/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-403, integration: linear, url: "{{url}}/e403/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-418, integration: linear, url: "{{url}}/e418/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-500, integration: linear, url: "{{url}}/e500/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-nodata, integration: linear, url: "{{url}}/nodata/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-baddata, integration: linear, url: "{{url}}/baddata/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+  - {id: linear-garbage, integration: linear, url: "{{url}}/garbage/graphql", ca_file: "{{ca_file}}", credential: env:LINEAR_PARITY_KEY}
+env:
+  LINEAR_PARITY_KEY: lin_api_parity
+upstream:
+  - {method: POST, path: /bob/graphql, json: {data: *bob-data}}
+  - method: POST
+    path: /dana/graphql
+    json:
+      data:
+        <<: *bob-data
+        users: {nodes: [{<<: *bob, id: 00000000-0000-4000-8000-000000000003, email: Dana@Example.com}]}
+        user: {teamMemberships: {nodes: [{owner: false, team: {id: 10000000-0000-4000-8000-000000000002, key: SEC}}, {owner: true, team: {id: "", key: X}}], pageInfo: {hasNextPage: false, endCursor: null}}}
+        teams: {nodes: [*sec]}
+        issue: {id: 30000000-0000-4000-8000-000000000003, identifier: SEC-1, trashed: false, archivedAt: null, team: *sec}
+        project: {id: 20000000-0000-4000-8000-000000000003, trashed: false, teams: {nodes: [*sec, *eng]}}
+  - method: POST
+    path: /guest/graphql
+    json:
+      data:
+        <<: *bob-data
+        users: {nodes: [{<<: *bob, email: gus@example.com, guest: true}]}
+        project: {id: 20000000-0000-4000-8000-000000000001, trashed: false, teams: {nodes: [*eng]}}
+  - method: POST
+    path: /admin/graphql
+    json:
+      data:
+        <<: *bob-data
+        users: {nodes: [{<<: *bob, email: admin@example.com, admin: true}]}
+        teams: {nodes: [*sec]}
+        issue: {id: 30000000-0000-4000-8000-000000000003, identifier: SEC-1, trashed: false, archivedAt: null, team: *sec}
+  - method: POST
+    path: /susp/graphql
+    json:
+      data:
+        <<: *bob-data
+        users: {nodes: [{<<: *bob, email: susp@example.com, active: false, disableReason: admin suspension}]}
+  - method: POST
+    path: /app/graphql
+    json:
+      data:
+        <<: *bob-data
+        users: {nodes: [{<<: *bob, email: app@example.com, app: true}]}
+  - method: POST
+    path: /restricted/graphql
+    json:
+      data:
+        <<: *bob-data
+        teams: {nodes: [*rst]}
+        issue: {id: 30000000-0000-4000-8000-000000000004, identifier: RST-1, trashed: false, archivedAt: null, team: *rst}
+        project: {id: 20000000-0000-4000-8000-000000000004, trashed: false, teams: {nodes: [*rst, *sec]}}
+  - method: POST
+    path: /archived/graphql
+    json:
+      data:
+        <<: *bob-data
+        teams: {nodes: [*old]}
+        project: {id: 20000000-0000-4000-8000-000000000004, trashed: false, teams: {nodes: []}}
+  - method: POST
+    path: /trashed/graphql
+    json:
+      data:
+        <<: *bob-data
+        teams: {nodes: [*eng, *sec]}
+        issue: {id: 30000000-0000-4000-8000-000000000002, identifier: ENG-2, trashed: true, archivedAt: null, team: *eng}
+        project: {id: 20000000-0000-4000-8000-000000000001, trashed: true, teams: {nodes: [*eng]}}
+  - method: POST
+    path: /empty/graphql
+    json:
+      data:
+        <<: *bob-data
+        teams: {nodes: []}
+        issue: null
+        project: null
+  - {method: POST, path: /vanished/graphql, json: {errors: [{message: "Entity not found: User - Could not find referenced User.", extensions: {type: invalid input, userError: true}}]}}
+  - method: POST
+    path: /dup/graphql
+    json:
+      data:
+        <<: *bob-data
+        users: {nodes: [*bob, {<<: *bob, id: 00000000-0000-4000-8000-0000000000ab, email: BOB@example.com}]}
+  - method: POST
+    path: /badid/graphql
+    json:
+      data:
+        <<: *bob-data
+        users: {nodes: [{<<: *bob, id: "not-a-uuid"}]}
+  - {method: POST, path: /ratelimited/graphql, status: 400, json: {errors: [{message: slow down, extensions: {type: ratelimited}}]}}
+  - {method: POST, path: /rltext/graphql, status: 400, json: {errors: [{message: "Rate limit: RATELIMITED", extensions: {type: something else}}]}}
+  - {method: POST, path: /forbidden/graphql, json: {errors: [{message: nope, extensions: {type: Forbidden}}]}}
+  - {method: POST, path: /gqlerror/graphql, status: 400, json: {errors: [{message: "Cannot query field"}]}}
+  - {method: POST, path: /e401/graphql, status: 401, body: "{}"}
+  - {method: POST, path: /e403/graphql, status: 403, body: "{}"}
+  - {method: POST, path: /e418/graphql, status: 418, body: "{}"}
+  - {method: POST, path: /e500/graphql, status: 500, body: "boom"}
+  - {method: POST, path: /nodata/graphql, json: {data: null}}
+  - method: POST
+    path: /baddata/graphql
+    json:
+      data:
+        <<: *bob-data
+        users: {nodes: [{<<: *bob, active: "yes"}]}
+  - {method: POST, path: /garbage/graphql, body: "<html>not json</html>"}
+checks:
+  - {user: bob@example.com, action: workspace.member, resource: workspace, want: allowed}
+  - {user: bob@example.com, action: workspace.admin, resource: workspace, want: denied}
+  - {user: bob@example.com, action: workspace.owner, resource: workspace, want: denied}
+  - {user: bob@example.com, action: team.view, resource: "team:ENG", want: allowed}
+  - {user: bob@example.com, action: team.view, resource: "team:10000000-0000-4000-8000-000000000001", want: allowed}
+  - {user: bob@example.com, action: team.member, resource: "team:eng", want: denied}
+  - {user: bob@example.com, action: team.admin, resource: "team:ENG", want: denied}
+  - {user: bob@example.com, action: issue.view, resource: "issue:ENG-1", want: allowed}
+  - {user: bob@example.com, action: issue.edit, resource: "issue:eng-1", want: allowed}
+  - {user: bob@example.com, action: project.view, resource: "project:sec-proj", want: denied}
+  - {user: BOB@Example.com, action: workspace.member, resource: workspace, want: allowed}
+  - {user: nobody@example.com, action: workspace.member, resource: workspace, want: user_not_found}
+  - {user: bob@example.com, action: team.view, resource: "team:eng team", want: invalid_request}
+  - {user: bob@example.com, action: team.view, resource: "team:TOOLONGTEAMKEY", want: invalid_request}
+  - {user: bob@example.com, action: issue.view, resource: "issue:ENG-0", want: invalid_request}
+  - {user: bob@example.com, action: project.view, resource: "project:a/b", want: invalid_request}
+  - {user: bob@example.com, action: workspace.admin, resource: "workspace:1", want: invalid_request}
+  - {user: bob@example.com, action: team.view, resource: "issue:ENG-1", want: invalid_request}
+  - {user: bob@example.com, action: team.view, resource: "team:ENG?x=1", want: invalid_request}
+  - {user: dana@example.com, connection: linear-dana, action: team.view, resource: "team:SEC", want: allowed}
+  - {user: dana@example.com, connection: linear-dana, action: team.member, resource: "team:SEC", want: allowed}
+  - {user: dana@example.com, connection: linear-dana, action: team.admin, resource: "team:SEC", want: unsupported}
+  - {user: dana@example.com, connection: linear-dana, action: issue.view, resource: "issue:SEC-1", want: allowed}
+  - {user: dana@example.com, connection: linear-dana, action: project.view, resource: "project:both-proj", want: allowed}
+  - {user: gus@example.com, connection: linear-guest, action: workspace.member, resource: workspace, want: denied}
+  - {user: gus@example.com, connection: linear-guest, action: team.view, resource: "team:ENG", want: denied}
+  - {user: gus@example.com, connection: linear-guest, action: project.view, resource: "project:eng-proj", want: denied}
+  - {user: admin@example.com, connection: linear-admin, action: workspace.admin, resource: workspace, want: allowed}
+  - {user: admin@example.com, connection: linear-admin, action: team.view, resource: "team:SEC", want: unsupported}
+  - {user: admin@example.com, connection: linear-admin, action: team.admin, resource: "team:SEC", want: allowed}
+  - {user: admin@example.com, connection: linear-admin, action: issue.view, resource: "issue:SEC-1", want: unsupported}
+  - {user: susp@example.com, connection: linear-susp, action: workspace.member, resource: workspace, want: denied}
+  - {user: app@example.com, connection: linear-app, action: workspace.member, resource: workspace, want: denied}
+  - {user: app@example.com, connection: linear-app, action: team.view, resource: "team:ENG", want: unsupported}
+  - {user: bob@example.com, connection: linear-restricted, action: team.view, resource: "team:RST", want: unsupported}
+  - {user: bob@example.com, connection: linear-restricted, action: issue.view, resource: "issue:RST-1", want: unsupported}
+  - {user: bob@example.com, connection: linear-restricted, action: project.view, resource: "project:x", want: unsupported}
+  - {user: bob@example.com, connection: linear-archived, action: team.member, resource: "team:OLD", want: unsupported}
+  - {user: bob@example.com, connection: linear-archived, action: project.view, resource: "project:x", want: unsupported}
+  - {user: bob@example.com, connection: linear-trashed, action: team.view, resource: "team:ENG", want: upstream_error}
+  - {user: bob@example.com, connection: linear-trashed, action: issue.view, resource: "issue:ENG-2", want: unsupported}
+  - {user: bob@example.com, connection: linear-trashed, action: project.view, resource: "project:x", want: unsupported}
+  - {user: bob@example.com, connection: linear-empty, action: team.view, resource: "team:NOPE", want: resource_not_visible}
+  - {user: bob@example.com, connection: linear-empty, action: issue.view, resource: "issue:ENG-9", want: resource_not_visible}
+  - {user: bob@example.com, connection: linear-empty, action: project.view, resource: "project:missing", want: resource_not_visible}
+  - {user: bob@example.com, connection: linear-vanished, action: workspace.member, resource: workspace, want: upstream_error}
+  - {user: bob@example.com, connection: linear-dup, action: workspace.member, resource: workspace, want: user_ambiguous}
+  - {user: bob@example.com, connection: linear-badid, action: workspace.member, resource: workspace, want: upstream_error}
+  - {user: bob@example.com, connection: linear-ratelimited, action: workspace.member, resource: workspace, want: upstream_rate_limited}
+  - {user: bob@example.com, connection: linear-ratelimited-text, action: workspace.member, resource: workspace, want: upstream_rate_limited}
+  - {user: bob@example.com, connection: linear-forbidden, action: workspace.member, resource: workspace, want: credential_rejected}
+  - {user: bob@example.com, connection: linear-gqlerror, action: workspace.member, resource: workspace, want: upstream_error}
+  - {user: bob@example.com, connection: linear-401, action: workspace.member, resource: workspace, want: credential_rejected}
+  - {user: bob@example.com, connection: linear-403, action: workspace.member, resource: workspace, want: credential_rejected}
+  - {user: bob@example.com, connection: linear-418, action: workspace.member, resource: workspace, want: upstream_error}
+  - {user: bob@example.com, connection: linear-500, action: workspace.member, resource: workspace, want: upstream_error}
+  - {user: bob@example.com, connection: linear-nodata, action: workspace.member, resource: workspace, want: upstream_error}
+  - {user: bob@example.com, connection: linear-baddata, action: workspace.member, resource: workspace, want: upstream_error}
+  - {user: bob@example.com, connection: linear-garbage, action: workspace.member, resource: workspace, want: upstream_error}

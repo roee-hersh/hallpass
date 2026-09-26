@@ -2,11 +2,11 @@
 
 Runnable examples for [the agent tools guide](../../docs/guides/agent-tools.md), which explains
 the pattern: check with hallpass before acting, treat `unknown` as deny, and
-never let the model choose the user. The Python versions are in
-[`../agent`](../agent); these follow the same contract. The client they use is
-the [`hallpass-client`](../../sdk/node) package
-(`npm install hallpass-client`);
-here they import its source from `sdk/node` directly.
+never let the model choose the user. The Python examples are in
+[`hallpass-py/examples`](../../hallpass-py/examples). The client these use is
+the [`hallpass-client`](../../hallpass-ts) package
+(`npm install hallpass-client`), which talks to a hallpass server;
+here they import its source from `hallpass-ts` directly.
 
 | File | What it is |
 |---|---|
@@ -23,9 +23,9 @@ write and `dana@example.com` may not.
 Needs Node 22.18 or later (it runs `.ts` files directly) and npm.
 
 ```sh
-# hallpass with the demo connection
+# hallpass with the demo connection (pip install hallpass, or the Docker command from the quickstart)
 export HALLPASS_API_KEY=change-me
-go run ./cmd/hallpass serve -config examples/hallpass.yaml
+hallpass serve -config examples/hallpass.yaml
 
 # the examples' dependencies and tests
 cd examples/agent-ts

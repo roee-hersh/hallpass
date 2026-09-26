@@ -1,9 +1,11 @@
 # Integrations
 
-Twenty-one systems. Two are exercised against the real thing in CI; most validate every request
-their tests make against the vendor's published API description; none has yet been confirmed
-against a live account beyond those two. The live test ([`examples/live-cases.yaml`](../../examples/live-cases.yaml)) is there for
-you to run against your own systems before you rely on an integration. Every integration's docs
+Twenty-one systems. Two are exercised against the real thing in CI, and vault against a real Vault
+in Docker when one is available; most validate every request their tests make against the vendor's
+published API description; none has yet been confirmed against a live account. The live test
+([`examples/live-cases.yaml`](../../examples/live-cases.yaml),
+[how to run it](../development/testing.md#against-your-own-systems)) is there for you to run against
+your own systems before you rely on an integration. Every integration's docs
 end with an **Unverified** section naming what has not been confirmed; for the six marked *beta*
 that list is long enough that you should read it first.
 
@@ -26,7 +28,7 @@ that list is long enough that you should read it first.
 | [databricks](databricks.md) | ready | fake upstream only |
 | [salesforce](salesforce.md) | beta | fake upstream only; see **Unverified** in its docs |
 | [snowflake](snowflake.md) | beta | fake upstream, validated against the SQL API description; see **Unverified** |
-| [vault](vault.md) | beta | fake upstream, validated against Vault's API description; see **Unverified** |
+| [vault](vault.md) | beta | fake upstream, validated against Vault's API description, and a real Vault dev server in Docker; see **Unverified** |
 | [azure](azure.md) | beta | fake upstream, validated against the Azure authorization API descriptions; see **Unverified** |
 | [linear](linear.md) | beta | fake upstream, validated against Linear's GraphQL schema; see **Unverified** |
 | [zendesk](zendesk.md) | beta | fake upstream, validated against Zendesk's API description; see **Unverified** |
@@ -34,5 +36,5 @@ that list is long enough that you should read it first.
 
 Each page covers the credential to create, the minimum permissions it needs, how the email maps to
 an account, the actions and resources, and what it cannot see. `hallpass catalog <integration>`
-prints the same keys and actions from the binary. To add a system, see
+prints the same keys and actions from the installed package. To add a system, see
 [integration authoring](../development/integration-authoring.md).

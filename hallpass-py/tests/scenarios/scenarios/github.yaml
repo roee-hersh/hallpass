@@ -1,0 +1,224 @@
+# The github integration (GitHub Enterprise Server layout: {url}/api/v3 and
+# {url}/api/graphql) against a static fake of the REST and GraphQL APIs.
+# github: identity_mode template with an email_domains allow-list and a
+# configured installation_id; repository permissions, custom roles, issues,
+# forking, branch rules and protection, organization and team membership
+# and upstream failures. github-saml: identity_mode saml with the
+# installation discovered. github-noprov, github-gqlerr and github-nomint:
+# no SAML identity provider, a GraphQL permission error and an installation
+# the App cannot mint a token for. Each connection's URL carries its own path
+# prefix so it gets its own routes. The App key is a throwaway test key.
+connections:
+  - id: github
+    integration: github
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    organization: acme
+    app_id: Iv1.parity
+    installation_id: "42"
+    credential: env:GH_APP_KEY
+    identity_mode: template
+    email_domains: example.com
+  - id: github-saml
+    integration: github
+    url: "{{url}}/saml"
+    ca_file: "{{ca_file}}"
+    organization: acme
+    app_id: Iv1.parity
+    credential: env:GH_APP_KEY
+  - id: github-noprov
+    integration: github
+    url: "{{url}}/noprov"
+    ca_file: "{{ca_file}}"
+    organization: acme
+    app_id: Iv1.parity
+    installation_id: "42"
+    credential: env:GH_APP_KEY
+  - id: github-gqlerr
+    integration: github
+    url: "{{url}}/gqlerr"
+    ca_file: "{{ca_file}}"
+    organization: acme
+    app_id: Iv1.parity
+    installation_id: "42"
+    credential: env:GH_APP_KEY
+  - id: github-nomint
+    integration: github
+    url: "{{url}}/nomint"
+    ca_file: "{{ca_file}}"
+    organization: acme
+    app_id: Iv1.parity
+    installation_id: "7"
+    credential: env:GH_APP_KEY
+    identity_mode: template
+    email_domains: example.com
+env:
+  GH_APP_KEY: |
+    -----BEGIN RSA PRIVATE KEY-----
+    MIIEowIBAAKCAQEA1joN364lRx96bSE5Qegd07OecfGZTnFpMhzXOYT+iWmjOe1Z
+    oArkrP+nS9YF86++a6SmywE0jZjD/hZojgrc66wL7+83p3GQ6E7fGoabYybyDTAU
+    zMPUfqkkSALM4U28tN9v5+nor2Hc04fgvYLsle39WewzQnpmaqNHYceZrYtKZhN9
+    wKgCl6WUkRRiryc0tUzlqzoLxRlbIAx6R3V5yoEcBRFIrWH4s968TJVV0gVZfBTO
+    Jsz5+HwLVa1SZf7IzW89sQ4LIcYPIQMMwH91X7FebZvAt6cVD35cdhgh1wC8/GYt
+    i4B3XzEptQns2d+RQ4whzW6UIqHALvFbT0UhXQIDAQABAoIBAA1BoB/evSWDQ2+V
+    WHGzC/MsAtX/65QdXQ7PqO1BIG8fP3sTUOkN1cwqMTQIudj9X6F2LALwdnChPR+U
+    lIu6MYBhnat8+F0/Dc/tuqiSHzyXe8r61iDzX5SUobz54au66OMPRRhYxSAsDYx0
+    2TLOqhZavXooLVPapNzuujk2wVROncM1oqZbM1GrPkWx/ZLNeKdSRc1c0qhNMRn1
+    3Y/ePBbXePVOA86w3Y9hJhGuQSCglEOMaINsKMgUThMow3VYkQrk+OuecgaO5uOb
+    olMEvZHKWlXa8TjpkSCAd9IXIRNvxxTmbCg4kXE6mtKT5sCX43HN3lZc4wSbuyWJ
+    2R8kshECgYEA/cczeOSsB2YVtYbM5aJlyxdZlRptuGm231pv1DpcwP2xMCTfjY3l
+    IOF6VK5HRwUGxZSk+wfIyWmrH3G0ny8G9uNbXxtGigLQsCdoAM8FD9vibLg90EVf
+    nJNzOgy6O2d6Znf9vztX4x1Lv3t6G2m5hX4jkbxZeGqpFWzUqrzqyBMCgYEA2Bo0
+    q3l21+7P5uqp+Vanguze5j/nfHrQBDZK545RW2D8X8v8orGt666L4kN0zUHUra/q
+    kocTlFEZ5w3+/duiG3+TSTYfFy//c6p8VgLZ/DTaQ0DPqLWOlVHGbwvmRGultJ8K
+    wigudkbVwbIoUSLlnqftXo/Z0+C9M1E3pcu8fs8CgYAkcC/B0gOpZE0FrX9KEZFQ
+    IeAo+ox6iCNL2q5n6KFczJBee0zmBFO77uQjuIpfdidMw1UU/j8kPFnnv+nRWW1E
+    kcyS0VXFhzXztRTH2PG/HzFZrvKhLvTVhI5s7VroIKmAgQYcKScrYw93RQF5YirT
+    MhNlX4fxNE9m1iOLCGklpQKBgGeNRyfT8GrQeLdCQ2jDaUmHj9ftT1OK1hrumT4U
+    KFANTWHqMYkUcy64WTd284VXwj3oShMkvvEXW74oKsQidq+OlllCoetOiK44R5Q/
+    kY0VFnGboOZK+aP7p4aWwSSQILtIarNW5cyvbMaARGl8u2MnPMtPSyYITyFEDdJY
+    ql5pAoGBANswgI78X0v5DSxeXfgiBHjomPyctDfTNlk1Dm6ehUjAqyiHsKHGW5JM
+    qApMsZp2avo2yJziKLz69htsBroin+tZhR7tivXTCIDCvXtHSEPdGZr4ZDPE7LJa
+    ZDwyP8IpQXEdgkCCczco+sOhCE83qm4R5WZLJGxsUD5SSCfLnB6J
+    -----END RSA PRIVATE KEY-----
+    
+upstream:
+  # Installation tokens, for every connection prefix.
+  - {method: POST, path: /api/v3/app/installations/42/access_tokens, status: 201, json: {token: ghs_parity, expires_at: "2099-01-01T00:00:00Z"}}
+  - {method: POST, path: /saml/api/v3/app/installations/42/access_tokens, status: 201, json: {token: ghs_parity, expires_at: "2099-01-01T00:00:00Z"}}
+  - {method: POST, path: /noprov/api/v3/app/installations/42/access_tokens, status: 201, json: {token: ghs_parity, expires_at: "2099-01-01T00:00:00Z"}}
+  - {method: POST, path: /gqlerr/api/v3/app/installations/42/access_tokens, status: 201, json: {token: ghs_parity, expires_at: "2099-01-01T00:00:00Z"}}
+  - {method: POST, path: /nomint/api/v3/app/installations/7/access_tokens, status: 404, json: {message: Not Found}}
+  - {method: GET, path: /saml/api/v3/orgs/acme/installation, json: {id: 42, permissions: {metadata: read, members: read}, account: {login: acme}}}
+  # Template identities.
+  - {method: GET, path: /api/v3/users/dana, json: {login: dana, type: User}}
+  - {method: GET, path: /api/v3/users/bob, json: {login: bob, type: User}}
+  - {method: GET, path: /api/v3/users/carol, json: {login: carol, type: User}}
+  - {method: GET, path: /api/v3/users/eve, json: {login: eve, type: User}}
+  - {method: GET, path: /api/v3/users/acme, json: {login: acme, type: Organization}}
+  - {method: GET, path: /api/v3/users/nobody, status: 404, json: {message: Not Found}}
+  # Collaborator permissions.
+  - method: GET
+    path: /api/v3/repos/acme/api/collaborators/dana/permission
+    json: {permission: admin, role_name: admin, user: {login: dana, permissions: {pull: true, triage: true, push: true, maintain: true, admin: true}}}
+  - method: GET
+    path: /api/v3/repos/acme/api/collaborators/bob/permission
+    json: {permission: read, role_name: read, user: {login: bob, permissions: {pull: true, triage: false, push: false, maintain: false, admin: false}}}
+  - method: GET
+    path: /api/v3/repos/acme/api/collaborators/carol/permission
+    json: {permission: none, role_name: none, user: {login: carol, permissions: {pull: false, triage: false, push: false, maintain: false, admin: false}}}
+  - method: GET
+    path: /api/v3/repos/acme/webapp/collaborators/dana/permission
+    json: {permission: write, role_name: write, user: {login: dana, permissions: {pull: true, triage: true, push: true, maintain: false, admin: false}}}
+  - method: GET
+    path: /api/v3/repos/acme/webapp/collaborators/bob/permission
+    json: {permission: read, role_name: read, user: {login: bob, permissions: {pull: true, triage: false, push: false, maintain: false, admin: false}}}
+  - method: GET
+    path: /api/v3/repos/acme/custom/collaborators/bob/permission
+    json: {permission: read, role_name: security-champion, user: {login: bob, permissions: {pull: true, triage: false, push: false, maintain: false, admin: false}}}
+  - {method: GET, path: /api/v3/repos/acme/legacy/collaborators/bob/permission, json: {permission: security-champion, role_name: "", user: {login: bob}}}
+  - {method: GET, path: /api/v3/repos/acme/secret/collaborators/dana/permission, status: 404, json: {message: Not Found}}
+  - {method: GET, path: /api/v3/repos/acme/limited/collaborators/dana/permission, status: 403, headers: {X-RateLimit-Remaining: "0"}, json: {message: API rate limit exceeded}}
+  - {method: GET, path: /api/v3/repos/acme/forbidden/collaborators/dana/permission, status: 403, headers: {X-RateLimit-Remaining: "4999"}, json: {message: Resource not accessible by integration}}
+  - {method: GET, path: /api/v3/repos/acme/broken/collaborators/dana/permission, status: 500, json: {message: Server Error}}
+  - {method: GET, path: /api/v3/repos/acme/garbled/collaborators/dana/permission, json: {permission: 7}}
+  # Repository records.
+  - {method: GET, path: /api/v3/repos/acme/api, json: {name: api, has_issues: true, allow_forking: true, visibility: public}}
+  - {method: GET, path: /api/v3/repos/acme/webapp, json: {name: webapp, has_issues: false, allow_forking: false, visibility: private}}
+  # Branch rules and protection.
+  - {method: GET, path: /api/v3/repos/acme/api/rules/branches/main, json: [{type: pull_request}, {type: required_status_checks}]}
+  - {method: GET, path: /api/v3/repos/acme/api/branches/main/protection, status: 404, json: {message: Branch not protected}}
+  - {method: GET, path: /api/v3/repos/acme/webapp/rules/branches/main, json: []}
+  - method: GET
+    path: /api/v3/repos/acme/webapp/branches/main/protection
+    json: {restrictions: {users: [{login: carol}], teams: [{slug: release}], apps: []}, enforce_admins: {enabled: false}}
+  - {method: GET, path: /api/v3/orgs/acme/teams/release/memberships/dana, status: 404, json: {message: Not Found}}
+  # Organization and teams.
+  - {method: GET, path: /api/v3/orgs/acme/memberships/dana, json: {state: active, role: admin}}
+  - {method: GET, path: /api/v3/orgs/acme/memberships/bob, json: {state: active, role: member}}
+  - {method: GET, path: /api/v3/orgs/acme/memberships/eve, json: {state: pending, role: member}}
+  - {method: GET, path: /api/v3/orgs/acme/memberships/carol, status: 404, json: {message: Not Found}}
+  - {method: GET, path: /api/v3/orgs/acme, json: {login: acme, members_can_create_repositories: true, members_can_create_public_repositories: false, members_can_create_private_repositories: true}}
+  - {method: GET, path: /api/v3/orgs/acme/teams/platform, json: {slug: platform}}
+  - {method: GET, path: /api/v3/orgs/acme/teams/nope, status: 404, json: {message: Not Found}}
+  - {method: GET, path: /api/v3/orgs/acme/teams/platform/memberships/dana, json: {state: active, role: maintainer}}
+  - {method: GET, path: /api/v3/orgs/acme/teams/platform/memberships/bob, json: {state: active, role: member}}
+  - {method: GET, path: /api/v3/orgs/acme/teams/platform/memberships/carol, status: 404, json: {message: Not Found}}
+  - {method: GET, path: /api/v3/orgs/acme/teams/nope/memberships/dana, status: 404, json: {message: Not Found}}
+  # SAML: the userName lookup and the listing both answer this page.
+  - method: POST
+    path: /saml/api/graphql
+    json:
+      data:
+        organization:
+          samlIdentityProvider:
+            externalIdentities:
+              pageInfo: {hasNextPage: false, endCursor: ""}
+              nodes:
+                - {user: {login: dana}, samlIdentity: {nameId: dana@example.com, username: dana@example.com}, scimIdentity: null}
+                - {user: null, samlIdentity: {nameId: ghost@example.com, username: ghost@example.com}, scimIdentity: null}
+                - {user: {login: zed}, samlIdentity: {nameId: Zed@Example.com, username: zed}, scimIdentity: null}
+                - {user: {login: dupone}, samlIdentity: {nameId: dup@example.com, username: dup-one}, scimIdentity: null}
+                - {user: {login: duptwo}, samlIdentity: {nameId: DUP@example.com, username: dup-two}, scimIdentity: null}
+  - {method: GET, path: /saml/api/v3/repos/acme/api/collaborators/dana/permission, json: {permission: admin, role_name: admin, user: {login: dana, permissions: {pull: true, triage: true, push: true, maintain: true, admin: true}}}}
+  - {method: GET, path: /saml/api/v3/repos/acme/api/collaborators/zed/permission, json: {permission: read, role_name: read, user: {login: zed, permissions: {pull: true, triage: false, push: false, maintain: false, admin: false}}}}
+  - {method: POST, path: /noprov/api/graphql, json: {data: {organization: {samlIdentityProvider: null}}}}
+  - {method: POST, path: /gqlerr/api/graphql, json: {data: null, errors: [{type: FORBIDDEN, message: Resource not accessible by integration}]}}
+checks:
+  # Repository permissions.
+  - {user: dana@example.com, action: repo.admin, resource: "repo:acme/api", want: allowed}
+  - {user: dana@example.com, action: repo.read, resource: "repo:Acme/api", want: allowed}
+  - {user: bob@example.com, action: repo.read, resource: "repo:acme/api", want: allowed}
+  - {user: bob@example.com, action: repo.push, resource: "repo:acme/api", want: denied}
+  - {user: carol@example.com, action: repo.read, resource: "repo:acme/api", want: denied}
+  - {user: dana@example.com, action: repo.maintain, resource: "repo:acme/webapp", want: denied}
+  - {user: bob@example.com, action: repo.push, resource: "repo:acme/custom", want: unsupported}
+  - {user: bob@example.com, action: repo.read, resource: "repo:acme/custom", want: allowed}
+  - {user: bob@example.com, action: repo.read, resource: "repo:acme/legacy", want: unsupported}
+  - {user: dana@example.com, action: repo.read, resource: "repo:acme/secret", want: resource_not_visible}
+  - {user: dana@example.com, action: repo.read, resource: "repo:acme/limited", want: upstream_rate_limited}
+  - {user: dana@example.com, action: repo.read, resource: "repo:acme/forbidden", want: credential_rejected}
+  - {user: dana@example.com, action: repo.read, resource: "repo:acme/broken", want: upstream_error}
+  - {user: dana@example.com, action: repo.read, resource: "repo:acme/garbled", want: upstream_error}
+  # Issues and pull requests.
+  - {user: bob@example.com, action: issue.create, resource: "repo:acme/api", want: allowed}
+  - {user: dana@example.com, action: issue.create, resource: "repo:acme/webapp", want: denied}
+  - {user: bob@example.com, action: pr.create, resource: "repo:acme/api", want: allowed}
+  - {user: bob@example.com, action: pr.create, resource: "repo:acme/webapp", want: denied}
+  - {user: dana@example.com, action: pr.create, resource: "repo:acme/webapp", want: allowed}
+  # Branch rules and classic protection.
+  - {user: dana@example.com, action: repo.push, resource: "repo:acme/api@main", want: unsupported}
+  - {user: dana@example.com, action: pr.merge, resource: "repo:acme/api@main", want: allowed}
+  - {user: dana@example.com, action: repo.push, resource: "repo:acme/webapp@main", want: denied}
+  - {user: dana@example.com, action: pr.merge, resource: "repo:acme/webapp@main", want: unsupported}
+  - {user: bob@example.com, action: pr.merge, resource: "repo:acme/webapp@main", want: denied}
+  # Organization and teams.
+  - {user: dana@example.com, action: org.admin, resource: "org:acme", want: allowed}
+  - {user: bob@example.com, action: org.member, resource: "org:ACME", want: allowed}
+  - {user: bob@example.com, action: org.admin, resource: "org:acme", want: denied}
+  - {user: eve@example.com, action: org.member, resource: "org:acme", want: denied}
+  - {user: carol@example.com, action: org.member, resource: "org:acme", want: denied}
+  - {user: bob@example.com, action: org.repo.create, resource: "org:acme", want: allowed}
+  - {user: dana@example.com, action: team.maintainer, resource: "team:acme/platform", want: allowed}
+  - {user: bob@example.com, action: team.member, resource: "team:acme/platform", want: allowed}
+  - {user: bob@example.com, action: team.maintainer, resource: "team:acme/platform", want: denied}
+  - {user: carol@example.com, action: team.member, resource: "team:acme/platform", want: denied}
+  - {user: dana@example.com, action: team.member, resource: "team:acme/nope", want: resource_not_visible}
+  # Template identities and request validation.
+  - {user: nobody@example.com, action: repo.read, resource: "repo:acme/api", want: user_not_found}
+  - {user: acme@example.com, action: repo.read, resource: "repo:acme/api", want: user_not_found}
+  - {user: dana@other.example, action: repo.read, resource: "repo:acme/api", want: unsupported}
+  - {user: dana@example.com, action: repo.read, resource: "repo:other/api", want: invalid_request}
+  - {user: dana@example.com, action: repo.read, resource: "repo:acme/api@a..b", want: invalid_request}
+  - {user: dana@example.com, action: team.member, resource: "team:acme/Platform", want: invalid_request}
+  - {user: dana@example.com, action: repo.read, resource: "org:acme", want: invalid_request}
+  - {user: dana@example.com, action: repo.delete, resource: "repo:acme/api", want: unknown_action}
+  - {user: dana@example.com, action: repo.read, resource: "repo:acme/api", connection: github-nomint, want: credential_rejected}
+  # SAML identities.
+  - {user: dana@example.com, action: repo.admin, resource: "repo:acme/api", connection: github-saml, want: allowed}
+  - {user: zed@example.com, action: repo.push, resource: "repo:acme/api", connection: github-saml, want: denied}
+  - {user: ghost@example.com, action: repo.read, resource: "repo:acme/api", connection: github-saml, want: unsupported}
+  - {user: dup@example.com, action: repo.read, resource: "repo:acme/api", connection: github-saml, want: user_ambiguous}
+  - {user: nobody@example.com, action: repo.read, resource: "repo:acme/api", connection: github-saml, want: user_not_found}
+  - {user: dana@example.com, action: repo.read, resource: "repo:acme/api", connection: github-noprov, want: unsupported}
+  - {user: dana@example.com, action: repo.read, resource: "repo:acme/api", connection: github-gqlerr, want: credential_rejected}

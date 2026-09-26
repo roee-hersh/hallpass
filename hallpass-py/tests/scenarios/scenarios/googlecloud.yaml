@@ -1,0 +1,475 @@
+# googlecloud: the Policy Troubleshooter in keyless mode (metadata token), one
+# connection per troubleshooter answer (each api_url is its own path under the
+# fake), plus a googleworkspace_connection for identity and a bad key.
+connections:
+- id: gcp
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/allow'
+- id: gcp-deny
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/deny'
+- id: gcp-denypol
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/denypol'
+- id: gcp-cond
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/cond'
+- id: gcp-info
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/info'
+- id: gcp-badstate
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/badstate'
+- id: gcp-garbage
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/garbage'
+- id: gcp-e403
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/e403'
+- id: gcp-e403none
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/e403none'
+- id: gcp-e403rate
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/e403rate'
+- id: gcp-e429
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/e429'
+- id: gcp-e400
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/e400'
+- id: gcp-e404
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/e404'
+- id: gcp-e418
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/e418'
+- id: gcp-e500
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/e500'
+- id: gcp-ws
+  integration: googlecloud
+  auth_mode: keyless
+  scope: project:acme-prod
+  token_url: '{{url}}/token'
+  metadata_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+  api_url: '{{url}}/allow'
+  googleworkspace_connection: gws
+- id: gcp-badkey
+  integration: googlecloud
+  scope: project:acme-prod
+  credential: env:HP_PARITY_GCP_BADKEY
+  token_url: '{{url}}/token'
+  api_url: '{{url}}/allow'
+  ca_file: '{{ca_file}}'
+- id: gws
+  integration: googleworkspace
+  admin_email: admin@example.com
+  auth_mode: keyless
+  service_account_email: hallpass@proj.iam.gserviceaccount.com
+  token_url: '{{url}}/token'
+  api_url: '{{url}}'
+  metadata_url: '{{url}}'
+  iamcredentials_url: '{{url}}'
+  ca_file: '{{ca_file}}'
+env:
+  HP_PARITY_GCP_BADKEY: '{"client_email":"x@y.z","private_key":"nope"}'
+upstream:
+- method: GET
+  path: /computeMetadata/v1/instance/service-accounts/default/token
+  json:
+    access_token: meta
+    expires_in: 3599
+    token_type: Bearer
+- method: POST
+  path: /v1/projects/-/serviceAccounts/hallpass@proj.iam.gserviceaccount.com:signJwt
+  json:
+    keyId: k1
+    signedJwt: a.b.c
+- method: POST
+  path: /token
+  json:
+    access_token: tok
+    expires_in: 3599
+    token_type: Bearer
+- method: GET
+  path: /admin/directory/v1/users/dana@example.com
+  json:
+    id: '100'
+    primaryEmail: dana@example.com
+    suspended: false
+    archived: false
+- method: GET
+  path: /admin/directory/v1/users/d.alias@example.com
+  json:
+    id: '100'
+    primaryEmail: dana@example.com
+    suspended: false
+    archived: false
+- method: GET
+  path: /admin/directory/v1/users/sus@example.com
+  json:
+    id: '102'
+    primaryEmail: sus@example.com
+    suspended: true
+    archived: false
+- method: GET
+  path: /admin/directory/v1/users/nostatus@example.com
+  json:
+    id: '104'
+    primaryEmail: nostatus@example.com
+- method: POST
+  path: /allow/v3/iam:troubleshoot
+  status: 200
+  json:
+    overallAccessState: CAN_ACCESS
+    denyPolicyExplanation:
+      denyAccessState: DENY_ACCESS_STATE_NOT_DENIED
+- method: POST
+  path: /deny/v3/iam:troubleshoot
+  status: 200
+  json:
+    overallAccessState: CANNOT_ACCESS
+    denyPolicyExplanation:
+      denyAccessState: DENY_ACCESS_STATE_NOT_DENIED
+- method: POST
+  path: /denypol/v3/iam:troubleshoot
+  status: 200
+  json:
+    overallAccessState: CANNOT_ACCESS
+    denyPolicyExplanation:
+      denyAccessState: DENY_ACCESS_STATE_DENIED
+- method: POST
+  path: /cond/v3/iam:troubleshoot
+  status: 200
+  json:
+    overallAccessState: UNKNOWN_CONDITIONAL
+- method: POST
+  path: /info/v3/iam:troubleshoot
+  status: 200
+  json:
+    overallAccessState: UNKNOWN_INFO
+- method: POST
+  path: /badstate/v3/iam:troubleshoot
+  status: 200
+  json:
+    overallAccessState: OVERALL_ACCESS_STATE_UNSPECIFIED
+- method: POST
+  path: /garbage/v3/iam:troubleshoot
+  status: 200
+  body: not json
+  headers:
+    Content-Type: application/json
+- method: POST
+  path: /e403/v3/iam:troubleshoot
+  status: 403
+  json:
+    error:
+      code: 403
+      message: m
+      status: PERMISSION_DENIED
+      details:
+      - '@type': type.googleapis.com/google.rpc.ErrorInfo
+        reason: SERVICE_DISABLED
+        domain: googleapis.com
+- method: POST
+  path: /e403none/v3/iam:troubleshoot
+  status: 403
+  json:
+    error:
+      code: 403
+      message: m
+      status: PERMISSION_DENIED
+      details: []
+- method: POST
+  path: /e403rate/v3/iam:troubleshoot
+  status: 403
+  json:
+    error:
+      code: 403
+      message: m
+      status: RESOURCE_EXHAUSTED
+      details: []
+- method: POST
+  path: /e429/v3/iam:troubleshoot
+  status: 429
+  json:
+    error:
+      code: 429
+      message: m
+      status: RESOURCE_EXHAUSTED
+      details: []
+  headers:
+    Retry-After: '30'
+- method: POST
+  path: /e400/v3/iam:troubleshoot
+  status: 400
+  json:
+    error:
+      code: 400
+      message: m
+      status: INVALID_ARGUMENT
+      details:
+      - '@type': type.googleapis.com/google.rpc.ErrorInfo
+        reason: INVALID_ARGUMENT
+        domain: googleapis.com
+- method: POST
+  path: /e404/v3/iam:troubleshoot
+  status: 404
+  json:
+    error:
+      code: 404
+      message: m
+      status: NOT_FOUND
+      details: []
+- method: POST
+  path: /e418/v3/iam:troubleshoot
+  status: 418
+  json:
+    error:
+      code: 418
+      message: m
+      status: UNKNOWN
+      details: []
+- method: POST
+  path: /e500/v3/iam:troubleshoot
+  status: 500
+  json:
+    error:
+      code: 500
+      message: m
+      status: INTERNAL
+      details: []
+checks:
+- user: dana@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: allowed
+- user: Dana@Example.com
+  action: storage.read
+  resource: object:acme-data/reports/Q1 2026 (final).pdf
+  want: allowed
+- user: dana@example.com
+  action: iam.set
+  resource: bucket:acme-data
+  want: allowed
+- user: dana@example.com
+  action: raw:storage.objects.delete
+  resource: project:acme-prod
+  want: allowed
+- user: dana@example.com
+  action: raw:iam.googleapis.com/roles.create
+  resource: name://pubsub.googleapis.com/projects/acme-prod/topics/events
+  want: allowed
+- user: dana@example.com
+  action: serviceaccount.actas
+  resource: serviceaccount:Deployer@acme-prod.iam.gserviceaccount.com
+  want: allowed
+- user: dana@example.com
+  action: gke.access
+  resource: cluster:acme-prod/europe-west1/main
+  want: allowed
+- user: bob@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: denied
+  connection: gcp-deny
+- user: bob@example.com
+  action: bucket.delete
+  resource: bucket:acme-data
+  want: denied
+  connection: gcp-denypol
+- user: bob@example.com
+  action: storage.read
+  resource: bucket:acme-data
+  want: unsupported
+  connection: gcp-cond
+- user: bob@example.com
+  action: storage.read
+  resource: bucket:acme-data
+  want: resource_not_visible
+  connection: gcp-info
+- user: bob@example.com
+  action: storage.read
+  resource: bucket:acme-data
+  want: upstream_error
+  connection: gcp-badstate
+- user: bob@example.com
+  action: storage.read
+  resource: bucket:acme-data
+  want: upstream_error
+  connection: gcp-garbage
+- user: bob@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: credential_rejected
+  connection: gcp-e403
+- user: bob@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: credential_rejected
+  connection: gcp-e403none
+- user: bob@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: upstream_rate_limited
+  connection: gcp-e403rate
+- user: bob@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: upstream_rate_limited
+  connection: gcp-e429
+- user: bob@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: invalid_request
+  connection: gcp-e400
+- user: bob@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: resource_not_visible
+  connection: gcp-e404
+- user: bob@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: upstream_error
+  connection: gcp-e418
+- user: bob@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: upstream_error
+  connection: gcp-e500
+- user: dana@example.com
+  action: project.view
+  resource: project:Acme
+  want: invalid_request
+- user: dana@example.com
+  action: iam.set
+  resource: object:acme-data/x
+  want: invalid_request
+- user: dana@example.com
+  action: storage.read
+  resource: object:acme-data/a/../etc
+  want: invalid_request
+- user: dana@example.com
+  action: storage.read
+  resource: name://evil.example.com/projects/x
+  want: invalid_request
+- user: dana@example.com
+  action: project.view
+  resource: bucket:acme-data
+  want: invalid_request
+- user: dana@example.com
+  action: raw:Storage.objects.get
+  resource: project:acme-prod
+  want: unknown_action
+- user: not an email
+  action: project.view
+  resource: project:acme-prod
+  want: invalid_request
+- user: dana@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: allowed
+  connection: gcp-ws
+- user: d.alias@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: allowed
+  connection: gcp-ws
+- user: nobody@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: user_not_found
+  connection: gcp-ws
+- user: sus@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: denied
+  connection: gcp-ws
+- user: nostatus@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: unsupported
+  connection: gcp-ws
+- user: dana@example.com
+  action: project.view
+  resource: project:acme-prod
+  want: credential_rejected
+  connection: gcp-badkey

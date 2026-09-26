@@ -1,0 +1,37 @@
+{
+  "name": "hallpass-client",
+  "version": "0.0.0",
+  "description": "Check with hallpass whether a user may do something before your AI agent does it for them.",
+  "keywords": ["ai-agents", "authorization", "permissions", "llm", "tools", "mcp"],
+  "homepage": "https://github.com/roee-hersh/hallpass/tree/main/hallpass-ts",
+  "bugs": "https://github.com/roee-hersh/hallpass/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/roee-hersh/hallpass.git",
+    "directory": "hallpass-ts"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md", "LICENSE"],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/package.test.mjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^5.9.3"
+  }
+}

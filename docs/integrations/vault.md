@@ -171,9 +171,13 @@ matters:
 
 ## Test
 
-`go test ./internal/integrations/vault/` runs a fake Vault validated against the OpenAPI document
+`python -m pytest tests/integrations/vault` (in `hallpass-py`) runs a fake Vault validated against the OpenAPI document
 when `HALLPASS_SPECS_DIR` holds `vault.spec` (`test/specs/fetch.sh`). The fake has an OIDC mount,
 entities with direct and inherited groups, a disabled entity, a `root` entity, HCL and JSON
 policies with globs, `+` segments, templates, a legacy `policy` attribute, parameter and wrapping
-constraints, KV v1 and v2 mounts and a PKI mount, and an AppRole login. `FuzzParseTarget` checks
-the path validation and `FuzzPolicy` that the policy parser and evaluator never panic.
+constraints, KV v1 and v2 mounts and a PKI mount, and an AppRole login. Property tests
+(`test_fuzz_parse_target`, `test_fuzz_policy`) check the path validation and that the policy parser
+and evaluator never fail with anything but a policy error. `tests/real/test_vault_real.py` starts
+`vault server -dev` in Docker (`hashicorp/vault:1.17`, when the image is present locally), sets up
+policies, entities, aliases and groups through its API, and checks every answer against Vault's own
+`sys/capabilities`.

@@ -1,0 +1,183 @@
+# The snowflake integration against a static fake of the SQL API. Every
+# statement is a POST to the one /api/v2/statements route, so each
+# connection's URL carries its own path prefix and its route answers every
+# statement with the same result set. Its one row is read by each statement
+# for the columns it needs: SHOW USERS for name, login_name, email and
+# disabled; SHOW GRANTS TO USER for role; SHOW GRANTS TO ROLE for privilege,
+# granted_on and name. So user PROD (email dana@example.com) holds role
+# ANALYST, and ANALYST and PUBLIC both hold USAGE on database PROD.
+# snow: that account. snow-off, snow-unknown: the user is disabled, or its
+# disabled column is empty. snow-amb: two users with the address. snow-hidden,
+# snow-priv, snow-other: the statement fails with 002003, 003001 and an
+# unmapped code. snow-rejected, snow-throttled, snow-broken: HTTP 401, 429
+# and 500. The key is a throwaway test key (the same one github.yaml uses).
+connections:
+  - id: snow
+    integration: snowflake
+    url: "{{url}}/sf1"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+  - id: snow-off
+    integration: snowflake
+    url: "{{url}}/off"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+  - id: snow-unknown
+    integration: snowflake
+    url: "{{url}}/unknown"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+  - id: snow-amb
+    integration: snowflake
+    url: "{{url}}/amb"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+  - id: snow-hidden
+    integration: snowflake
+    url: "{{url}}/hidden"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+  - id: snow-priv
+    integration: snowflake
+    url: "{{url}}/priv"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+  - id: snow-other
+    integration: snowflake
+    url: "{{url}}/other"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+  - id: snow-rejected
+    integration: snowflake
+    url: "{{url}}/rejected"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+  - id: snow-throttled
+    integration: snowflake
+    url: "{{url}}/throttled"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+  - id: snow-broken
+    integration: snowflake
+    url: "{{url}}/broken"
+    ca_file: "{{ca_file}}"
+    account: myorg-myaccount
+    user: hallpass
+    role: secadmin
+    credential: env:SNOW_KEY
+env:
+  SNOW_KEY: |
+    -----BEGIN RSA PRIVATE KEY-----
+    MIIEowIBAAKCAQEA1joN364lRx96bSE5Qegd07OecfGZTnFpMhzXOYT+iWmjOe1Z
+    oArkrP+nS9YF86++a6SmywE0jZjD/hZojgrc66wL7+83p3GQ6E7fGoabYybyDTAU
+    zMPUfqkkSALM4U28tN9v5+nor2Hc04fgvYLsle39WewzQnpmaqNHYceZrYtKZhN9
+    wKgCl6WUkRRiryc0tUzlqzoLxRlbIAx6R3V5yoEcBRFIrWH4s968TJVV0gVZfBTO
+    Jsz5+HwLVa1SZf7IzW89sQ4LIcYPIQMMwH91X7FebZvAt6cVD35cdhgh1wC8/GYt
+    i4B3XzEptQns2d+RQ4whzW6UIqHALvFbT0UhXQIDAQABAoIBAA1BoB/evSWDQ2+V
+    WHGzC/MsAtX/65QdXQ7PqO1BIG8fP3sTUOkN1cwqMTQIudj9X6F2LALwdnChPR+U
+    lIu6MYBhnat8+F0/Dc/tuqiSHzyXe8r61iDzX5SUobz54au66OMPRRhYxSAsDYx0
+    2TLOqhZavXooLVPapNzuujk2wVROncM1oqZbM1GrPkWx/ZLNeKdSRc1c0qhNMRn1
+    3Y/ePBbXePVOA86w3Y9hJhGuQSCglEOMaINsKMgUThMow3VYkQrk+OuecgaO5uOb
+    olMEvZHKWlXa8TjpkSCAd9IXIRNvxxTmbCg4kXE6mtKT5sCX43HN3lZc4wSbuyWJ
+    2R8kshECgYEA/cczeOSsB2YVtYbM5aJlyxdZlRptuGm231pv1DpcwP2xMCTfjY3l
+    IOF6VK5HRwUGxZSk+wfIyWmrH3G0ny8G9uNbXxtGigLQsCdoAM8FD9vibLg90EVf
+    nJNzOgy6O2d6Znf9vztX4x1Lv3t6G2m5hX4jkbxZeGqpFWzUqrzqyBMCgYEA2Bo0
+    q3l21+7P5uqp+Vanguze5j/nfHrQBDZK545RW2D8X8v8orGt666L4kN0zUHUra/q
+    kocTlFEZ5w3+/duiG3+TSTYfFy//c6p8VgLZ/DTaQ0DPqLWOlVHGbwvmRGultJ8K
+    wigudkbVwbIoUSLlnqftXo/Z0+C9M1E3pcu8fs8CgYAkcC/B0gOpZE0FrX9KEZFQ
+    IeAo+ox6iCNL2q5n6KFczJBee0zmBFO77uQjuIpfdidMw1UU/j8kPFnnv+nRWW1E
+    kcyS0VXFhzXztRTH2PG/HzFZrvKhLvTVhI5s7VroIKmAgQYcKScrYw93RQF5YirT
+    MhNlX4fxNE9m1iOLCGklpQKBgGeNRyfT8GrQeLdCQ2jDaUmHj9ftT1OK1hrumT4U
+    KFANTWHqMYkUcy64WTd284VXwj3oShMkvvEXW74oKsQidq+OlllCoetOiK44R5Q/
+    kY0VFnGboOZK+aP7p4aWwSSQILtIarNW5cyvbMaARGl8u2MnPMtPSyYITyFEDdJY
+    ql5pAoGBANswgI78X0v5DSxeXfgiBHjomPyctDfTNlk1Dm6ehUjAqyiHsKHGW5JM
+    qApMsZp2avo2yJziKLz69htsBroin+tZhR7tivXTCIDCvXtHSEPdGZr4ZDPE7LJa
+    ZDwyP8IpQXEdgkCCczco+sOhCE83qm4R5WZLJGxsUD5SSCfLnB6J
+    -----END RSA PRIVATE KEY-----
+upstream:
+  - method: POST
+    path: /sf1/api/v2/statements
+    json:
+      code: "090001"
+      statementHandle: 01b0f0f0-0000-0000-0000-000000000001
+      data: [[PROD, dana, dana@example.com, "false", ANALYST, PERSON, ANALYST, USAGE, DATABASE]]
+      resultSetMetaData: {numRows: 1, rowType: [{name: name}, {name: login_name}, {name: email}, {name: disabled}, {name: default_role}, {name: type}, {name: role}, {name: privilege}, {name: granted_on}]}
+  - method: POST
+    path: /off/api/v2/statements
+    json:
+      data: [[PROD, dana, dana@example.com, "true", ANALYST, PERSON, ANALYST, USAGE, DATABASE]]
+      resultSetMetaData: {numRows: 1, rowType: [{name: name}, {name: login_name}, {name: email}, {name: disabled}, {name: default_role}, {name: type}, {name: role}, {name: privilege}, {name: granted_on}]}
+  - method: POST
+    path: /unknown/api/v2/statements
+    json:
+      data: [[PROD, dana, dana@example.com, null, ANALYST, PERSON, ANALYST, USAGE, DATABASE]]
+      resultSetMetaData: {numRows: 1, rowType: [{name: name}, {name: login_name}, {name: email}, {name: disabled}, {name: default_role}, {name: type}, {name: role}, {name: privilege}, {name: granted_on}]}
+  - method: POST
+    path: /amb/api/v2/statements
+    json:
+      data:
+        - [ONE, one, dana@example.com, "false", "", PERSON, "", "", ""]
+        - [TWO, two, dana@example.com, "false", "", PERSON, "", "", ""]
+      resultSetMetaData: {numRows: 2, rowType: [{name: name}, {name: login_name}, {name: email}, {name: disabled}, {name: default_role}, {name: type}, {name: role}, {name: privilege}, {name: granted_on}]}
+  - {method: POST, path: /hidden/api/v2/statements, status: 422, json: {code: "002003", sqlState: "02000", message: "does not exist or not authorized"}}
+  - {method: POST, path: /priv/api/v2/statements, status: 422, json: {code: "003001", sqlState: "42501", message: "insufficient privileges"}}
+  - {method: POST, path: /other/api/v2/statements, status: 422, json: {code: "001003", message: "syntax error"}}
+  - {method: POST, path: /rejected/api/v2/statements, status: 401, json: {code: "390144", message: "JWT token is invalid."}}
+  - {method: POST, path: /throttled/api/v2/statements, status: 429, json: {message: slow down}}
+  - {method: POST, path: /broken/api/v2/statements, status: 500, body: oops}
+checks:
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", want: allowed}
+  - {user: Dana@Example.com, action: database.usage, resource: "database:PROD", want: allowed}
+  - {user: dana@example.com, action: database.usage, resource: "database:dev", want: denied}
+  - {user: dana@example.com, action: database.create_schema, resource: "database:prod", want: denied}
+  - {user: dana@example.com, action: schema.usage, resource: "schema:prod.sales", want: denied}
+  - {user: dana@example.com, action: table.select, resource: "table:prod.sales.orders", want: denied}
+  - {user: dana@example.com, action: role.use, resource: "role:analyst", want: allowed}
+  - {user: dana@example.com, action: role.use, resource: "role:public", want: allowed}
+  - {user: dana@example.com, action: role.use, resource: "role:dev", want: denied}
+  - {user: dana@example.com, action: account.create_database, resource: account, want: denied}
+  - {user: dana@example.com, action: "raw:MONITOR", resource: "warehouse:analytics_wh", want: denied}
+  - {user: dana@example.com, action: "raw:USAGE", resource: "database:prod", want: allowed}
+  - {user: dana@example.com, action: "raw:USAGE", resource: "role:analyst", want: invalid_request}
+  - {user: dana@example.com, action: "raw:OWNERSHIP", resource: "database:prod", want: unknown_action}
+  - {user: dana@example.com, action: table.select, resource: "table:orders", want: invalid_request}
+  - {user: dana@example.com, action: table.select, resource: "table:prod.sales.o;drop", want: invalid_request}
+  - {user: dana@example.com, action: table.select, resource: 'table:prod.sales."a"b"', want: invalid_request}
+  - {user: dana@example.com, action: account.create_database, resource: "account:x", want: invalid_request}
+  - {user: nobody@example.com, action: database.usage, resource: "database:prod", want: user_not_found}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-off, want: denied}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-unknown, want: unsupported}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-amb, want: user_ambiguous}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-hidden, want: credential_rejected}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-priv, want: credential_rejected}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-other, want: upstream_error}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-rejected, want: credential_rejected}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-throttled, want: upstream_rate_limited}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-broken, want: upstream_error}

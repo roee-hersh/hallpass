@@ -1,0 +1,67 @@
+"""Argo CD's assets/builtin-policy.csv. It defines role:readonly and
+role:admin and binds the admin user.
+
+Copied from Argo CD v3.5.3 (the latest release on 2026-09-21). It changes
+rarely; diff it against the version you run if a builtin role answers
+unexpectedly. Unreleased master adds "p, role:admin, applications,
+rollback, */*, allow", which matters only with
+server.rbac.rollback.enforce.enable.
+"""
+
+__all__ = ["BUILTIN_POLICY_CSV"]
+
+BUILTIN_POLICY_CSV = """\
+# Built-in policy which defines two roles: role:readonly and role:admin,
+# and additionally assigns the admin user to the role:admin role.
+# There are two policy formats:
+# 1. Applications, applicationsets, logs, and exec (which belong to a project):
+# p, <role/user/group>, <resource>, <action>, <project>/<object>, <allow/deny>
+# 2. All other resources:
+# p, <role/user/group>, <resource>, <action>, <object>, <allow/deny>
+
+p, role:readonly, applications, get, */*, allow
+p, role:readonly, applicationsets, get, */*, allow
+p, role:readonly, certificates, get, *, allow
+p, role:readonly, clusters, get, *, allow
+p, role:readonly, repositories, get, *, allow
+p, role:readonly, write-repositories, get, *, allow
+p, role:readonly, projects, get, *, allow
+p, role:readonly, accounts, get, *, allow
+p, role:readonly, gpgkeys, get, *, allow
+p, role:readonly, logs, get, */*, allow
+
+p, role:admin, applications, create, */*, allow
+p, role:admin, applications, update, */*, allow
+p, role:admin, applications, update/*, */*, allow
+p, role:admin, applications, delete, */*, allow
+p, role:admin, applications, delete/*, */*, allow
+p, role:admin, applications, sync, */*, allow
+p, role:admin, applications, override, */*, allow
+p, role:admin, applications, action/*, */*, allow
+p, role:admin, applicationsets, get, */*, allow
+p, role:admin, applicationsets, create, */*, allow
+p, role:admin, applicationsets, update, */*, allow
+p, role:admin, applicationsets, delete, */*, allow
+p, role:admin, certificates, create, *, allow
+p, role:admin, certificates, update, *, allow
+p, role:admin, certificates, delete, *, allow
+p, role:admin, clusters, create, *, allow
+p, role:admin, clusters, update, *, allow
+p, role:admin, clusters, delete, *, allow
+p, role:admin, repositories, create, *, allow
+p, role:admin, repositories, update, *, allow
+p, role:admin, repositories, delete, *, allow
+p, role:admin, write-repositories, create, *, allow
+p, role:admin, write-repositories, update, *, allow
+p, role:admin, write-repositories, delete, *, allow
+p, role:admin, projects, create, *, allow
+p, role:admin, projects, update, *, allow
+p, role:admin, projects, delete, *, allow
+p, role:admin, accounts, update, *, allow
+p, role:admin, gpgkeys, create, *, allow
+p, role:admin, gpgkeys, delete, *, allow
+p, role:admin, exec, create, */*, allow
+
+g, role:admin, role:readonly
+g, admin, role:admin
+"""

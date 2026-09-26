@@ -1,7 +1,9 @@
 # Command-line reference
 
-One binary, `hallpass`, with five commands plus `hallpass version`. Every command that reads a config takes
-`-config FILE`, defaulting to `/etc/hallpass/hallpass.yaml`.
+One command, `hallpass`, with five subcommands plus `hallpass version`. `pip install hallpass`
+installs it, and it is the entry point of the Docker image. Every subcommand that reads a config
+takes `-config FILE`, defaulting to `/etc/hallpass/hallpass.yaml`. Flags take one dash (`-config
+FILE`); `--config=FILE` works too.
 
 | Command | What it does |
 |---|---|
@@ -16,7 +18,7 @@ At startup `serve` probes every connection and logs warnings. A broken connectio
 service from starting.
 
 `check` runs the same code path as `POST /check` in-process, so it needs the config file and the
-connection's credential but no running server and no API key. It prints the decision and reason
+connection's credential but no running server and no API key. Caches and the decision log are off. It prints the decision and reason
 (`-json` prints the HTTP response body) and exits 0 for `allow`, 1 for `deny`, 3 for `unknown` and
 2 when no decision was reached (bad flags, a config that does not load, an interrupted run), so
 `if hallpass check ...` treats `unknown` as deny. Only the connection asked about is built, so a

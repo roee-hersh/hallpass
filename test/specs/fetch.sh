@@ -2,9 +2,9 @@
 # Downloads the vendor API descriptions the tests validate requests against.
 #
 #   test/specs/fetch.sh [DIR]          default DIR=.specs
-#   HALLPASS_SPECS_DIR=$PWD/.specs go test ./...
+#   (cd hallpass-py && HALLPASS_SPECS_DIR=$PWD/../.specs python -m pytest tests/integrations tests/contract)
 #
-# Every file is <name>.spec; internal/integration/itest/spec.go detects the
+# Every file is <name>.spec; hallpass-py/tests/harness/spec.py detects the
 # format (OpenAPI 3, Swagger 2, Google discovery, botocore). A failed
 # download is reported and skipped: the tests then log that validation for
 # that API was skipped instead of failing.

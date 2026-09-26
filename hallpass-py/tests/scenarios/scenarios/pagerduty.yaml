@@ -1,0 +1,98 @@
+# The pagerduty integration: base roles, team roles, missing objects and
+# upstream failures, against a static fake of the REST API.
+connections:
+  - id: pd
+    integration: pagerduty
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    credential: env:PD_KEY
+  - id: pd-broken
+    integration: pagerduty
+    url: "{{url}}/broken"
+    ca_file: "{{ca_file}}"
+    credential: env:PD_KEY
+  - id: pd-rejected
+    integration: pagerduty
+    url: "{{url}}/rejected"
+    ca_file: "{{ca_file}}"
+    credential: env:PD_KEY
+env:
+  PD_KEY: parity-pagerduty-key
+upstream:
+  - method: GET
+    path: /users
+    json:
+      users:
+        - {id: PUOWNER, type: user, email: owner@example.com, role: owner, teams: []}
+        - {id: PUMANAG, type: user, email: manager@example.com, role: user, teams: []}
+        - {id: PUOBS, type: user, email: observer@example.com, role: observer, teams: [{id: PTEAM1, type: team_reference}]}
+        - {id: PUWEIRD, type: user, email: weird@example.com, role: team_responder}
+        - {id: PDUP1, type: user, email: dup@example.com, role: user}
+        - {id: PDUP2, type: user, email: Dup@example.com, role: user}
+      limit: 100
+      offset: 0
+      more: false
+  - method: GET
+    path: /teams/PTEAM1/members
+    json:
+      members:
+        - {user: {id: PUOBS, type: user_reference}, role: manager}
+      more: false
+  - method: GET
+    path: /teams/PTEAM1
+    json: {team: {id: PTEAM1, type: team}}
+  - method: GET
+    path: /services/PSVC1
+    json: {service: {id: PSVC1, type: service, teams: [{id: PTEAM1, type: team_reference}]}}
+  - method: GET
+    path: /services/PSVC2
+    json: {service: {id: PSVC2, type: service, teams: [{id: PTEAM2, type: team_reference}]}}
+  - method: GET
+    path: /services/PNOPE
+    status: 404
+    json: {error: {code: 2100, message: Not Found}}
+  - method: GET
+    path: /incidents/PINC1
+    json: {incident: {id: PINC1, type: incident, teams: [], service: {id: PSVC1, type: service, teams: [{id: PTEAM1, type: team_reference}]}}}
+  - method: GET
+    path: /incidents/PBAD
+    body: "this is not json"
+  - method: GET
+    path: /schedules/PSCH1
+    status: 402
+    json: {error: {code: 2012, message: Payment Required}}
+  - method: GET
+    path: /escalation_policies/PEP1
+    status: 403
+    json: {error: {code: 2010, message: Access Denied}}
+  - method: GET
+    path: /broken/*
+    status: 500
+    body: ""
+  - method: GET
+    path: /rejected/*
+    status: 401
+    json: {error: {code: 2006, message: Unauthorized}}
+checks:
+  - {user: owner@example.com, action: account.admin, resource: account, want: allowed}
+  - {user: Owner@Example.COM, action: account.admin, resource: account, want: allowed}
+  - {user: manager@example.com, action: account.admin, resource: account, want: denied}
+  - {user: ghost@example.com, action: account.admin, resource: account, want: user_not_found}
+  - {user: dup@example.com, action: account.admin, resource: account, want: user_ambiguous}
+  - {user: observer@example.com, action: service.edit, resource: "service:PSVC1", want: allowed}
+  - {user: observer@example.com, action: service.edit, resource: "service:psvc2", want: denied}
+  - {user: manager@example.com, action: service.edit, resource: "service:PSVC2", want: allowed}
+  - {user: manager@example.com, action: service.edit, resource: "service:PNOPE", want: resource_not_visible}
+  - {user: observer@example.com, action: team.member, resource: "team:PTEAM1", want: allowed}
+  - {user: manager@example.com, action: team.member, resource: "team:PTEAM1", want: denied}
+  - {user: observer@example.com, action: team.manage, resource: "team:PTEAM1", want: allowed}
+  - {user: observer@example.com, action: incident.acknowledge, resource: "incident:PINC1", want: allowed}
+  - {user: manager@example.com, action: incident.resolve, resource: "incident:PBAD", want: upstream_error}
+  - {user: manager@example.com, action: schedule.edit, resource: "schedule:PSCH1", want: unsupported}
+  - {user: manager@example.com, action: escalation_policy.edit, resource: "escalation_policy:PEP1", want: credential_rejected}
+  - {user: weird@example.com, action: incident.acknowledge, resource: "incident:PINC1", want: unsupported}
+  - {user: owner@example.com, action: team.member, resource: "team:P TEAM", want: invalid_request}
+  - {user: owner@example.com, action: incident.acknowledge, resource: "service:PSVC1", want: invalid_request}
+  - {user: owner@example.com, action: account.admin, resource: "account:x", want: invalid_request}
+  - {user: owner@example.com, action: account.admin, resource: account, connection: pd-broken, want: upstream_error}
+  - {user: owner@example.com, action: account.admin, resource: account, connection: pd-rejected, want: credential_rejected}

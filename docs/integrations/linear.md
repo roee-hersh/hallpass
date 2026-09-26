@@ -120,9 +120,9 @@ workspace. Marked `UNVERIFIED` in the code:
 
 ## Test
 
-`go test ./internal/integrations/linear/` runs a fake GraphQL endpoint validated against Linear's
+`python -m pytest tests/integrations/linear` (in `hallpass-py`) runs a fake GraphQL endpoint validated against Linear's
 schema when `HALLPASS_SPECS_DIR` holds `linear.spec` (`test/specs/fetch.sh`): every field, argument
 and variable of each query is checked against the SDL. The fake has an owner, an administrator, a
 team owner, members with and without teams, a guest, an app user and suspended and invited users
-over public, private, restricted and archived teams. `FuzzParseTarget` checks that only keys,
-identifiers, slugs and uuids reach the API.
+over public, private, restricted and archived teams. A property test (`test_fuzz_parse_target`)
+checks that only keys, identifiers, slugs and uuids reach the API.
