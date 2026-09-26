@@ -78,7 +78,7 @@ RULES: dict[str, Any] = {
     "archive_thing": ("things", "thing.write", "thing:{thing_id}"),
     "count_thing": ("things", "thing.read", "thing:{n}"),
 }
-TOOLS = [read_thing, delete_thing, archive_thing, count_thing, ping]
+TOOLS: list[Any] = [read_thing, delete_thing, archive_thing, count_thing, ping]
 
 
 @dataclass

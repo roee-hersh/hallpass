@@ -47,7 +47,7 @@ from typing import Any
 try:
     from pydantic_ai import RunContext
     from pydantic_ai.capabilities import AbstractCapability
-    from pydantic_ai.exceptions import ToolFailed
+    from pydantic_ai.exceptions import ApprovalRequired, CallDeferred, ToolFailed
     from pydantic_ai.toolsets import AbstractToolset, WrapperToolset
     from pydantic_ai.toolsets.abstract import ToolsetTool
 except ImportError as e:  # pragma: no cover - exercised only without the extra
@@ -155,6 +155,8 @@ class HallpassToolset(WrapperToolset[Any]):
             raise ToolFailed(refusal(outcome))
         try:
             result = await self.wrapped.call_tool(name, tool_args, ctx, tool)
+        except (CallDeferred, ApprovalRequired):
+            raise  # deferred, not run: it is checked again when it does run
         except BaseException as e:
             if outcome.checked is not None:
                 outcome.checked.log(f"raised {type(e).__name__} from")

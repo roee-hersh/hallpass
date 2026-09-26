@@ -25,7 +25,7 @@ import pytest
 
 pytest.importorskip("pydantic_ai")
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests, DeferredToolResults, Tool
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, RetryPromptPart, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
@@ -242,6 +242,21 @@ def test_error_in_check_refuses(hp: Hallpass) -> None:
     s, t = Script(("read_thing", {"thing_id": "t1"})), Tools()
     run(hp, s, t)
     assert t.ran == [] and "the hallpass check failed: RuntimeError: engine exploded" in s.result(), s.result()
+
+
+def test_approval_required_is_checked_when_it_runs(hp: Hallpass, audit: pytest.LogCaptureFixture) -> None:
+    """A tool that needs approval is deferred unchecked and checked when the approved call runs."""
+    t = Tools()
+    tool = Tool(t.write_thing, requires_approval=True)
+    s = Script(("write_thing", {"thing_id": "t1", "text": "x"}))
+    agent = Agent(FunctionModel(s), deps_type=Deps, tools=[tool], output_type=[str, DeferredToolRequests], capabilities=[HallpassAuthorization(hp, RULES)])
+    first = agent.run_sync("go", deps=Deps(USER))
+    assert isinstance(first.output, DeferredToolRequests) and t.ran == [] and writes(audit) == [], first.output
+    approvals = DeferredToolResults(approvals={c.tool_call_id: True for c in first.output.approvals})
+    agent.run_sync(message_history=first.all_messages(), deferred_tool_results=approvals, deps=Deps(USER))
+    assert t.ran == [] and "may not thing.write" in s.result(), s.seen
+    agent.run_sync(message_history=first.all_messages(), deferred_tool_results=approvals, deps=Deps(ADMIN))
+    assert t.ran == [("write_thing", "t1")] and len(writes(audit)) == 1, (t.ran, writes(audit))
 
 
 def test_toolset_wraps_only_its_tools(hp: Hallpass) -> None:

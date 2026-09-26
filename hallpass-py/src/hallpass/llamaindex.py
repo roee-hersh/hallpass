@@ -29,12 +29,13 @@ before ``FunctionTool.from_defaults``, for a per-tool check instead.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 try:
     from llama_index.core.tools import BaseTool, FunctionTool, ToolOutput
-    from llama_index.core.tools.types import adapt_to_async_tool
+    from llama_index.core.tools.types import AsyncBaseTool
 except ImportError as e:  # pragma: no cover - exercised only without the extra
     raise ImportError('hallpass.llamaindex needs llama-index-core 0.12 or later: pip install "hallpass[llamaindex]"') from e
 
@@ -146,7 +147,7 @@ class HallpassTool(FunctionTool):
         if not outcome.allowed:
             return self._refused(outcome, tool_input)
         try:
-            out = self.tool.call(*args, **kwargs)
+            out: ToolOutput = self.tool.call(*args, **kwargs) if isinstance(self.tool, AsyncBaseTool) else self.tool(*args, **kwargs)
         except BaseException as e:
             _log(outcome.checked, f"raised {type(e).__name__} from")
             raise
@@ -162,7 +163,10 @@ class HallpassTool(FunctionTool):
         if not outcome.allowed:
             return self._refused(outcome, tool_input)
         try:
-            out = await adapt_to_async_tool(self.tool).acall(*args, **kwargs)
+            if isinstance(self.tool, AsyncBaseTool):
+                out: ToolOutput = await self.tool.acall(*args, **kwargs)
+            else:  # a plain BaseTool: what LlamaIndex's async adapter does, with the arguments as given
+                out = await asyncio.to_thread(self.tool, *args, **kwargs)
         except BaseException as e:
             _log(outcome.checked, f"raised {type(e).__name__} from")
             raise

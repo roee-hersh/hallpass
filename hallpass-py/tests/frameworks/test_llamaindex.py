@@ -20,13 +20,14 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 pytest.importorskip("llama_index.core")
 
 from llama_index.core.agent.workflow import AgentWorkflow, FunctionAgent, ReActAgent
 from llama_index.core.base.llms.types import ChatMessage, MessageRole, ToolCallBlock
 from llama_index.core.llms.mock import MockFunctionCallingLLM, MockLLM
-from llama_index.core.tools import FunctionTool
+from llama_index.core.tools import BaseTool, FunctionTool, ToolMetadata, ToolOutput
 from llama_index.core.workflow import Context
 
 from hallpass import Hallpass, literal
@@ -279,6 +280,29 @@ def test_sync_call_path(hp: Hallpass) -> None:
     assert wrapped["read_thing"].call(thing_id="t1").content == "contents of t1"
     out = wrapped["write_thing"].call(thing_id="t1", text="x")
     assert out.is_error and "may not thing.write" in out.content and t.ran == [("read_thing", "t1")], (out, t.ran)
+
+
+def test_plain_base_tool(hp: Hallpass) -> None:
+    """A BaseTool that is neither a FunctionTool nor async is wrapped too."""
+    ran: list[str] = []
+
+    class ReadArgs(BaseModel):
+        thing_id: str
+
+    class Reader(BaseTool):
+        @property
+        def metadata(self) -> ToolMetadata:
+            return ToolMetadata(name="read_thing", description="Read a thing by id.", fn_schema=ReadArgs)
+
+        def __call__(self, thing_id: str) -> ToolOutput:
+            ran.append(thing_id)
+            return ToolOutput(content=f"contents of {thing_id}", tool_name="read_thing", raw_input={"thing_id": thing_id}, raw_output=thing_id)
+
+    s = Script(("read_thing", {"thing_id": "t1"}), ("read_thing", {"thing_id": "hidden"}))
+    agent = FunctionAgent(tools=HallpassAuthorization(hp, RULES, user=USER).wrap([Reader()]), llm=MockFunctionCallingLLM(response_generator=s))
+    drive(agent)
+    assert ran == ["t1"], f"ran: {ran}"
+    assert s.result(0) == "contents of t1" and ": unknown (" in s.result(1), s.seen
 
 
 def test_react_agent(hp: Hallpass) -> None:

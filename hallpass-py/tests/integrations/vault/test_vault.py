@@ -779,4 +779,3 @@ def test_no_secret_in_logs(env: Env) -> None:
     check(c, dana, "secret.read", "kv:secret/dev/app")
     check(c, dana, "secret.read", "kv:nope/x")
     itest.assert_no_canary(logs.text())
-

@@ -49,7 +49,8 @@ from typing import Any
 try:
     from google.adk.agents import BaseAgent, LlmAgent
     from google.adk.plugins import BasePlugin
-    from google.adk.tools import BaseTool, ToolContext
+    from google.adk.tools.base_tool import BaseTool
+    from google.adk.tools.tool_context import ToolContext
     from google.adk.tools.base_toolset import BaseToolset
 except ImportError as e:  # pragma: no cover - depends on the environment
     raise ImportError('hallpass.google_adk needs google-adk 2.10 or later: pip install "hallpass[google-adk]"') from e

@@ -24,6 +24,7 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain.tools import ToolRuntime, tool
+from langchain_core.messages import HumanMessage
 
 from hallpass import Hallpass
 from hallpass.langchain import HallpassMiddleware, Rule
@@ -48,8 +49,8 @@ def write_thing(thing_id: str, content: str, runtime: ToolRuntime[Any, Any]) -> 
 def main() -> None:
     # Demo only: the command line stands in for the user your login authenticated.
     user = sys.argv[1] if len(sys.argv) > 1 else "dana@example.com"
-    agent = create_agent("anthropic:claude-haiku-4-5", tools=[write_thing], middleware=[hallpass], context_schema=Context)
-    result = agent.invoke({"messages": [("user", "Write 'hello' to thing 1.")]}, context=Context(user_id=user))
+    agent = create_agent("anthropic:claude-haiku-4-5", tools=[write_thing], middleware=[hallpass], context_schema=Context)  # type: ignore[misc]
+    result = agent.invoke({"messages": [HumanMessage("Write 'hello' to thing 1.")]}, context=Context(user_id=user))
     print(result["messages"][-1].content)
 
 

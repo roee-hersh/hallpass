@@ -13,7 +13,11 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import socket
+import subprocess
+import time
+import urllib.request
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextvars import ContextVar
@@ -569,6 +573,91 @@ def test_real_upstream(fw_strands_pagerduty: harness.Server) -> None:
     assert text(no).startswith(REFUSED + "stake@example.com may not service.maintenance on service:PSVC1 in pd: deny (denied: ")
     assert RAN == ["set_maintenance:PSVC1"]
     assert [c.q("query") for c in srv.calls() if c.path == "/users"] == ["oncall@example.com", "stake@example.com"]
+
+
+VAULT_IMAGE = "hashicorp/vault:1.17"
+
+
+@pytest.fixture(scope="module")
+def fw_strands_vault() -> Iterator[str]:
+    """A real HashiCorp Vault dev server in docker. The entity of admin@example.com
+    (an alias on userpass/) has a policy that may write secret/app/*; dana@example.com's has none."""
+    if shutil.which("docker") is None:
+        pytest.skip("needs docker")
+    if subprocess.run(["docker", "image", "inspect", VAULT_IMAGE], capture_output=True, check=False).returncode != 0:
+        pytest.skip(f"needs the docker image {VAULT_IMAGE}")
+    run = [
+        "docker",
+        "run",
+        "-d",
+        "--rm",
+        "--cap-add=IPC_LOCK",
+        "-e",
+        "VAULT_DEV_ROOT_TOKEN_ID=" + harness.CANARY + "root",
+        "-p",
+        "127.0.0.1::8200",
+        VAULT_IMAGE,
+    ]
+    cid = subprocess.run(run, check=True, capture_output=True, text=True).stdout.strip()
+    try:
+        port = subprocess.run(["docker", "port", cid, "8200/tcp"], check=True, capture_output=True, text=True).stdout.split(":")[-1].strip()
+        base = f"http://127.0.0.1:{port}"
+
+        def api(method: str, path: str, body: Any = None) -> Any:
+            data = None if body is None else json.dumps(body).encode()
+            req = urllib.request.Request(base + "/v1/" + path, method=method, data=data, headers={"X-Vault-Token": harness.CANARY + "root"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                raw = r.read()
+                return json.loads(raw) if raw else None
+
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                api("GET", "sys/health")
+                break
+            except (OSError, ValueError):
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.1)
+        api("POST", "sys/auth/userpass", {"type": "userpass"})
+        accessor = api("GET", "sys/auth")["data"]["userpass/"]["accessor"]
+        api("PUT", "sys/policies/acl/app-writer", {"policy": 'path "secret/data/app/*" { capabilities = ["create", "update", "read"] }'})
+        for name, email, policies in (("admin", ADMIN, ["app-writer"]), ("dana", DANA, [])):
+            entity = api("POST", "identity/entity", {"name": name, "policies": policies})["data"]["id"]
+            api("POST", "identity/entity-alias", {"name": email, "canonical_id": entity, "mount_accessor": accessor})
+        yield base
+    finally:
+        subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
+
+
+def vault_hallpass(base: str) -> RecordingHallpass:
+    return recording([{"id": "vault", "integration": "vault", "url": base, "credential": literal(harness.CANARY + "root"), "alias_mount": "userpass/"}])
+
+
+def test_real_vault(fw_strands_vault: str) -> None:
+    hp = vault_hallpass(fw_strands_vault)
+
+    @tool
+    def write_secret(path: str, value: str) -> str:
+        """Write a secret under secret/.
+
+        Args:
+            path: the key path, e.g. app/db
+            value: the value
+        """
+        RAN.append("write_secret:" + path)
+        return "wrote secret/" + path
+
+    h = HallpassAuthorization(hp, {"write_secret": ("vault", "secret.write", "kv:secret/{path}")})
+    results = [
+        run_agent([("write_secret", {"path": path, "value": "x", "user_id": ADMIN})], {"user_id": user}, [h], [write_secret])[0]
+        for user, path in ((ADMIN, "app/db"), (DANA, "app/db"), (ADMIN, "other/db"))
+    ]
+    assert [r["status"] for r in results] == ["success", "error", "error"]
+    assert text(results[1]).startswith(REFUSED + "dana@example.com may not secret.write on kv:secret/app/db in vault: deny (denied: ")
+    assert text(results[2]).startswith(REFUSED + "admin@example.com may not secret.write on kv:secret/other/db in vault: deny (denied: ")
+    assert RAN == ["write_secret:app/db"]
+    assert [s["user"] for s in hp.seen] == [ADMIN, DANA, ADMIN]
 
 
 # -- a real model ------------------------------------------------------------------

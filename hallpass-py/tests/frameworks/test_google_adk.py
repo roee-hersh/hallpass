@@ -27,9 +27,12 @@ pytest.importorskip("google.adk")
 
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
-from google.adk.models import BaseLlm, LlmRequest, LlmResponse
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
-from google.adk.tools import BaseTool, ToolContext
+from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 from hallpass import Hallpass, literal
@@ -88,7 +91,7 @@ RULES: dict[str, Any] = {
     "count_thing": ("things", "thing.read", "thing:{n}"),
     "break_thing": ("things", "thing.write", "thing:{thing_id}"),
 }
-TOOLS = [read_thing, delete_thing, archive_thing, count_thing, break_thing, ping]
+TOOLS: list[Any] = [read_thing, delete_thing, archive_thing, count_thing, break_thing, ping]
 
 
 class ScriptedLlm(BaseLlm):
