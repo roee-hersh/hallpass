@@ -1,14 +1,14 @@
 # hallpass
 
 [![ci](https://github.com/roee-hersh/hallpass/actions/workflows/ci.yaml/badge.svg)](https://github.com/roee-hersh/hallpass/actions/workflows/ci.yaml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/roee-hersh/hallpass)](https://goreportcard.com/report/github.com/roee-hersh/hallpass)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **Permission checks for AI agents and bots, answered live by the system they act in.**
 
 ![hallpass demo: an admin is allowed, dana is denied, an unknown user is denied](docs/assets/demo.svg)
 
-hallpass is a small self-hosted service that answers one question:
+hallpass is a small Python package that answers one question, in your agent's process or as a
+self-hosted service:
 
 > May user X do action Y on resource Z in system C?
 
@@ -42,16 +42,18 @@ sequenceDiagram
     participant HP as hallpass
     participant Sys as Jira / K8s / GitHub / ...
     Dana->>Agent: "delete issue PAY-123"
-    Agent->>HP: POST /check (dana, jira-main, DELETE_ISSUES, issue:PAY-123)
+    Agent->>HP: check(dana, jira-main, DELETE_ISSUES, issue:PAY-123)
     HP->>Sys: may dana do this? (read-only credential)
     Sys-->>HP: no
-    HP-->>Agent: {"decision":"deny"}
+    HP-->>Agent: deny
     Agent-->>Dana: "You don't have permission to do that."
 ```
 
 - **Read-only.** It only checks and never performs the action.
 - **Fails closed.** Anything it cannot evaluate is `unknown`, not `allow`.
-- **Single static binary.** One YAML file and one dependency (`yaml.v3`). No database.
+- **One Python package, in-process or as a server.** `pip install hallpass` runs the checks inside
+  your agent; `hallpass serve` runs the same engine as an HTTP service. The core depends only on
+  PyYAML. One YAML file, no database.
 
 ## How it differs from OPA, Cedar, OpenFGA and OAuth
 
@@ -76,10 +78,11 @@ covers the many that do not, and the agents that cannot ask every user to connec
 - **Fails closed.** `deny`, `unknown` and an unreachable hallpass all mean the tool does not run.
 - **Read-only, per resource, from the source of truth.** Each check is answered live by the system
   that owns the resource, with a credential that is read-only wherever the product allows it.
-- **The lookup credentials stay out of the agent.** The agent keeps its own credential to act.
+- **The lookup credentials can stay out of the agent.** The agent keeps its own credential to act.
   Asking what *another* user may do takes different, more sensitive access: it reveals what anyone
-  may do, and in Jira it needs Administer Jira. Run hallpass in its own container or service, with
-  those credentials mounted only there, and the agent's process never holds them.
+  may do, and in Jira it needs Administer Jira. In-process, the agent's process holds those
+  credentials. Run hallpass as a server in its own container or service, with the credentials
+  mounted only there, and the agent's process never holds them.
 - **Every decision is logged** as a JSON line, with the upstream calls it was based on.
 
 Not goals: approving changes, making check and action atomic, or proving who the user is.
@@ -88,7 +91,38 @@ Not goals: approving changes, making check and action atomic, or proving who the
 ## Quickstart
 
 ```sh
+pip install hallpass
 curl -sO https://raw.githubusercontent.com/roee-hersh/hallpass/main/examples/hallpass.yaml
+```
+
+The example config has a `demo` connection that talks to nothing. Ask it, in-process:
+
+```python
+from hallpass import Hallpass
+
+hp = Hallpass.from_config("hallpass.yaml")
+d = hp.check("dana@example.com", "demo", "thing.write", "thing:1")
+print(d.decision, d.reason)  # deny denied: dana@example.com is not an admin
+```
+
+Then guard a tool, so it runs only after hallpass said `allow`:
+
+```python
+from contextvars import ContextVar
+from hallpass import guarded
+
+current_user: ContextVar[str] = ContextVar("current_user")  # your app sets it per session
+
+@tool  # LangChain, Strands, MCPServer, ...
+@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user)
+def delete_issue(key: str) -> str:
+    jira.delete_issue(key)  # the agent's own credential, only after allow
+    return f"deleted {key}"
+```
+
+To keep the lookup credentials out of the agent, run the same engine as a server:
+
+```sh
 docker run --rm -p 8080:8080 -e HALLPASS_API_KEY=change-me \
   -v "$PWD/hallpass.yaml:/etc/hallpass/hallpass.yaml:ro" ghcr.io/roee-hersh/hallpass
 ```
@@ -102,34 +136,26 @@ curl -X POST localhost:8080/check -H 'Authorization: Bearer change-me' \
 {"decision":"deny","reason":"denied: dana@example.com is not an admin"}
 ```
 
-Then guard a tool with the client, `pip install hallpass-client` or `npm install hallpass-client`:
-
-```python
-from contextvars import ContextVar
-from hallpass_client import Hallpass, guarded
-
-hp = Hallpass()  # HALLPASS_URL and HALLPASS_API_KEY from the environment
-current_user: ContextVar[str] = ContextVar("current_user")  # your app sets it per session
-
-@tool  # LangChain, Strands, MCPServer, ...
-@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user)
-def delete_issue(key: str) -> str:
-    jira.delete_issue(key)  # the agent's own credential, only after allow
-    return f"deleted {key}"
-```
+and change one line in the agent: `hp = Hallpass.remote("http://localhost:8080", api_key)`. The
+methods and `guarded` are the same. From Node, `npm install hallpass-client` talks to the server.
 
 The [quickstart](docs/quickstart.md) walks through all of it, including connecting a real system.
-Working, tested examples for each framework:
+Each framework has an adapter that checks every tool call with a rule, configured once on the
+agent, and a working example:
 
-| Framework | Example |
-|---|---|
-| LangChain | [`langchain_tool.py`](examples/agent/langchain_tool.py) |
-| LangGraph | [`langgraph_agent.py`](examples/agent/langgraph_agent.py) |
-| Strands Agents | [`strands_intervention.py`](examples/agent/strands_intervention.py), an intervention handler for every tool |
-| Claude Agent SDK | [`claude_agent_sdk_tool.py`](examples/agent/claude_agent_sdk_tool.py) |
-| MCP, for any host (Claude Code, Claude Desktop, Cursor, ...) | [`mcp_server.py`](examples/agent/mcp_server.py) |
-| Vercel AI SDK (TypeScript) | [`ai_sdk_tool.ts`](examples/agent-ts/ai_sdk_tool.ts) |
-| MCP TypeScript SDK | [`mcp_server.ts`](examples/agent-ts/mcp_server.ts) |
+| Framework | Adapter | Example |
+|---|---|---|
+| Strands Agents | `hallpass.strands.HallpassAuthorization` | [`strands_agent.py`](hallpass-py/examples/strands_agent.py) |
+| LangChain, LangGraph | `hallpass.langchain.HallpassMiddleware` | [`langchain_agent.py`](hallpass-py/examples/langchain_agent.py) |
+| MCP servers (`mcp` SDK), for any host | `hallpass.mcp.guard` | [`mcp_server.py`](hallpass-py/examples/mcp_server.py) |
+| OpenAI Agents SDK | `hallpass.openai_agents.HallpassGuardrails` | [`openai_agents_agent.py`](hallpass-py/examples/openai_agents_agent.py) |
+| Claude Agent SDK | `hallpass.claude_agent_sdk.HallpassHooks` | [`claude_agent_sdk_agent.py`](hallpass-py/examples/claude_agent_sdk_agent.py) |
+| Google ADK | `hallpass.google_adk.HallpassCallbacks` | [`google_adk_agent.py`](hallpass-py/examples/google_adk_agent.py) |
+| CrewAI | `hallpass.crewai.HallpassHooks` | [`crewai_agent.py`](hallpass-py/examples/crewai_agent.py) |
+| Pydantic AI | `hallpass.pydantic_ai.HallpassAuthorization` | [`pydantic_ai_agent.py`](hallpass-py/examples/pydantic_ai_agent.py) |
+| LlamaIndex | `hallpass.llamaindex.HallpassAuthorization` | [`llamaindex_agent.py`](hallpass-py/examples/llamaindex_agent.py) |
+| Vercel AI SDK (TypeScript) | `guarded` from `hallpass-client` | [`ai_sdk_tool.ts`](examples/agent-ts/ai_sdk_tool.ts) |
+| MCP TypeScript SDK | `guarded` from `hallpass-client` | [`mcp_server.ts`](examples/agent-ts/mcp_server.ts) |
 
 ## Integrations
 
@@ -145,10 +171,10 @@ against the vendors' published API descriptions, and six are marked beta.
 |---|---|
 | [Quickstart](docs/quickstart.md) | Run it, ask a question, guard a tool |
 | [Architecture](docs/concepts/architecture.md) | How a check flows, caching, trust boundaries |
-| [Deploy](docs/guides/deploy.md) | Docker, binary, Kubernetes with Helm, TLS, production checklist |
+| [Deploy](docs/guides/deploy.md) | In-process or a server: Docker, pip, Kubernetes with Helm, TLS, production checklist |
 | [Add hallpass to your agent](docs/guides/agent-tools.md) | Which tools to guard, where the user comes from, per framework |
 | [Operating](docs/guides/operating.md) | Decision log, health, what each `unknown` means |
-| [API](docs/reference/api.md), [configuration](docs/reference/configuration.md), [CLI](docs/reference/cli.md) | Reference |
+| [Python API](docs/reference/client.md), [HTTP API](docs/reference/api.md), [configuration](docs/reference/configuration.md), [CLI](docs/reference/cli.md) | Reference |
 | [All docs](docs/README.md) | The full index |
 
 ## License

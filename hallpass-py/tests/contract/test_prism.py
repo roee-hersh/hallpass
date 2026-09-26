@@ -244,7 +244,7 @@ def start_prism(t: Errors, tmp: Path, spec: str, *patches: Patch, dynamic: bool 
         args.append("-d")
     args.append(str(target))
     log_path = tmp / "prism.log"
-    logf = open(log_path, "wb")  # noqa: SIM115 - closed in the finally below
+    logf = open(log_path, "wb")  # closed by stop()
     # Its own process group, so stopping it also stops the node process npx starts.
     proc = subprocess.Popen(args, stdout=logf, stderr=logf, stdin=subprocess.DEVNULL, start_new_session=True)
 
