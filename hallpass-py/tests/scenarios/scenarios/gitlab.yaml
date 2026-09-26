@@ -1,0 +1,131 @@
+# The gitlab integration against a static fake of the GitLab REST API (v4).
+# gitlab: identity_mode admin_search with an administrator's token (the user
+# search returns emails), memberships, visibility, protected branches,
+# custom roles and upstream failures. gitlab-nonadmin: the search returns no
+# emails, so the answer is unknown. gitlab-template: identity_mode template
+# with an email_domains allow-list. Each connection's URL carries its own
+# path prefix so it gets its own routes (the API lives at {url}/api/v4).
+connections:
+  - id: gitlab
+    integration: gitlab
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    credential: env:GITLAB_TOKEN
+  - id: gitlab-nonadmin
+    integration: gitlab
+    url: "{{url}}/nonadmin"
+    ca_file: "{{ca_file}}"
+    credential: env:GITLAB_TOKEN
+  - id: gitlab-template
+    integration: gitlab
+    url: "{{url}}/tpl"
+    ca_file: "{{ca_file}}"
+    credential: env:GITLAB_TOKEN
+    identity_mode: template
+    email_domains: example.com
+env:
+  GITLAB_TOKEN: glpat-parity
+upstream:
+  # admin_search: every search answers the same list; hallpass picks the
+  # exact email match.
+  - method: GET
+    path: /api/v4/users
+    json:
+      - {id: 7, username: alice, state: active, email: alice@example.com, public_email: "", bot: false, is_admin: false, external: false}
+      - {id: 8, username: bob, state: active, email: Bob@Example.com, public_email: "", bot: false, is_admin: false, external: false}
+      - {id: 9, username: carol, state: active, email: carol@example.com, public_email: "", bot: false, is_admin: false, external: false}
+      - {id: 10, username: blocked, state: blocked, email: blocked@example.com, public_email: "", bot: false, is_admin: false, external: false}
+      - {id: 11, username: dup1, state: active, email: dup@example.com, public_email: "", bot: false, is_admin: false, external: false}
+      - {id: 12, username: dup2, state: active, email: DUP@example.com, public_email: "", bot: false, is_admin: false, external: false}
+      - {id: 13, username: root, state: active, email: root@example.com, public_email: "", bot: false, is_admin: true, external: false}
+      - {id: 14, username: dana, state: active, email: dana@example.com, public_email: "", bot: false, is_admin: false, external: false}
+      - {id: 15, username: newbie, state: something_new, email: newbie@example.com, public_email: "", bot: false, is_admin: false, external: false}
+  # Project acme/webapp (private): alice Developer, bob Maintainer, dana a
+  # Guest with a custom role; main is protected for Maintainers.
+  - {method: GET, path: /api/v4/projects/acme/webapp, json: {id: 100, visibility: private}}
+  - {method: GET, path: /api/v4/projects/acme/webapp/members/all/7, json: {access_level: 30, state: active, member_role: null}}
+  - {method: GET, path: /api/v4/projects/acme/webapp/members/all/8, json: {access_level: 40, state: active, member_role: null}}
+  - {method: GET, path: /api/v4/projects/acme/webapp/members/all/14, json: {access_level: 10, state: active, member_role: {id: 5, name: guest-plus}}}
+  - method: GET
+    path: /api/v4/projects/acme/webapp/protected_branches
+    json:
+      - name: main
+        push_access_levels: [{access_level: 40, user_id: null, group_id: null}]
+        merge_access_levels: [{access_level: 30, user_id: null, group_id: null}]
+      - name: locked
+        push_access_levels: [{access_level: 0}]
+        merge_access_levels: [{access_level: 0}]
+  # Project acme/public: nobody is a member.
+  - {method: GET, path: /api/v4/projects/acme/public, json: {id: 101, visibility: public, issues_access_level: enabled}}
+  - {method: GET, path: /api/v4/projects/acme/noissues, json: {id: 103, visibility: public, issues_access_level: disabled}}
+  - {method: GET, path: /api/v4/projects/acme/internal, json: {id: 102, visibility: internal}}
+  # Group acme: alice Owner.
+  - {method: GET, path: /api/v4/groups/acme/members/all/7, json: {access_level: 50, state: active}}
+  - {method: GET, path: /api/v4/groups/acme, json: {id: 200, full_path: acme}}
+  # Failures.
+  - {method: GET, path: /api/v4/projects/acme/locked/members/all/7, status: 403, json: {message: 403 Forbidden}}
+  - {method: GET, path: /api/v4/projects/acme/broken/members/all/7, status: 500, json: {message: boom}}
+  - {method: GET, path: /api/v4/projects/acme/busy/members/all/7, status: 429, headers: {Retry-After: "60"}, json: {message: slow down}}
+  - {method: GET, path: /api/v4/projects/acme/garbled/members/all/7, body: "{not json"}
+  # A non-admin token: the search carries no email.
+  - method: GET
+    path: /nonadmin/api/v4/users
+    json:
+      - {id: 7, username: alice, state: active, public_email: "", bot: false}
+  # identity_mode template: GET /users?username=<local>.
+  - method: GET
+    path: /tpl/api/v4/users
+    json:
+      - {id: 7, username: alice, state: active, public_email: "", bot: false}
+  - {method: GET, path: /tpl/api/v4/projects/acme/webapp/members/all/7, json: {access_level: 20, state: active}}
+checks:
+  - {user: alice@example.com, action: mr.create, resource: "project:acme/webapp", want: allowed}
+  - {user: ALICE@example.com, action: project.read, resource: "project:acme/webapp", want: allowed}
+  - {user: alice@example.com, action: project.delete, resource: "project:acme/webapp", want: denied}
+  - {user: bob@example.com, action: member.manage, resource: "project:acme/webapp", want: allowed}
+  - {user: nobody@example.com, action: project.read, resource: "project:acme/webapp", want: user_not_found}
+  - {user: dup@example.com, action: project.read, resource: "project:acme/webapp", want: user_ambiguous}
+  - {user: "alice @example.com", action: project.read, resource: "project:acme/webapp", want: invalid_request}
+  - {user: blocked@example.com, action: project.read, resource: "project:acme/webapp", want: denied}
+  - {user: newbie@example.com, action: project.read, resource: "project:acme/webapp", want: unsupported}
+  # Non-members: visibility decides, administrators pass.
+  - {user: carol@example.com, action: project.read, resource: "project:acme/webapp", want: denied}
+  - {user: carol@example.com, action: project.read, resource: "project:acme/public", want: allowed}
+  - {user: carol@example.com, action: issue.create, resource: "project:acme/public", want: allowed}
+  - {user: carol@example.com, action: issue.create, resource: "project:acme/noissues", want: denied}
+  - {user: carol@example.com, action: project.read, resource: "project:acme/internal", want: allowed}
+  - {user: carol@example.com, action: mr.create, resource: "project:acme/public", want: denied}
+  - {user: root@example.com, action: project.delete, resource: "project:acme/webapp", want: allowed}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/missing", want: resource_not_visible}
+  # Levels and custom roles.
+  - {user: alice@example.com, action: mr.approve, resource: "project:acme/webapp", want: allowed}
+  - {user: dana@example.com, action: project.read, resource: "project:acme/webapp", want: allowed}
+  - {user: dana@example.com, action: repo.push, resource: "project:acme/webapp@feature", want: unsupported}
+  # Protected branches.
+  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp", want: unsupported}
+  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp@main", want: denied}
+  - {user: alice@example.com, action: mr.merge, resource: "project:acme/webapp@main", want: allowed}
+  - {user: bob@example.com, action: repo.push, resource: "project:acme/webapp@main", want: allowed}
+  - {user: bob@example.com, action: repo.push, resource: "project:acme/webapp@locked", want: denied}
+  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp@feature/x", want: allowed}
+  # Groups.
+  - {user: alice@example.com, action: group.admin, resource: "group:acme", want: allowed}
+  - {user: carol@example.com, action: group.member, resource: "group:acme", want: denied}
+  - {user: alice@example.com, action: group.member, resource: "group:nope", want: resource_not_visible}
+  # Bad requests.
+  - {user: alice@example.com, action: project.read, resource: "group:acme", want: invalid_request}
+  - {user: alice@example.com, action: project.read, resource: "project:../etc", want: invalid_request}
+  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp@a..b", want: invalid_request}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/webapp?x=1", want: invalid_request}
+  - {user: alice@example.com, action: repo.delete, resource: "project:acme/webapp", want: unknown_action}
+  # Upstream failures.
+  - {user: alice@example.com, action: project.read, resource: "project:acme/locked", want: credential_rejected}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/broken", want: upstream_error}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/busy", want: upstream_rate_limited}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/garbled", want: upstream_error}
+  # A non-admin token cannot see emails.
+  - {user: alice@example.com, action: project.read, resource: "project:acme/webapp", connection: gitlab-nonadmin, want: unsupported}
+  # identity_mode template.
+  - {user: alice@example.com, action: issue.edit, resource: "project:acme/webapp", connection: gitlab-template, want: allowed}
+  - {user: alice@example.com, action: mr.create, resource: "project:acme/webapp", connection: gitlab-template, want: denied}
+  - {user: alice@attacker.example, action: project.read, resource: "project:acme/webapp", connection: gitlab-template, want: unsupported}

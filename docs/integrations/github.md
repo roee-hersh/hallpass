@@ -27,6 +27,8 @@ The App's JWT is signed RS256 with `iat` 60 s in the past and `exp` 9 minutes ah
 installation token it buys lasts one hour and is cached and refreshed five minutes before expiry. A
 401 from the API drops the token and retries the call once with a fresh one.
 
+Signing with the App's private key needs `cryptography`: install `hallpass[crypto]` (the Docker image has it).
+
 ## Connection
 
 ```yaml
@@ -209,7 +211,7 @@ matching what GitHub reports; in `saml` mode, an organization without a SAML ide
 
 ## Unverified
 
-Each item is marked `// UNVERIFIED:` in the code.
+Each item is marked `# UNVERIFIED:` in the code.
 
 - Whether an installation token sees `members_can_create_repositories` and the per-visibility
   fields on `GET /orgs/{org}`; when they are absent `org.repo.create` for a non-owner is unknown.
@@ -237,7 +239,7 @@ Each item is marked `// UNVERIFIED:` in the code.
 
 ## Test
 
-`go test ./internal/integrations/github/` runs against a fake GitHub (REST and GraphQL) that
+`python -m pytest tests/integrations/github` (in `hallpass-py`) runs against a fake GitHub (REST and GraphQL) that
 verifies the App JWT signature and claims with the test key, hands out installation tokens, and
 serves the repository, permission, membership, rules, branch protection and SAML identity endpoints.
 With `HALLPASS_SPECS_DIR` set (see `test/specs/fetch.sh`) every REST request is validated against

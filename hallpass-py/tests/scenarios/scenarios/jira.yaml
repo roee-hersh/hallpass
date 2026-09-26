@@ -1,0 +1,258 @@
+# The jira integration with auth_mode basic against a static fake of the
+# Jira Cloud REST API: user search (exact, ambiguous, hidden, crowded),
+# project and issue lookups, permissions/check echoes, and upstream failures.
+# Each connection's site URL carries its own path prefix so it gets its own
+# routes.
+connections:
+  - id: jira
+    integration: jira
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    auth_mode: basic
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+  - id: jira-hidden
+    integration: jira
+    url: "{{url}}/hidden"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+  - id: jira-crowded
+    integration: jira
+    url: "{{url}}/crowded"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+  - id: jira-rejected
+    integration: jira
+    url: "{{url}}/rejected"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+  - id: jira-noadmin
+    integration: jira
+    url: "{{url}}/noadmin"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+  - id: jira-badkey
+    integration: jira
+    url: "{{url}}/badkey"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+  - id: jira-broken
+    integration: jira
+    url: "{{url}}/broken"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+  - id: jira-limited
+    integration: jira
+    url: "{{url}}/limited"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+  - id: jira-badid
+    integration: jira
+    url: "{{url}}/badid"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+  - id: jira-badtype
+    integration: jira
+    url: "{{url}}/badtype"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:JIRA_TOKEN
+env:
+  JIRA_TOKEN: parity-jira-token
+upstream:
+  # jira
+  - method: GET
+    path: /rest/api/3/user/search
+    json:
+      - {accountId: acc-dana, accountType: atlassian, active: true, emailAddress: Dana@example.com, displayName: Dana}
+      - {accountId: acc-bob-old, accountType: atlassian, active: false, emailAddress: bob@example.com, displayName: Bob (old)}
+      - {accountId: acc-bot, accountType: app, active: true, emailAddress: bob@example.com, displayName: Bot}
+      - {accountId: acc-bob, accountType: atlassian, active: true, emailAddress: bob@example.com, displayName: Bob}
+      - {accountId: acc-twin1, accountType: atlassian, active: true, emailAddress: twin@example.com, displayName: Twin 1}
+      - {accountId: acc-twin2, accountType: atlassian, active: true, emailAddress: twin@example.com, displayName: Twin 2}
+      - {accountId: acc-noname, accountType: atlassian, active: true, emailAddress: noname@example.com}
+  - method: GET
+    path: /rest/api/3/project/OPS
+    json: {id: "10000", key: OPS, name: Operations}
+  - method: GET
+    path: /rest/api/3/project/SEC
+    json: {id: "10001", key: SEC, name: Security}
+  - method: GET
+    path: /rest/api/3/issue/OPS-1
+    json: {id: "10010", key: OPS-1, fields: {project: {id: "10000"}}}
+  - method: GET
+    path: /rest/api/3/issue/SEC-7
+    json: {id: "10020", key: SEC-7, fields: {project: {id: "10001"}}}
+  - method: POST
+    path: /rest/api/3/permissions/check
+    json:
+      projectPermissions:
+        - {permission: CREATE_ISSUES, projects: [10000], issues: [10010]}
+        - {permission: BROWSE_PROJECTS, projects: [10000, 10001], issues: [10010, 10020]}
+      globalPermissions: [ADMINISTER]
+  # jira-hidden: the only candidates hide their email
+  - method: GET
+    path: /hidden/rest/api/3/user/search
+    json:
+      - {accountId: acc-hidden, accountType: atlassian, active: true, emailAddress: "", displayName: dana@example.com}
+      - {accountId: acc-hidden2, accountType: atlassian, active: true, displayName: Hidden 2}
+  # jira-crowded: every page is full and none matches exactly
+  - method: GET
+    path: /crowded/rest/api/3/user/search
+    json:
+        - {accountId: acc-crowd-0, accountType: atlassian, active: true, emailAddress: crowd-0@example.com, displayName: Crowd 0}
+        - {accountId: acc-crowd-1, accountType: atlassian, active: true, emailAddress: crowd-1@example.com, displayName: Crowd 1}
+        - {accountId: acc-crowd-2, accountType: atlassian, active: true, emailAddress: crowd-2@example.com, displayName: Crowd 2}
+        - {accountId: acc-crowd-3, accountType: atlassian, active: true, emailAddress: crowd-3@example.com, displayName: Crowd 3}
+        - {accountId: acc-crowd-4, accountType: atlassian, active: true, emailAddress: crowd-4@example.com, displayName: Crowd 4}
+        - {accountId: acc-crowd-5, accountType: atlassian, active: true, emailAddress: crowd-5@example.com, displayName: Crowd 5}
+        - {accountId: acc-crowd-6, accountType: atlassian, active: true, emailAddress: crowd-6@example.com, displayName: Crowd 6}
+        - {accountId: acc-crowd-7, accountType: atlassian, active: true, emailAddress: crowd-7@example.com, displayName: Crowd 7}
+        - {accountId: acc-crowd-8, accountType: atlassian, active: true, emailAddress: crowd-8@example.com, displayName: Crowd 8}
+        - {accountId: acc-crowd-9, accountType: atlassian, active: true, emailAddress: crowd-9@example.com, displayName: Crowd 9}
+        - {accountId: acc-crowd-10, accountType: atlassian, active: true, emailAddress: crowd-10@example.com, displayName: Crowd 10}
+        - {accountId: acc-crowd-11, accountType: atlassian, active: true, emailAddress: crowd-11@example.com, displayName: Crowd 11}
+        - {accountId: acc-crowd-12, accountType: atlassian, active: true, emailAddress: crowd-12@example.com, displayName: Crowd 12}
+        - {accountId: acc-crowd-13, accountType: atlassian, active: true, emailAddress: crowd-13@example.com, displayName: Crowd 13}
+        - {accountId: acc-crowd-14, accountType: atlassian, active: true, emailAddress: crowd-14@example.com, displayName: Crowd 14}
+        - {accountId: acc-crowd-15, accountType: atlassian, active: true, emailAddress: crowd-15@example.com, displayName: Crowd 15}
+        - {accountId: acc-crowd-16, accountType: atlassian, active: true, emailAddress: crowd-16@example.com, displayName: Crowd 16}
+        - {accountId: acc-crowd-17, accountType: atlassian, active: true, emailAddress: crowd-17@example.com, displayName: Crowd 17}
+        - {accountId: acc-crowd-18, accountType: atlassian, active: true, emailAddress: crowd-18@example.com, displayName: Crowd 18}
+        - {accountId: acc-crowd-19, accountType: atlassian, active: true, emailAddress: crowd-19@example.com, displayName: Crowd 19}
+        - {accountId: acc-crowd-20, accountType: atlassian, active: true, emailAddress: crowd-20@example.com, displayName: Crowd 20}
+        - {accountId: acc-crowd-21, accountType: atlassian, active: true, emailAddress: crowd-21@example.com, displayName: Crowd 21}
+        - {accountId: acc-crowd-22, accountType: atlassian, active: true, emailAddress: crowd-22@example.com, displayName: Crowd 22}
+        - {accountId: acc-crowd-23, accountType: atlassian, active: true, emailAddress: crowd-23@example.com, displayName: Crowd 23}
+        - {accountId: acc-crowd-24, accountType: atlassian, active: true, emailAddress: crowd-24@example.com, displayName: Crowd 24}
+        - {accountId: acc-crowd-25, accountType: atlassian, active: true, emailAddress: crowd-25@example.com, displayName: Crowd 25}
+        - {accountId: acc-crowd-26, accountType: atlassian, active: true, emailAddress: crowd-26@example.com, displayName: Crowd 26}
+        - {accountId: acc-crowd-27, accountType: atlassian, active: true, emailAddress: crowd-27@example.com, displayName: Crowd 27}
+        - {accountId: acc-crowd-28, accountType: atlassian, active: true, emailAddress: crowd-28@example.com, displayName: Crowd 28}
+        - {accountId: acc-crowd-29, accountType: atlassian, active: true, emailAddress: crowd-29@example.com, displayName: Crowd 29}
+        - {accountId: acc-crowd-30, accountType: atlassian, active: true, emailAddress: crowd-30@example.com, displayName: Crowd 30}
+        - {accountId: acc-crowd-31, accountType: atlassian, active: true, emailAddress: crowd-31@example.com, displayName: Crowd 31}
+        - {accountId: acc-crowd-32, accountType: atlassian, active: true, emailAddress: crowd-32@example.com, displayName: Crowd 32}
+        - {accountId: acc-crowd-33, accountType: atlassian, active: true, emailAddress: crowd-33@example.com, displayName: Crowd 33}
+        - {accountId: acc-crowd-34, accountType: atlassian, active: true, emailAddress: crowd-34@example.com, displayName: Crowd 34}
+        - {accountId: acc-crowd-35, accountType: atlassian, active: true, emailAddress: crowd-35@example.com, displayName: Crowd 35}
+        - {accountId: acc-crowd-36, accountType: atlassian, active: true, emailAddress: crowd-36@example.com, displayName: Crowd 36}
+        - {accountId: acc-crowd-37, accountType: atlassian, active: true, emailAddress: crowd-37@example.com, displayName: Crowd 37}
+        - {accountId: acc-crowd-38, accountType: atlassian, active: true, emailAddress: crowd-38@example.com, displayName: Crowd 38}
+        - {accountId: acc-crowd-39, accountType: atlassian, active: true, emailAddress: crowd-39@example.com, displayName: Crowd 39}
+        - {accountId: acc-crowd-40, accountType: atlassian, active: true, emailAddress: crowd-40@example.com, displayName: Crowd 40}
+        - {accountId: acc-crowd-41, accountType: atlassian, active: true, emailAddress: crowd-41@example.com, displayName: Crowd 41}
+        - {accountId: acc-crowd-42, accountType: atlassian, active: true, emailAddress: crowd-42@example.com, displayName: Crowd 42}
+        - {accountId: acc-crowd-43, accountType: atlassian, active: true, emailAddress: crowd-43@example.com, displayName: Crowd 43}
+        - {accountId: acc-crowd-44, accountType: atlassian, active: true, emailAddress: crowd-44@example.com, displayName: Crowd 44}
+        - {accountId: acc-crowd-45, accountType: atlassian, active: true, emailAddress: crowd-45@example.com, displayName: Crowd 45}
+        - {accountId: acc-crowd-46, accountType: atlassian, active: true, emailAddress: crowd-46@example.com, displayName: Crowd 46}
+        - {accountId: acc-crowd-47, accountType: atlassian, active: true, emailAddress: crowd-47@example.com, displayName: Crowd 47}
+        - {accountId: acc-crowd-48, accountType: atlassian, active: true, emailAddress: crowd-48@example.com, displayName: Crowd 48}
+        - {accountId: acc-crowd-49, accountType: atlassian, active: true, emailAddress: crowd-49@example.com, displayName: Crowd 49}
+  # jira-rejected: the credential is refused
+  - method: GET
+    path: /rejected/rest/api/3/user/search
+    status: 401
+    json: {errorMessages: [unauthorized]}
+  # jira-noadmin: users can be searched, other users' permissions cannot be checked
+  - method: GET
+    path: /noadmin/rest/api/3/user/search
+    json:
+      - {accountId: acc-dana, accountType: atlassian, active: true, emailAddress: dana@example.com, displayName: Dana}
+  - method: GET
+    path: /noadmin/rest/api/3/project/OPS
+    status: 403
+    json: {errorMessages: [forbidden]}
+  - method: GET
+    path: /noadmin/rest/api/3/issue/OPS-1
+    json: {id: "10010", key: OPS-1}
+  - method: POST
+    path: /noadmin/rest/api/3/permissions/check
+    status: 403
+    json: {errorMessages: [forbidden]}
+  # jira-badkey: permissions/check refuses the key
+  - method: GET
+    path: /badkey/rest/api/3/user/search
+    json:
+      - {accountId: acc-dana, accountType: atlassian, active: true, emailAddress: dana@example.com, displayName: Dana}
+  - method: POST
+    path: /badkey/rest/api/3/permissions/check
+    status: 400
+    json: {errorMessages: [unknown permission]}
+  # jira-broken: server errors and malformed answers
+  - method: GET
+    path: /broken/rest/api/3/user/search
+    status: 500
+    body: oops
+  # jira-limited: rate limited
+  - method: GET
+    path: /limited/rest/api/3/user/search
+    status: 429
+    headers: {Retry-After: "30"}
+    json: {errorMessages: [slow down]}
+  # jira-badid: lookups answer ids that are not positive numbers
+  - method: GET
+    path: /badid/rest/api/3/user/search
+    json:
+      - {accountId: acc-dana, accountType: atlassian, active: true, emailAddress: dana@example.com, displayName: Dana}
+  - method: GET
+    path: /badid/rest/api/3/project/OPS
+    json: {id: "0", key: OPS}
+  - method: GET
+    path: /badid/rest/api/3/issue/OPS-1
+    json: {id: 10010, key: OPS-1}
+  - method: POST
+    path: /badid/rest/api/3/permissions/check
+    json:
+      projectPermissions:
+        - {permission: CREATE_ISSUES, projects: [10000.5]}
+  - method: GET
+    path: /badid/rest/api/3/issue/OPS-2
+    json: {id: "+10011", key: OPS-2}
+  # jira-badtype: the user search answers a field of the wrong type
+  - method: GET
+    path: /badtype/rest/api/3/user/search
+    json:
+      - {accountId: acc-dana, accountType: atlassian, active: "yes", emailAddress: dana@example.com, displayName: Dana}
+checks:
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: allowed}
+  - {user: DANA@example.com, action: CREATE_ISSUES, resource: "issue:OPS-1", want: allowed}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:SEC", want: denied}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:SEC-7", want: denied}
+  - {user: bob@example.com, action: BROWSE_PROJECTS, resource: "issue:SEC-7", want: allowed}
+  - {user: dana@example.com, action: EDIT_ISSUES, resource: "project:OPS", want: unsupported}
+  - {user: dana@example.com, action: ADMINISTER, resource: global, want: allowed}
+  - {user: dana@example.com, action: BULK_CHANGE, resource: global, want: denied}
+  - {user: noname@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: allowed}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:NOPE", want: resource_not_visible}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:NOPE-9", want: resource_not_visible}
+  - {user: twin@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: user_ambiguous}
+  - {user: nobody@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: user_not_found}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: global, want: invalid_request}
+  - {user: dana@example.com, action: ADMINISTER, resource: "project:OPS", want: invalid_request}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:ops", want: invalid_request}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-0", want: invalid_request}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "board:1", want: invalid_request}
+  - {user: dana@example.com, action: ADMINISTER, resource: "global:x", want: invalid_request}
+  - {user: dana@example.com, action: NOT_A_KEY, resource: global, want: unknown_action}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-hidden, want: unsupported}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-crowded, want: unsupported}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-rejected, want: credential_rejected}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-noadmin, want: credential_rejected}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-1", connection: jira-noadmin, want: credential_rejected}
+  - {user: dana@example.com, action: ADMINISTER, resource: global, connection: jira-badkey, want: unsupported}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-broken, want: upstream_error}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-limited, want: upstream_rate_limited}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-badid, want: upstream_error}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-1", connection: jira-badid, want: upstream_error}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-2", connection: jira-badid, want: upstream_error}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-badtype, want: upstream_error}

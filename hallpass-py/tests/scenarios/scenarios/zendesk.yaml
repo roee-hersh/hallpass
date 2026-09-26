@@ -1,0 +1,149 @@
+# The zendesk integration: roles, a custom role, the non-Enterprise ticket
+# restriction, ticket access, closed tickets, invisible resources and
+# upstream failures, against a static fake of the Support API.
+connections:
+  - id: zd
+    integration: zendesk
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:ZD_TOKEN
+  - id: zd-oauth
+    integration: zendesk
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    auth_mode: oauth
+    credential: env:ZD_TOKEN
+  - id: zd-broken
+    integration: zendesk
+    url: "{{url}}/broken"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:ZD_TOKEN
+  - id: zd-rejected
+    integration: zendesk
+    url: "{{url}}/rejected"
+    ca_file: "{{ca_file}}"
+    username: bot@example.com
+    credential: env:ZD_TOKEN
+env:
+  ZD_TOKEN: parity-zendesk-token
+upstream:
+  # Fallback for identities and group listings of users not named below.
+  - method: GET
+    path: /api/v2/users/*
+    json: {identities: [], group_memberships: [], next_page: null}
+  - method: GET
+    path: /api/v2/users/search
+    json:
+      users:
+        - {id: 10, email: admin@example.com, role: admin, active: true, suspended: false, role_type: null, ticket_restriction: null}
+        - {id: 11, email: dana@example.com, role: agent, active: true, suspended: false, role_type: 0, custom_role_id: 100, ticket_restriction: null, organization_id: 500}
+        - {id: 14, email: sara@example.com, role: agent, active: true, suspended: false, role_type: null, ticket_restriction: groups, only_private_comments: false}
+        - {id: 20, email: end@example.com, role: end-user, active: true, suspended: false, role_type: null, ticket_restriction: requested}
+        - {id: 22, email: gone@example.com, role: agent, active: false, suspended: false}
+        - {id: 23, email: susp@example.com, role: agent, active: true, suspended: true}
+        - {id: 62, email: weird@example.com, role: owner, active: true, suspended: false}
+        - {id: 501, email: dup@example.com, role: agent, active: true}
+        - {id: 502, email: DUP@example.com, role: agent, active: true}
+      count: 9
+      next_page: null
+  - method: GET
+    path: /api/v2/users/11/group_memberships
+    json: {group_memberships: [{id: 1, user_id: 11, group_id: 300}], next_page: null}
+  - method: GET
+    path: /api/v2/users/14/group_memberships
+    json: {group_memberships: [{id: 2, user_id: 14, group_id: 301}], next_page: null}
+  - method: GET
+    path: /api/v2/users/20
+    json: {user: {id: 20, email: end@example.com, role: end-user, active: true}}
+  - method: GET
+    path: /api/v2/users/10
+    json: {user: {id: 10, email: admin@example.com, role: admin, active: true}}
+  - method: GET
+    path: /api/v2/custom_roles
+    json:
+      custom_roles:
+        - id: 100
+          name: Tier 1
+          role_type: 0
+          configuration:
+            ticket_access: within-groups
+            ticket_editing: true
+            ticket_deletion: false
+            ticket_merge: true
+            ticket_comment_access: public
+            modify_closed_tickets: false
+            macro_access: manage-personal
+            view_access: full
+            organization_editing: false
+            end_user_profile_access: full
+            manage_business_rules: false
+            light_agent: false
+  - method: GET
+    path: /api/v2/tickets/1
+    json: {ticket: {id: 1, status: open, group_id: 300, assignee_id: 10, requester_id: 20, organization_id: null, collaborator_ids: []}}
+  - method: GET
+    path: /api/v2/tickets/2
+    json: {ticket: {id: 2, status: open, group_id: 301, assignee_id: null, requester_id: 21, organization_id: 500, collaborator_ids: null}}
+  - method: GET
+    path: /api/v2/tickets/3
+    json: {ticket: {id: 3, status: closed, group_id: 300, requester_id: 20}}
+  - method: GET
+    path: /api/v2/tickets/5
+    json: {ticket: {id: 5, status: open, group_id: null, requester_id: 13}}
+  - method: GET
+    path: /api/v2/tickets/7
+    status: 403
+    json: {error: {title: Forbidden, message: You do not have access to this page}}
+  - method: GET
+    path: /api/v2/tickets/404
+    status: 404
+    json: {error: RecordNotFound, description: Not found}
+  - method: GET
+    path: /api/v2/organizations/500
+    json: {organization: {id: 500, name: Acme}}
+  - method: GET
+    path: /broken/*
+    status: 500
+    body: ""
+  - method: GET
+    path: /rejected/*
+    status: 401
+    json: {error: "Couldn't authenticate you"}
+checks:
+  - {user: admin@example.com, action: account.admin, resource: account, want: allowed}
+  - {user: admin@example.com, action: account.admin, resource: account, connection: zd-oauth, want: allowed}
+  - {user: dana@example.com, action: account.admin, resource: account, want: denied}
+  - {user: dana@example.com, action: ticket.view, resource: "ticket:1", want: allowed}
+  - {user: dana@example.com, action: ticket.view, resource: "ticket:2", want: denied}
+  - {user: dana@example.com, action: ticket.view, resource: "ticket:5", want: unsupported}
+  - {user: dana@example.com, action: ticket.edit, resource: "ticket:1", want: allowed}
+  - {user: dana@example.com, action: ticket.delete, resource: "ticket:1", want: denied}
+  - {user: dana@example.com, action: ticket.merge, resource: "ticket:1", want: allowed}
+  - {user: dana@example.com, action: view.manage, resource: account, want: allowed}
+  - {user: dana@example.com, action: macro.manage, resource: account, want: denied}
+  - {user: dana@example.com, action: user.edit, resource: "user:20", want: allowed}
+  - {user: dana@example.com, action: user.edit, resource: "user:10", want: denied}
+  - {user: dana@example.com, action: organization.edit, resource: "organization:500", want: denied}
+  - {user: sara@example.com, action: ticket.view, resource: "ticket:2", want: allowed}
+  - {user: sara@example.com, action: ticket.delete, resource: "ticket:2", want: unsupported}
+  - {user: sara@example.com, action: user.edit, resource: "user:20", want: denied}
+  - {user: admin@example.com, action: ticket.edit, resource: "ticket:3", want: denied}
+  - {user: admin@example.com, action: ticket.delete, resource: "ticket:3", want: allowed}
+  - {user: admin@example.com, action: ticket.view, resource: "ticket:7", want: resource_not_visible}
+  - {user: admin@example.com, action: ticket.view, resource: "ticket:404", want: resource_not_visible}
+  - {user: admin@example.com, action: organization.edit, resource: "organization:500", want: allowed}
+  - {user: admin@example.com, action: organization.edit, resource: "organization:9", want: resource_not_visible}
+  - {user: end@example.com, action: ticket.view, resource: "ticket:1", want: allowed}
+  - {user: end@example.com, action: ticket.comment_public, resource: "ticket:2", want: denied}
+  - {user: end@example.com, action: user.edit, resource: "user:20", want: allowed}
+  - {user: gone@example.com, action: ticket.view, resource: "ticket:1", want: denied}
+  - {user: susp@example.com, action: ticket.view, resource: "ticket:1", want: denied}
+  - {user: weird@example.com, action: ticket.view, resource: "ticket:1", want: unsupported}
+  - {user: ghost@example.com, action: account.admin, resource: account, want: user_not_found}
+  - {user: dup@example.com, action: account.admin, resource: account, want: user_ambiguous}
+  - {user: admin@example.com, action: ticket.view, resource: "ticket:012", want: invalid_request}
+  - {user: admin@example.com, action: ticket.view, resource: "organization:500", want: invalid_request}
+  - {user: admin@example.com, action: account.admin, resource: account, connection: zd-broken, want: upstream_error}
+  - {user: admin@example.com, action: account.admin, resource: account, connection: zd-rejected, want: credential_rejected}

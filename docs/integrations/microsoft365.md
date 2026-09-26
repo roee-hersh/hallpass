@@ -26,6 +26,8 @@ Prefer a certificate: put the public certificate PEM in `certificate_file` and t
 in `credential`. hallpass then signs a PS256 client assertion with the `x5t#S256` thumbprint. With a
 client secret, `credential` is the secret itself.
 
+A certificate credential signs with `cryptography`: install `hallpass[crypto]` (the Docker image has it).
+
 ## Connection
 
 ```yaml
@@ -163,7 +165,7 @@ absent. If it cannot read its own assignments it warns "could not verify permiss
 
 ## Unverified
 
-Each item is marked `// UNVERIFIED:` in the code.
+Each item is marked `# UNVERIFIED:` in the code.
 
 - Whether Entra still accepts RS256 with the legacy `x5t` header for certificate assertions; only
   PS256 with `x5t#S256` is implemented.
@@ -191,7 +193,7 @@ Each item is marked `// UNVERIFIED:` in the code.
 
 ## Test
 
-Unit tests run against a fake token endpoint and a fake Graph (`microsoft365_test.go`). They cover
+Unit tests run against a fake token endpoint and a fake Graph (`tests/integrations/microsoft365/test_microsoft365.py`). They cover
 both credential types (the certificate path decodes the assertion, checks PS256 and the `x5t#S256`
 thumbprint and verifies the signature), token caching and the 401 retry, every identity fallback
 (including `#`, `%` and `/` in the address being path-escaped), an unreported `accountEnabled`,

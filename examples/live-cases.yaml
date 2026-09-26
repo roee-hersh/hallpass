@@ -1,9 +1,14 @@
-# Cases for the opt-in live test:
+# Cases for the opt-in live test, run from a clone of the repository with
+# hallpass and pytest installed:
 #
-#   HALLPASS_LIVE_CASES=examples/live-cases.yaml go test -tags live ./test/live/
+#   cd hallpass-py
+#   HALLPASS_LIVE_CASES=$PWD/../examples/live-cases.yaml python -m pytest tests/live
 #
 # config is a hallpass config file (relative to this file). Each case names a
-# connection from it and the answer you expect. Fill in real users.
+# connection from it and the answer you expect (allow, deny or unknown, and
+# optionally the reason code). Fill in real users. Every connection is probed
+# first; one whose credential is not available on this machine is reported
+# NOT CONFIGURED and skipped (HALLPASS_LIVE_REQUIRE=1 fails the run instead).
 config: hallpass.yaml
 
 cases:

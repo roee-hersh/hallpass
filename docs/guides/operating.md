@@ -1,20 +1,24 @@
 # Operating hallpass
 
-Running hallpass day to day: what it logs, how to watch it, and what each `unknown` means. To set
+Running hallpass day to day: what it logs, how to watch it, and what each `unknown` means. Most of
+it applies to the in-process engine as well as the server. To set
 it up, see [Deploy](deploy.md). For the file format, see the
 [configuration reference](../reference/configuration.md).
 
 ## Health and connections
 
-- `GET /healthz` answers `{"status":"ok"}` while the process runs. Use it for liveness and readiness.
+- `GET /healthz` answers `{"status":"ok"}` while the server runs. Use it for liveness and readiness.
 - At startup `serve` probes every connection and logs a warning for each one that fails. A broken
   connection never stops the service from starting; its checks answer `unknown`.
 - `hallpass probe -config FILE [-connection ID]` repeats that probe on demand, for example after
-  rotating a credential.
+  rotating a credential. In-process, `hp.probe()` returns `(connection id, ok, summary or error)`
+  for each connection; building a `Hallpass` does not probe.
 
 ## Decision log
 
-Every answered check is one JSON line in `decision_log` (a path, `stderr`, `stdout` or `none`):
+Every answered check is one JSON line in `decision_log` (a path, `stderr`, `stdout` or `none`). The
+in-process engine writes the same lines, with `"remote":"in-process"`; `Hallpass(connections=[...])`
+writes none unless you pass `decision_log=`.
 
 ```json
 {"time":"2026-09-23T10:00:00Z","connection":"github-acme","user":"dana@example.com",
@@ -57,7 +61,8 @@ Every `unknown` carries a code. What each one usually means and what to do:
 | `resource_not_visible` | hallpass's credential cannot see that resource | Grant the read permission the integration page lists for it |
 | `user_ambiguous` | Several accounts match the email | Fix the directory, or use the integration's mapping file |
 | `unsupported` | A policy construct hallpass does not evaluate, such as an IAM condition | Expected; the integration page lists these |
-| `unauthorized` (HTTP 401) | The caller's API key is wrong or missing | Check the agent's `HALLPASS_API_KEY` |
+| `unauthorized` (HTTP 401) | The caller's API key is wrong or missing (server only) | Check the agent's `HALLPASS_API_KEY` |
+| `client_error` | `Hallpass.remote` or the Node client got no usable answer: the server is unreachable, timed out, redirected, or sent something that is not a decision | Check that the server is up and the URL is right; nothing reached the decision log |
 | `unknown_connection`, `unknown_action`, `invalid_request` (HTTP 400) | A mistake in the request | `hallpass catalog <integration>` lists the actions |
 
 `deny` with `user_not_found` is not an error: the person has no account in that system.
@@ -66,6 +71,7 @@ Every `unknown` carries a code. What each one usually means and what to do:
 
 - A `file:` credential is re-read on every use, so replacing the file, or the Kubernetes Secret
   behind it, is enough.
-- An `env:` credential is read at startup. Restart to pick up a new value.
-- To rotate the API key without downtime, run a second hallpass with the new key, move the agents
-  across, then stop the old one.
+- An `env:` credential comes from the process environment, which does not change while the
+  process runs. Restart to pick up a new value.
+- To rotate the API key without downtime, run a second hallpass server with the new key, move the
+  agents across, then stop the old one.

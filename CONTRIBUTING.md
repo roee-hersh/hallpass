@@ -11,14 +11,20 @@ Thanks for taking the time. Bug reports, integration requests and pull requests 
 
 ## Development
 
+hallpass is a Python package in `hallpass-py/` (Python 3.10 or later). From there:
+
 ```sh
-go test -race ./...          # unit tests against fake upstreams
-gofmt -l .                   # must print nothing
-go vet ./...
+pip install -e ".[crypto]" pytest pytest-timeout hypothesis ruff mypy types-PyYAML
+ruff format --check src tests examples   # must report nothing to reformat
+ruff check src tests examples
+mypy --strict src/hallpass
+python -m pytest -q             # unit tests against fake upstreams
 ```
 
-CI also runs contract tests against vendor OpenAPI descriptions, a Kubernetes end-to-end run on
-kind and an Argo CD differential test. See [docs/development/testing.md](docs/development/testing.md) to run them locally.
+The Node client is in `hallpass-ts/` (`npm ci && npm test`). CI also validates every integration's
+requests against the vendors' API descriptions, runs a Kubernetes end-to-end test on kind and an
+Argo CD differential test. See [docs/development/testing.md](docs/development/testing.md) to run
+them locally.
 
 ## Adding an integration
 
@@ -26,7 +32,8 @@ Read [docs/development/integration-authoring.md](docs/development/integration-au
 
 - a read-only credential and the minimum permissions it requires, documented in
   `docs/integrations/<name>.md`;
-- tests against a fake upstream;
+- tests against a fake upstream, including a `test_action_<name>_allow` and `_deny` for each
+  action;
 - `unknown`, never `deny`, whenever the upstream answer cannot be evaluated.
 
 ## Pull requests

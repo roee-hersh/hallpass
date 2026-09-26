@@ -131,7 +131,7 @@ public channel). They always run for `message.post`, `message.post_thread`, `fil
 
 ## Unverified
 
-Marked `// UNVERIFIED:` in the code; behaviour is implemented as described and should be confirmed
+Marked `# UNVERIFIED:` in the code; behaviour is implemented as described and should be confirmed
 against a real workspace.
 
 - `enterprise_user.is_admin` and `enterprise_user.is_owner` are the field names for org roles on
@@ -155,7 +155,7 @@ against a real workspace.
 
 ## Test
 
-Unit tests run against a fake Web API in `internal/integrations/slack/slack_test.go` with fixture
+Unit tests run against a fake Web API in `hallpass-py/tests/integrations/slack/test_slack.py` with fixture
 users (full member, admin, owner, two guest kinds, deactivated, bot, invited, external, two Grid
 users) and channels (public, `#general` with a posting rule, a channel with `posting_restricted_to`,
 archived, a channel without a `properties` object, private with the bot, private without the bot).

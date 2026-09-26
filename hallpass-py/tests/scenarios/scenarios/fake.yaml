@@ -1,0 +1,32 @@
+# The fake integration: every code the engine can produce without an upstream.
+connections:
+  - id: fake-main
+    integration: fake
+    users: dana@example.com,Mixed.Case@Example.com
+    admins: root@example.com
+  - id: fake-broken
+    integration: fake
+    fail: upstream_timeout
+checks:
+  - {user: root@example.com, action: thing.write, resource: "thing:1", want: allowed}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1", want: allowed}
+  - {user: dana@example.com, action: thing.write, resource: "thing:1", want: denied}
+  - {user: MIXED.case@example.COM, action: thing.read, resource: "thing:1", want: allowed}
+  - {user: nobody@example.com, action: thing.read, resource: "thing:1", want: user_not_found}
+  - {user: x-ambiguous@example.com, action: thing.read, resource: "thing:1", want: user_ambiguous}
+  - {user: dana@example.com, action: thing.read, resource: "thing:hidden", want: resource_not_visible}
+  - {user: dana@example.com, action: thing.read, resource: "thing:broken", want: unsupported}
+  - {user: dana@example.com, action: thing.read, resource: "other:1", want: invalid_request}
+  - {user: dana@example.com, action: thing.read, resource: "thing:", want: invalid_request}
+  - {user: dana@example.com, action: thing.delete, resource: "thing:1", want: unknown_action}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1", connection: nope, want: unknown_connection}
+  - {user: not-an-email, action: thing.read, resource: "thing:1", want: invalid_request}
+  - {user: dana@example.com, action: "bad action", resource: "thing:1", want: invalid_request}
+  - {user: dana@example.com, action: thing.read, resource: "Thing:1", want: invalid_request}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=b;c", want: invalid_request}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=%zz", want: invalid_request}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=%C2%85", want: invalid_request}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=1&a=2", want: invalid_request}
+  - {user: dana@example.com, groups: ["", "x"], action: thing.read, resource: "thing:1", want: invalid_request}
+  - {user: dana@example.com, groups: ["b", "a", "b"], action: thing.read, resource: "thing:1", want: allowed}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1", connection: fake-broken, want: upstream_timeout}

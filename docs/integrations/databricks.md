@@ -178,7 +178,7 @@ workspace.
 
 ## Unverified
 
-Marked `// UNVERIFIED:` in the code:
+Marked `# UNVERIFIED:` in the code:
 
 - Whether the effective-permissions endpoint already lists the owner's implicit privileges. The owner
   is looked up separately so an owner is never denied; if the API does list them the extra call is

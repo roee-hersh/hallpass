@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { API_KEY, DANA, FakeHallpass, silentServer, unusedPort } from "./fake_hallpass.ts";
-import { type Decision, Hallpass, PermissionDenied, current, guarded } from "../../sdk/node/src/index.ts"; // in your project: from "hallpass-client"
+import { type Decision, Hallpass, PermissionDenied, current, guarded } from "../../hallpass-ts/src/index.ts"; // in your project: from "hallpass-client"
 
 let fake: FakeHallpass;
 let hp: Hallpass;

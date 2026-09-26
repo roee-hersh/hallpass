@@ -1,0 +1,142 @@
+# The vault integration: the entity found by its alias on the auth mount,
+# policies from the entity and its group, HCL and JSON policies, "+" and "*"
+# paths, deny, templates, KV v1 and v2 mounts, and the unknown codes.
+# vault-empty answers the entity lookup with 204 (no entity); vault-forbidden
+# refuses hallpass's token; vault-sealed is under maintenance.
+connections:
+  - id: vault-main
+    integration: vault
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    alias_mount: oidc/
+    token_policies: base
+    credential: env:HP_PARITY_VAULT_TOKEN
+  - id: vault-empty
+    integration: vault
+    url: "{{url}}/empty"
+    ca_file: "{{ca_file}}"
+    alias_mount: oidc/
+    credential: env:HP_PARITY_VAULT_TOKEN
+  - id: vault-forbidden
+    integration: vault
+    url: "{{url}}/forbidden"
+    ca_file: "{{ca_file}}"
+    alias_mount: oidc/
+    credential: env:HP_PARITY_VAULT_TOKEN
+  - id: vault-sealed
+    integration: vault
+    url: "{{url}}/sealed"
+    ca_file: "{{ca_file}}"
+    alias_mount: oidc/
+    credential: env:HP_PARITY_VAULT_TOKEN
+env:
+  HP_PARITY_VAULT_TOKEN: hvs.parity-token
+upstream:
+  - method: GET
+    path: /v1/sys/auth
+    json: {data: {"oidc/": {accessor: auth_oidc_1a2b, type: oidc}, "token/": {accessor: auth_token_0000, type: token}}}
+  - method: GET
+    path: /v1/sys/mounts
+    json:
+      data:
+        "secret/": {type: kv, options: {version: "2"}}
+        "kv1/": {type: kv, options: {version: "1"}}
+        "team/secrets/": {type: kv, options: {version: "2"}}
+        "pki/": {type: pki, options: null}
+  - method: POST
+    path: /v1/identity/lookup/entity
+    when_body_contains: dana@example.com
+    json: {data: {id: e1000000-0000-4000-8000-000000000001, name: dana}}
+  - method: GET
+    path: /v1/identity/entity/id/e1000000-0000-4000-8000-000000000001
+    json:
+      data:
+        id: e1000000-0000-4000-8000-000000000001
+        name: dana
+        disabled: false
+        policies: [dev]
+        metadata: {team: payments}
+        group_ids: [g1000000-0000-4000-8000-000000000001]
+        inherited_group_ids: []
+        aliases: [{id: alias-1, name: dana@example.com, mount_accessor: auth_oidc_1a2b, metadata: {role: dev}}]
+  - method: GET
+    path: /v1/identity/group/id/g1000000-0000-4000-8000-000000000001
+    json: {data: {id: g1000000-0000-4000-8000-000000000001, name: team, type: internal, policies: [team-readers, gone-policy]}}
+  - method: GET
+    path: /v1/sys/policies/acl/dev
+    json:
+      data:
+        name: dev
+        policy: |
+          path "secret/data/dev/*" {
+            capabilities = ["create", "read", "update", "delete", "list"]
+          }
+          path "secret/metadata/dev/*" { capabilities = ["list", "read", "delete"] }
+          path "secret/data/dev/locked" { capabilities = ["deny"] }
+          path "secret/data/shared/+/config" { capabilities = ["read"] }
+          path "secret/data/teams/{{identity.entity.metadata.team}}/*" { capabilities = ["read", "create", "update"] }
+          path "secret/data/x/{{identity.entity.metadata.missing}}/*" { capabilities = ["deny"] }
+          path "kv1/legacy/*" { policy = "read" }
+          path "secret/data/dev/params" {
+            capabilities = ["create", "update"]
+            allowed_parameters = { "key" = [] }
+          }
+          path "secret/data/dev/half" { capabilities = ["update"] }
+          path "team/secrets/data/*" { capabilities = ["read"] }
+  - method: GET
+    path: /v1/sys/policies/acl/team-readers
+    json: {data: {name: team-readers, policy: '{"path": {"secret/data/shared/*": {"capabilities": ["read", "list"]}, "secret/metadata/shared/*": {"capabilities": ["list"]}}}'}}
+  - method: GET
+    path: /v1/sys/policies/acl/default
+    json: {data: {name: default, policy: 'path "auth/token/lookup-self" { capabilities = ["read"] }'}}
+  - method: GET
+    path: /v1/sys/policies/acl/base
+    json: {data: {name: base, policy: 'path "secret/data/base/*" { capabilities = ["read"] }'}}
+  - method: GET
+    path: /empty/v1/sys/auth
+    json: {data: {"oidc/": {accessor: auth_oidc_1a2b, type: oidc}}}
+  - method: POST
+    path: /empty/v1/identity/lookup/entity
+    status: 204
+  - path: /forbidden/v1/*
+    status: 403
+    json: {errors: ["1 error occurred: permission denied"]}
+  - path: /sealed/v1/*
+    status: 503
+    json: {errors: ["Vault is sealed"]}
+checks:
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/dev/app", want: allowed}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/dev/locked", want: denied}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/shared/db", want: allowed}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/shared/a/config", want: allowed}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/teams/payments/db", want: allowed}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/teams/other/db", want: denied}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/base/x", want: allowed}
+  - {user: dana@example.com, action: secret.read, resource: "kv:kv1/legacy/x", want: allowed}
+  - {user: dana@example.com, action: secret.read, resource: "kv:team/secrets/app", want: allowed}
+  - {user: dana@example.com, action: secret.write, resource: "kv:secret/dev/app", want: allowed}
+  - {user: dana@example.com, action: secret.write, resource: "kv:secret/shared/a/config", want: denied}
+  - {user: dana@example.com, action: secret.write, resource: "kv:secret/dev/half", want: unsupported}
+  - {user: dana@example.com, action: secret.write, resource: "kv:secret/dev/params", want: unsupported}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/x/anything/z", want: unsupported}
+  - {user: dana@example.com, action: secret.delete, resource: "kv:secret/shared/db", want: denied}
+  - {user: dana@example.com, action: secret.list, resource: "kv:secret/dev", want: allowed}
+  - {user: dana@example.com, action: secret.list, resource: "kv:secret/teams/payments", want: denied}
+  - {user: dana@example.com, action: secret.metadata, resource: "kv:secret/dev/app", want: allowed}
+  - {user: dana@example.com, action: secret.metadata, resource: "kv:kv1/legacy/x", want: unsupported}
+  - {user: dana@example.com, action: secret.destroy, resource: "kv:secret/dev/app", want: denied}
+  - {user: dana@example.com, action: raw:sudo, resource: "path:sys/seal", want: denied}
+  - {user: dana@example.com, action: raw:read, resource: "path:auth/token/lookup-self", want: allowed}
+  - {user: dana@example.com, action: raw:list, resource: "path:secret/metadata/dev", want: allowed}
+  - {user: dana@example.com, action: secret.read, resource: "kv:pki/issue/web", want: unsupported}
+  - {user: dana@example.com, action: secret.read, resource: "kv:nope/x", want: resource_not_visible}
+  - {user: dana@example.com, action: secret.read, resource: "kv:team/secrets", want: resource_not_visible}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret", want: invalid_request}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/*", want: invalid_request}
+  - {user: dana@example.com, action: raw:read, resource: "kv:secret/x", want: invalid_request}
+  - {user: dana@example.com, action: secret.destroy, resource: "path:secret/destroy/x", want: invalid_request}
+  - {user: dana@example.com, action: raw:deny, resource: "path:secret/x", want: unknown_action}
+  - {user: bob@example.com, action: secret.read, resource: "kv:secret/dev/app", want: upstream_error}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/dev/app", connection: vault-empty, want: user_not_found}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/dev/app", connection: vault-forbidden, want: credential_rejected}
+  - {user: dana@example.com, action: secret.read, resource: "kv:secret/dev/app", connection: vault-sealed, want: upstream_error}

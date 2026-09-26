@@ -1,0 +1,111 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hallpass"
+dynamic = ["version"]
+description = "Permission checks for AI agents and bots, answered live by the system they act in. In-process or as a server."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0.1"]
+keywords = ["ai-agents", "authorization", "permissions", "llm", "tools", "mcp", "strands-agents", "langchain"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+# RSA and ECDSA signing for the integrations that authenticate with a key:
+# GitHub App, Google service accounts, Snowflake key pair, Salesforce JWT,
+# Microsoft 365 certificates.
+crypto = ["cryptography>=42"]
+# Agent framework adapters: hallpass.strands, hallpass.langchain, hallpass.mcp, ...
+strands = ["strands-agents>=1.57.1"]
+langchain = ["langchain>=1.4", "langgraph>=1.2"]
+mcp = ["mcp>=2.1"]
+openai-agents = ["openai-agents>=0.22"]
+claude-agent-sdk = ["claude-agent-sdk>=0.2.160"]
+google-adk = ["google-adk>=2.10"]
+pydantic-ai = ["pydantic-ai-slim>=2.51"]
+crewai = ["crewai>=1.15"]
+llamaindex = ["llama-index-core>=0.14"]
+
+[project.scripts]
+hallpass = "hallpass.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/roee-hersh/hallpass"
+Documentation = "https://github.com/roee-hersh/hallpass/tree/main/docs"
+Issues = "https://github.com/roee-hersh/hallpass/issues"
+Source = "https://github.com/roee-hersh/hallpass/tree/main/hallpass-py"
+
+[tool.hatch.version]
+path = "src/hallpass/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hallpass"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/hallpass", "tests", "README.md", "LICENSE"]
+
+[tool.hatch.envs.hatch-test]
+extra-dependencies = ["pytest-timeout>=2.3", "hypothesis>=6.100", "cryptography>=42"]
+
+[tool.hatch.envs.types]
+extra-dependencies = ["mypy>=1.11", "types-PyYAML"]
+
+[tool.hatch.envs.types.scripts]
+check = "mypy --strict src/hallpass"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 120
+addopts = "-ra"
+markers = [
+  "live: calls real third-party systems (needs credentials)",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+# The framework adapters import their framework, an optional extra.
+module = ["strands.*", "langchain.*", "langchain_core.*", "langgraph.*", "mcp.*", "mcp_types.*", "agents.*", "claude_agent_sdk.*", "google.adk.*", "google.genai.*", "pydantic_ai.*", "crewai.*", "llama_index.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Without the framework installed its base classes are Any; the adapters
+# subclass them on purpose.
+module = ["hallpass.strands", "hallpass.langchain", "hallpass.mcp", "hallpass.openai_agents", "hallpass.claude_agent_sdk", "hallpass.google_adk", "hallpass.pydantic_ai", "hallpass.crewai", "hallpass.llamaindex"]
+disallow_subclassing_any = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = ["hallpass._api"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+check_untyped_defs = true
+
+[tool.ruff]
+line-length = 160
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "BLE", "A", "N", "SIM", "RUF"]
+ignore = ["A001", "A002", "N801", "N814", "RUF001", "RUF002", "RUF003", "RUF012", "SIM105", "SIM108", "N818", "UP007", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["BLE", "B011", "N802", "SIM"]

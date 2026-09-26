@@ -30,6 +30,8 @@ implemented here.
 
 `hallpass probe` lists hallpass's own roles and warns when none holds `MANAGE GRANTS`.
 
+Signing with the key pair needs `cryptography`: install `hallpass[crypto]` (the Docker image has it).
+
 ## Connection
 
 ```yaml
@@ -137,10 +139,10 @@ of `SHOW GRANTS`, `SHOW USERS` and access control; not run against a live accoun
 
 ## Test
 
-`go test ./internal/integrations/snowflake/` runs a fake SQL API validated against the
+`python -m pytest tests/integrations/snowflake` (in `hallpass-py`) runs a fake SQL API validated against the
 specification when `HALLPASS_SPECS_DIR` holds `snowflake-sqlapi.spec` (`test/specs/fetch.sh`). The
 fake verifies the key-pair JWT's signature and claims with the test key, answers `SHOW USERS` (with
 `LIKE`, `LIMIT` and `FROM` paging), `SHOW GRANTS TO USER` in both shapes, `SHOW GRANTS TO ROLE` and
 `SHOW GRANTS TO DATABASE ROLE`, and can answer asynchronously (202 and polling) and in partitions.
-`FuzzParseTarget` and `FuzzIdentifier` check that only well-formed, safely quoted identifiers are
-accepted.
+Property tests (`test_fuzz_parse_target`, `test_fuzz_identifier`) check that only well-formed,
+safely quoted identifiers are accepted.

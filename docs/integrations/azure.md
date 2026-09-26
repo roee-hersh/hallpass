@@ -143,11 +143,11 @@ it matters:
 
 ## Test
 
-`go test ./internal/integrations/azure/` runs a fake token endpoint, Graph and ARM validated
+`python -m pytest tests/integrations/azure` (in `hallpass-py`) runs a fake token endpoint, Graph and ARM validated
 against `authorization-RoleAssignmentsCalls`, `authorization-RoleDefinitionsCalls`,
 `authorization-DenyAssignmentCalls` and the Graph description when `HALLPASS_SPECS_DIR` holds them
 (`test/specs/fetch.sh`). The fake has Reader, Contributor, Owner, a data-plane role and a custom
 role, assignments direct and through a group at management-group, subscription, resource-group and
 resource scopes, a conditional assignment, and deny assignments with exclusions, conditions and
-`doNotApplyToChildScopes`. `FuzzParseTarget` checks that only well-formed scopes and operations
-reach the API.
+`doNotApplyToChildScopes`. A property test (`test_fuzz_parse_target`) checks that only well-formed
+scopes and operations reach the API.
