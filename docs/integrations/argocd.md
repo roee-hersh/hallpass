@@ -56,7 +56,8 @@ Exactly as in Argo CD:
 1. Policy = built-in policy (role:readonly, role:admin, admin) + `policy.csv` + every `policy.*.csv`
    key in sorted order + the AppProject's roles when the request is project scoped.
 2. Matching is a glob with no separators (`*` crosses `/`) or, with `policy.matchMode: regex`, an
-   unanchored Go regexp. An invalid pattern never matches.
+   unanchored RE2 regular expression, as Argo CD's Go code evaluates it. An invalid pattern never
+   matches.
 3. Effect: some matching `allow` and no matching `deny`.
 4. Order: `policy.default` role first, then the subject, then each group that appears as the first
    element of some `g` line.
@@ -111,6 +112,6 @@ Exactly as in Argo CD:
 
 ## Test
 
-Unit tests run against a fake API server. `internal/integrations/argocd/rbac` contains the ported
-Argo CD tests. `test/differential` compares the evaluator with `argocd admin settings rbac can` when
-the `argocd` binary is on the PATH (the nightly CI job downloads it).
+Unit tests run against a fake API server. `hallpass-py/tests/integrations/argocd/rbac` contains the
+ported Argo CD tests. `hallpass-py/tests/differential/test_argocd.py` compares the evaluator with
+`argocd admin settings rbac can` when the `argocd` binary is on the PATH.

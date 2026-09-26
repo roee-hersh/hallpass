@@ -1,55 +1,33 @@
-# Client SDKs
+# Compatibility packages
 
-| Package | Directory | Install |
+`hallpass-client` used to be the Python client of a hallpass service, in `sdk/python`. The engine
+is now the Python package `hallpass` ([`hallpass-py`](..)), which runs in-process or as the server
+and includes the client (`Hallpass.remote`). So `hallpass-client` is now a small package that
+depends on `hallpass` at the same version and re-exports it, for code written against the old
+name:
+
+| Directory | Package | What it is |
 |---|---|---|
-| Python | [`python`](python) | `pip install hallpass-client` ([PyPI](https://pypi.org/project/hallpass-client/)) |
-| Node and TypeScript | [`node`](node) | `npm install hallpass-client` ([npm](https://www.npmjs.com/package/hallpass-client)) |
+| [`hallpass-client`](hallpass-client) | `hallpass-client` on PyPI | `hallpass_client`: `Hallpass()` is `hallpass.Hallpass.remote()`; `guarded`, `current`, `Decision`, `PermissionDenied`, `ALLOW`, `DENY`, `UNKNOWN` are hallpass's own; `hallpass_client.strands` is `hallpass.strands` |
 
-Both packages are named `hallpass-client`. They are thin clients of a running hallpass service:
-`POST /check` and the `guarded` wrapper that puts the check in front of a tool. They follow the
-same contract, and neither has runtime dependencies. One package per language covers every agent
-framework; the framework examples are in [`examples/agent`](../examples/agent) and
-[`examples/agent-ts`](../examples/agent-ts), and their tests are the client's behavioural tests.
-The tests under each package check the built artifact.
+Existing code keeps working unchanged:
+
+```python
+from hallpass_client import Hallpass, guarded   # as before: a client of a hallpass server
+
+hp = Hallpass()  # HALLPASS_URL and HALLPASS_API_KEY from the environment
+```
+
+New code should depend on `hallpass` and write `Hallpass.remote(...)`, or run the engine in-process
+with `Hallpass.from_config(...)`. `hallpass-client` now needs Python 3.10 or later, as `hallpass`
+does. Its tests (`hallpass-client/tests`) check the re-exports against the installed packages.
+
+The Node package of the same name, `hallpass-client` on npm, is unchanged: it is the client of a
+hallpass server, and its source moved from `sdk/node` to [`hallpass-ts`](../../hallpass-ts).
 
 ## Releasing
 
-Each package's version in the repository is `0.0.0`. The `release` workflow's `sdk` job sets it
-from the release tag, builds both packages and attaches them to the GitHub release, so they always
-carry the same version as the service:
-
-| Asset | What it is |
-|---|---|
-| `hallpass-client-python.tar.gz` | The Python source distribution, under a fixed name so `releases/latest/download/...` works |
-| `hallpass_client-<version>-py3-none-any.whl` | The Python wheel |
-| `hallpass-client-node.tgz` | The npm package, as `npm pack` makes it |
-| `sdk-checksums.txt` | SHA-256 of each of the above |
-
-This needs no registry account.
-
-### Publishing to PyPI and npm
-
-The release workflow also publishes both packages to the registries as `hallpass-client`, with
-trusted publishing, so no long-lived token is stored. Both registries are set up. The jobs run only
-while the Actions variables `PUBLISH_PYPI` and `PUBLISH_NPM` are `true`; unset, they are skipped
-and the release still succeeds, so the release skill checks the registries after every release.
-
-How each registry was set up, for reference:
-
-**PyPI** (done)
-
-1. On pypi.org, under Your projects → Publishing, add a pending trusted publisher: project
-   `hallpass-client`, owner `roee-hersh`, repository `hallpass`, workflow `release.yaml`,
-   environment `pypi`.
-2. In the GitHub repository, set the Actions variable `PUBLISH_PYPI` to `true`.
-
-**npm** (done)
-
-1. npm can only configure trusted publishing for a package that exists, so the first version,
-   0.4.0, was published by hand from the release's `hallpass-client-node.tgz`, with
-   `npm publish hallpass-client-node.tgz --access public --otp=<code>` (the account needs
-   two-factor authentication).
-2. On npmjs.com, `hallpass-client` → Settings → Trusted publishing: GitHub Actions, owner
-   `roee-hersh`, repository `hallpass`, workflow `release.yaml`, environment `npm`.
-3. In the GitHub repository, set the Actions variable `PUBLISH_NPM` to `true`. No token is
-   stored; the workflow authenticates with its OpenID Connect token.
+Its version in the repository is `0.0.0`, and it depends on `hallpass==0.0.0`. The release
+workflow's `.github/scripts/build-python.sh` sets both to the release version and builds it next to
+`hallpass`, so the two are always released together at the same version. See
+[RELEASING.md](../RELEASING.md).

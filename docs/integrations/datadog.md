@@ -116,7 +116,7 @@ Error bodies are never copied into a decision text.
 
 ## Unverified
 
-Marked `// UNVERIFIED:` in the code:
+Marked `# UNVERIFIED:` in the code:
 
 - Whether a monitor's creator keeps edit rights under `restricted_roles` the way a dashboard's
   author does. Datadog documents roles only for monitors, so the creator is not exempted.

@@ -35,6 +35,8 @@ performs an action and nothing is persisted.
 4. Enable the Admin SDK, Drive, Calendar and (optionally) Gmail APIs in the service account's
    project.
 
+Signing with a service-account key needs `cryptography`: install `hallpass[crypto]` (the Docker image has it).
+
 ## Connection
 
 ```yaml
@@ -164,7 +166,7 @@ delegation is a broad grant. The summary names the service account and the admin
 
 ## Unverified
 
-Each item is marked `// UNVERIFIED:` in the code.
+Each item is marked `# UNVERIFIED:` in the code.
 
 - The IAM Credentials `signJwt` request `{"payload": "<claims JSON>"}` and response
   `{"keyId", "signedJwt"}` shapes for `auth_mode: keyless`.

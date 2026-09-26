@@ -1,114 +1,136 @@
-# Client reference
+# Python API reference
 
-The `hallpass-client` package for Python (`pip install hallpass-client`) and Node
-(`npm install hallpass-client`). Both have no runtime dependencies and follow the same rules. For
-how to use them in an agent, see the [agent tools guide](../guides/agent-tools.md).
+The `hallpass` package (`pip install hallpass`, Python 3.10 or later), and the Node client
+`hallpass-client` at the end. For how to use them in an agent, see the
+[agent tools guide](../guides/agent-tools.md).
 
 ## Hallpass
 
+Three ways to make one, all with the same methods:
+
 ```python
-from hallpass_client import Hallpass
+import hallpass
+from hallpass import Hallpass
 
-hp = Hallpass()  # HALLPASS_URL (default http://localhost:8080) and HALLPASS_API_KEY
+hp = Hallpass.from_config("hallpass.yaml")                   # the engine in this process
+hp = Hallpass(connections=[{"id": "demo", "integration": "fake", "users": "dana@example.com"}])
+hp = Hallpass.remote("https://hallpass.internal", api_key)   # a hallpass server
 ```
 
-```ts
-import { Hallpass } from "hallpass-client";
+| Constructor | What it is |
+|---|---|
+| `Hallpass.from_config(path, *, logger=None)` | The engine in this process, from a hallpass YAML file. The file's `decision_cache_seconds`, `identity_cache_seconds` and `decision_log` apply; `listen` and `api_key` are not needed |
+| `Hallpass(connections, *, decision_cache_seconds=30, identity_cache_seconds=900, decision_log="none", logger=None)` | The same, with the connections in code: mappings with exactly the keys of the file ([configuration](configuration.md#connections-in-code)) |
+| `Hallpass.remote(url=None, api_key=None, timeout=10.0)` | A client for a running hallpass server. `url` defaults to `$HALLPASS_URL` or `http://localhost:8080`, `api_key` to `$HALLPASS_API_KEY`, and a missing key raises `ValueError` |
 
-const hp = new Hallpass(); // same variables; or new Hallpass({ url, apiKey, timeoutMs })
-```
+`logger` takes a `logging.Logger` for the engine's own log lines (the stdlib `hallpass` logger by
+default). `Hallpass()` with no connections raises `TypeError`. Build one per process and share it:
+each in-process `Hallpass` keeps its own caches.
 
-The URL must be `https://`, or `http://` on localhost or a loopback address, because the API key
-travels in a header. Redirects are never followed.
+For `remote`, the URL must be `https://`, or `http://` on `localhost` or a loopback address,
+because the API key travels in a header. Redirects are never followed. `timeout` is the seconds to
+wait for the connection and then for each read; the server waits up to the connection's `timeout`
+(8 s by default) for the upstream, so keep this a little above that.
 
 ## check, allowed, require
 
 ```python
 d = hp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
 d.decision  # "allow", "deny" or "unknown"
-d.reason    # "denied: dana@example.com lacks DELETE_ISSUES on PAY"
+d.reason    # "denied: Dana Levi does not hold DELETE_ISSUES on issue PAY-123"
 d.code      # "denied"
 d.allowed   # True only for allow
+d.status    # the HTTP status the server used (in-process: the one it would use); 0 if none arrived
 
-hp.allowed(...)   # True or False
-hp.require(...)   # returns the decision on allow, raises PermissionDenied otherwise
+hp.allowed(...)          # True or False
+hp.require(...)          # returns the decision on allow, raises PermissionDenied otherwise
+await hp.acheck(...)     # check for async code; the lookup runs in a worker thread
+await hp.arequire(...)   # require for async code
 ```
 
-In Node the same three methods return promises, and `require` rejects with `PermissionDenied`.
+All five take `(user, connection, action, resource, groups=None, *, fresh=False)`:
 
-| Option | Python | Node | Meaning |
-|---|---|---|---|
-| Groups | `groups=[...]` | `{ groups: [...] }` | For systems that grant by group, such as Kubernetes |
-| Fresh | `fresh=True` | `{ fresh: true }` | Skip hallpass's caches and ask the system now |
+| Argument | Meaning |
+|---|---|
+| `groups` | A list of the user's groups, for systems that grant by group, such as Kubernetes |
+| `fresh` | Skip hallpass's caches and ask the system now ([fresh checks](api.md#fresh-checks)) |
 
-`check` never raises on a transport problem. A connection error, a timeout, a redirect, a body that
-is not JSON, or an `allow` with a non-200 status all become `unknown` with the code `client_error`.
+`check` never raises for a failed lookup: every failure is an `unknown` decision. With `remote`, a
+connection error, a timeout, a redirect, a body that is not a decision, or an `allow` with a
+non-200 status all become `unknown` with the code `client_error`. `PermissionDenied` carries the
+`decision`, `user`, `connection`, `action` and `resource`, and its text names all of them.
+
+In-process only:
+
+| | |
+|---|---|
+| `hp.probe()` | Verify every connection's credential: a list of `(connection id, ok, summary or error)` |
+| `hp.connections()` | The configured connection ids |
+| `hp.local` | `True` when the engine runs in this process (also available on `remote`) |
 
 ## guarded
 
 Wraps a function so its body runs only after hallpass said `allow`.
 
 ```python
+from hallpass import guarded
+
 @guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
 def delete_issue(key: str) -> str: ...
-```
-
-```ts
-const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user, fresh: true })(
-  async ({ key }: { key: string }) => { ... },
-);
 ```
 
 | Parameter | Meaning |
 |---|---|
 | `connection`, `action` | The connection id and one of its actions (`hallpass catalog <integration>` lists them) |
-| `resource` | A template over the call's arguments, such as `"issue:{key}"`. A call that cannot fill it makes no request and runs nothing |
-| `user` | A string, a zero-argument function, or a `ContextVar` (Python) or `AsyncLocalStorage` (Node) your application sets. Read on every call, never from the arguments |
-| `groups` | The user's groups, from the same kinds of source |
+| `resource` | A format string over the call's arguments, such as `"issue:{key}"`; a parameter left at its default is available too. A call that cannot fill it checks nothing and runs nothing |
+| `user` | A string, a zero-argument callable, or a `ContextVar` your application sets. Read on every call, never from the arguments |
+| `groups` | The user's groups, from the same kinds of source; it must yield a list |
 | `deny` | Optional. Called with the `PermissionDenied`; its return value is returned instead of raising |
 | `fresh` | Optional. Every check skips hallpass's caches |
 
 What it guarantees:
 
 - The wrapped function keeps its exact signature, so no `user` field appears in a tool schema. A
-  stray `user` keyword argument is a `TypeError` before any request; a `user` key inside a dict of
-  arguments (the Claude Agent SDK shape, or Node) is ignored.
+  stray `user` keyword argument is a `TypeError` before any check; a `user` key inside a dict of
+  arguments (the Claude Agent SDK shape) is ignored.
 - Anything but `allow` stops the call before the body runs.
-- Python: a function with normal parameters is called with keyword arguments (LangChain, Strands,
-  MCP); a function whose one parameter is a dict gets all the arguments in it (the Claude Agent SDK
-  handler shape). `async def` works, and the check runs in a worker thread.
-- Node: the function takes one object of arguments, which is what every Node agent framework passes.
+- A function with ordinary parameters is called with keyword arguments (LangChain, Strands, MCP); a
+  function whose one parameter is a dict gets all the arguments in it (the Claude Agent SDK handler
+  shape, `async def f(args: dict)`). `async def` works, and the check runs in a worker thread.
 
-`current(source)` resolves a user or groups source the same way, for code outside a guarded
-function. A `ContextVar` or `AsyncLocalStorage` with nothing set gives a clear error.
+`hallpass.current(source)` resolves a user or groups source the same way, for code outside a
+guarded function. A `ContextVar` with nothing set raises a `RuntimeError` that names it.
 
-## HallpassAuthorization (Python, Strands Agents)
+## Framework adapters
 
-A Strands intervention handler, in `hallpass_client.strands` (`pip install "hallpass-client[strands]"`,
-Python 3.10 or later, `strands-agents` 1.57.1 or later).
+Each adapter module needs its extra (`pip install "hallpass[<extra>]"`) and exports `Rule` along
+with the adapter. All take `hp`, then `rules`: a mapping of tool name to
+`Rule(connection, action, resource, fresh=False)`, a `(connection, action, resource)` tuple, or
+`None` (the tool runs unchecked even under `strict`); and `strict=False` (refuse tools that have
+no rule).
 
-```python
-HallpassAuthorization(hp, rules, *, user_key="user_id", groups_key=None, strict=False)
-```
+| Module (extra) | Adapter | User from | Other arguments |
+|---|---|---|---|
+| `hallpass.strands` (`strands`) | `HallpassAuthorization`, an intervention handler | `invocation_state[user_key]` | `user_key="user_id"`, `groups_key=None` |
+| `hallpass.langchain` (`langchain`) | `HallpassMiddleware`, agent middleware; `.tool_node(tools)` for LangGraph | the runtime context's `user_key`, else `user` | `user`, `groups`, `user_key="user_id"`, `groups_key=None` |
+| `hallpass.mcp` (`mcp`) | `guard(server, hp, rules, ...)`, server middleware | the access token's `user_claim`, else `user` | `user`, `groups`, `user_claim="email"`, `groups_claim=None` |
+| `hallpass.openai_agents` (`openai-agents`) | `HallpassGuardrails`; `.apply(agent)`, `.protect(tools)` | the run context's `user_key`, unless `user` | `user_key="user_id"`, `groups_key=None`, `user`, `groups` |
+| `hallpass.claude_agent_sdk` (`claude-agent-sdk`) | `HallpassHooks`; `.apply(options)`, `.hooks()`, `.can_use_tool` | `user` (required) | `groups`, `timeout=60` |
+| `hallpass.google_adk` (`google-adk`) | `HallpassCallbacks`; `.apply(agent)`, `.plugin()` | the session's `user_id`, unless `user` | `user`, `groups` |
+| `hallpass.crewai` (`crewai`) | `HallpassHooks`; `.register()`, `.unregister()`, or `with` | `user`, else the kickoff input `user_input` | `user`, `groups`, `user_input="user_id"`, `groups_input=None` |
+| `hallpass.pydantic_ai` (`pydantic-ai`) | `HallpassAuthorization`, a capability; `HallpassToolset(toolset, hp, rules)` | `user`, else `deps.user` | `user`, `groups` (else `deps.groups`) |
+| `hallpass.llamaindex` (`llamaindex`) | `HallpassAuthorization`; `.wrap(tools)` | `user` (required) | `groups` |
 
-| Parameter | Meaning |
-|---|---|
-| `rules` | Tool name to `Rule(connection, action, resource, fresh=False)` or a `(connection, action, resource)` tuple. `resource` is a template over the tool's input; each field must be one plain `str` or `int` parameter of the tool (not a UUID, URL or path, which Strands converts). A rule naming no tool of the agent is logged as a warning |
-| `user_key` | The `invocation_state` key the user is read from |
-| `groups_key` | Optional. The `invocation_state` key the user's groups are read from, a list of strings |
-| `strict` | Deny tools with no rule. A rule of `None` lets a tool run unchecked |
+Each refuses a call when the user is missing, when a resource field is not exactly the string or
+integer the tool declares, when a field is missing with no default, on any answer but `allow`,
+and on any error inside the check; the model reads `hallpass refused this call: <reason>` as the
+tool's result. The adapter's docstring says how its framework delivers that result and what it
+cannot check.
 
-Each of these denies the call, with the reason as the tool result: no user (or no groups when
-`groups_key` is set), a resource field whose value is not exactly the string or integer the tool
-declares (Strands would convert it, so the tool would act on another resource), a missing field
-with no default, a call a hook moved to another tool, any answer but `allow`, and an exception in
-the handler (`on_error` is `deny`). The check
-runs in a worker thread, and a checked tool logs the write line below after it runs.
+## The write log line
 
-## The write log line (Python)
-
-hallpass never sees the write itself, so after a guarded body runs, the Python client logs one line
-on the `hallpass` logger at INFO:
+hallpass never sees the write itself, so after a guarded body runs, `guarded` logs one line on the
+`hallpass` logger at INFO:
 
 ```text
 unconditional write: dana@example.com ran DELETE_ISSUES on issue:PAY-123 in jira-main;
@@ -117,13 +139,44 @@ fresh=True; the write was not conditioned on the state hallpass saw (no If-Match
 so check and write were not atomic
 ```
 
-A refused call logs nothing. A body that raises still logs, since the write may have happened.
-`HallpassAuthorization` logs the same line after a checked Strands tool runs, with `raised <error>
-from` or `got an error result from` in place of `ran` when the tool failed.
+A refused call logs nothing. A body that raises still logs, since the write may have happened. The
+adapters log the same line after a checked tool runs, with `raised <error> from` or `got an error
+result from` in place of `ran` when the tool failed.
 
 ## Fresh checks and atomicity
 
 A fresh check narrows the gap between the check and the action; it does not close it. Closing it
-needs a conditional write in the upstream system, such as `If-Match` with an ETag. A hallpass older
-than the `fresh` field rejects it, which the clients report as `unknown`, so upgrade the service
-before turning `fresh` on. The [API reference](api.md#fresh-checks) has the details.
+needs a conditional write in the upstream system, such as `If-Match` with an ETag. A hallpass
+server older than the `fresh` field rejects it, which `remote` reports as `unknown`, so upgrade the
+server before turning `fresh` on. The [API reference](api.md#fresh-checks) has the details.
+
+## hallpass-client (Python)
+
+`hallpass-client` on PyPI is now a compatibility package that depends on `hallpass` at the same
+version and re-exports it. Existing code keeps working: `hallpass_client.Hallpass()` is
+`Hallpass.remote()`, reading `HALLPASS_URL` and `HALLPASS_API_KEY`, and `guarded`, `current`,
+`Decision` and `PermissionDenied` are hallpass's own. `hallpass_client.strands` is
+`hallpass.strands` (`pip install "hallpass-client[strands]"`). New code should depend on `hallpass`.
+
+## hallpass-client (Node)
+
+The Node and TypeScript client of a hallpass server (`npm install hallpass-client`, Node 18.17 or
+later, no dependencies). It follows the same rules as `Hallpass.remote`.
+
+```ts
+import { Hallpass, guarded } from "hallpass-client";
+
+const hp = new Hallpass(); // HALLPASS_URL and HALLPASS_API_KEY; or new Hallpass({ url, apiKey, timeoutMs })
+
+const d = await hp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", { groups, fresh: true });
+await hp.require(...); // rejects with PermissionDenied unless allow
+
+const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user, fresh: true })(
+  async ({ key }: { key: string }) => { ... },
+);
+```
+
+`check`, `allowed` and `require` return promises. The wrapped function takes one object of
+arguments, which is what every Node agent framework passes; `user` and `groups` are a string, a
+zero-argument function or an `AsyncLocalStorage`; `deny` works as in Python. The Node client does
+not log the write line.

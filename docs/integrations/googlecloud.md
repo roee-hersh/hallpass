@@ -26,6 +26,8 @@ call. Nothing is written and no user credential is ever used.
 troubleshooter discloses which permissions other principals hold: that is what hallpass is for, but
 the service account should be held by hallpass alone.
 
+Signing with a service-account key (`auth_mode: key`) needs `cryptography`: install `hallpass[crypto]` (the Docker image has it).
+
 ## Connection
 
 ```yaml
@@ -163,7 +165,7 @@ not evaluate:
 
 ## Unverified
 
-Marked `// UNVERIFIED:` in the code:
+Marked `# UNVERIFIED:` in the code:
 
 - Whether `roles/iam.securityReviewer` is enough for the troubleshooter to read every allow and deny
   policy under `scope`, or whether a `policytroubleshooter.*` permission is needed as well; the probe

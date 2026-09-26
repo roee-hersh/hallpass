@@ -4,7 +4,7 @@
 #   test/kind/run.sh            create a cluster, seed it, run the e2e tests, delete it
 #   KEEP=1 test/kind/run.sh     keep the cluster afterwards
 #
-# Needs: kind, kubectl, docker, go.
+# Needs: kind, kubectl, docker, python3 (3.10+) with hallpass-py and pytest installed.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -25,4 +25,4 @@ export HALLPASS_E2E_KUBERNETES_URL="$URL"
 export HALLPASS_E2E_KUBERNETES_TOKEN_FILE="$TMP/token"
 export HALLPASS_E2E_KUBERNETES_CA_FILE="$TMP/ca.pem"
 
-go test -tags e2e -count=1 -v ./test/e2e/ -run Kubernetes
+(cd hallpass-py && python3 -m pytest -v tests/e2e/test_kubernetes.py)

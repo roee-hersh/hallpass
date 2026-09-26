@@ -1,25 +1,51 @@
 # Deploy hallpass
 
-hallpass is one stateless process: a binary or a container, one config file, and the credentials
-it references. This page covers where to run it, how to reach it safely, and each way to install
-it. The [quickstart](../quickstart.md) runs it locally in two minutes. The
+hallpass is one Python package. The engine runs inside your agent's process, or as one stateless
+server process (a container or a `pip install`) with one config file and the credentials it
+references. This page covers where to run it, how to reach it safely, and each way to install it.
+The [quickstart](../quickstart.md) runs it locally in five minutes. The
 [configuration reference](../reference/configuration.md) documents the file.
 
 ## Pick a topology
 
-| | Sidecar | Shared service |
-|---|---|---|
-| **Shape** | One hallpass container next to each agent, in the same pod or on the same host | One hallpass deployment that every agent calls |
-| **Agent URL** | `http://localhost:8080` | `https://hallpass.example.internal` |
-| **TLS** | Not needed: traffic never leaves the pod | Needed in front of hallpass (see below) |
-| **Upstream credentials** | In every agent's pod, mounted only into the hallpass container | In one place |
-| **Cache** | Per agent | Shared by every agent that hits the same replica |
-| **Choose it when** | One or two agents, or you want the API key never to cross the network | Several agents or teams, or you want the upstream credentials held in one place |
+| | In-process | Sidecar | Shared service |
+|---|---|---|---|
+| **Shape** | `pip install hallpass` in the agent; `Hallpass.from_config(...)` | One hallpass container next to each agent, in the same pod or on the same host | One hallpass deployment that every agent calls |
+| **Agent uses** | the engine directly | `Hallpass.remote("http://localhost:8080", key)` | `Hallpass.remote("https://hallpass.example.internal", key)` |
+| **TLS** | Not needed: no network hop | Not needed: traffic never leaves the pod | Needed in front of hallpass (see below) |
+| **Upstream credentials** | In the agent's process | In every agent's pod, mounted only into the hallpass container | In one place |
+| **Cache** | Per agent process | Per agent | Shared by every agent that hits the same replica |
+| **Languages** | Python | any (Python, the Node client, HTTP) | any |
+| **Choose it when** | Development, or an agent that may hold the lookup credentials | One or two agents, or you want the API key never to cross the network | Several agents or teams, or you want the upstream credentials held in one place |
+
+In-process is the simplest: nothing to deploy and no API key. It also puts hallpass's lookup
+credentials in the agent's process, where agent code (or a model with a shell) could read them.
+Those credentials answer for every user, and in Jira they need Administer Jira
+([trust boundaries](../concepts/architecture.md#trust-boundaries)). When that matters, run a server
+and change one line in the agent: `Hallpass.from_config(...)` becomes `Hallpass.remote(...)`.
+
+## In-process
+
+```sh
+pip install "hallpass[crypto]"   # crypto only for the integrations that sign with a private key
+```
+
+```python
+from hallpass import Hallpass
+
+hp = Hallpass.from_config("/etc/hallpass/hallpass.yaml")
+```
+
+The file's caches and `decision_log` apply; `listen` and `api_key` are for the server and are not
+needed. `Hallpass(connections=[...])` takes the same connections in code (see the
+[configuration reference](../reference/configuration.md#connections-in-code)); there the decision log
+is off unless you pass `decision_log=`. Build one `Hallpass` per process and share it: each one
+keeps its own caches.
 
 ## TLS and reaching hallpass
 
-hallpass serves plain HTTP. The [client libraries](../../sdk) accept `http://` only for
-`localhost` or a loopback address, because the API key travels in a header. So:
+The hallpass server serves plain HTTP. `Hallpass.remote` and the Node client accept `http://` only
+for `localhost` or a loopback address, because the API key travels in a header. So:
 
 - **Sidecar**: point the agent at `http://localhost:8080`. Nothing else to do.
 - **Shared service**: put TLS in front and give agents an `https://` URL. Use an Ingress or Gateway
@@ -39,14 +65,23 @@ docker run -d --name hallpass -p 127.0.0.1:8080:8080 \
   ghcr.io/roee-hersh/hallpass:0.4.0
 ```
 
-The image is distroless, runs as a non-root user, and starts `hallpass serve -config
-/etc/hallpass/hallpass.yaml`. Pass each `env:` credential with `-e` and mount each `file:`
-credential read-only. Pin a version tag rather than `latest`.
+The image is `python:3.13-slim` with `hallpass[crypto]` installed and compiled, runs as the
+non-root user 65532 (it works with a read-only root filesystem), and starts `hallpass serve -config
+/etc/hallpass/hallpass.yaml`. It is built for `linux/amd64` and `linux/arm64`. Pass each `env:`
+credential with `-e` and mount each `file:` credential read-only. Pin a version tag rather than
+`latest`.
 
-## Binary
+## pip
 
-Download the archive for your platform from [Releases](https://github.com/roee-hersh/hallpass/releases),
-check it against `checksums.txt`, and run it under your service manager. A systemd unit:
+The server is the `hallpass` command of the same package. Install it into its own virtual
+environment and run it under your service manager:
+
+```sh
+python3 -m venv /opt/hallpass
+/opt/hallpass/bin/pip install "hallpass[crypto]"   # pin it: "hallpass[crypto]==<version>"
+```
+
+A systemd unit:
 
 ```ini
 [Unit]
@@ -54,7 +89,7 @@ Description=hallpass
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/hallpass serve -config /etc/hallpass/hallpass.yaml
+ExecStart=/opt/hallpass/bin/hallpass serve -config /etc/hallpass/hallpass.yaml
 # HALLPASS_API_KEY=... and each env: credential, one per line
 EnvironmentFile=/etc/hallpass/env
 DynamicUser=yes
@@ -121,14 +156,15 @@ spec:
 ```
 
 For a sidecar, add the hallpass image as a second container in the agent's own pod, with the same
-config ConfigMap and Secrets, and point the agent at `http://localhost:8080`. Mount the Secrets
+config ConfigMap and Secrets, and point the agent at `http://localhost:8080`
+(`Hallpass.remote("http://localhost:8080", key)`). Mount the Secrets
 only into the hallpass container, never into the agent's: they answer for every user, and in Jira
 they need Administer Jira, so the agent should not be able to read them
 ([trust boundaries](../concepts/architecture.md#trust-boundaries)).
 
 ## Scaling and availability
 
-- hallpass keeps no state, so run as many replicas as you need behind the Service. Two is a good
+- The server keeps no state, so run as many replicas as you need behind the Service. Two is a good
   default for a shared service.
 - Each replica keeps its own caches. More replicas mean more upstream calls after a restart, never
   a different answer.
@@ -138,22 +174,24 @@ they need Administer Jira, so the agent should not be able to read them
 
 ## Upgrading
 
-Releases follow semantic versioning, and the client libraries share the service's version. Upgrade
-the service before the clients when a release adds a request field (such as `fresh`): an older
-hallpass rejects fields it does not know, and the clients report that as `unknown`, so nothing
-fails open.
+Releases follow semantic versioning. The `hallpass` package, the Docker image, the Helm chart,
+`hallpass-client` on PyPI and on npm all carry the same version. With a server, upgrade it before
+the agents when a release adds a request field (such as `fresh`): an older hallpass rejects fields
+it does not know, and the clients report that as `unknown`, so nothing fails open.
 
 ## Production checklist
 
-- [ ] The API key is random (`openssl rand -hex 32`), stored in a secret manager, and given only to
-      the agents' tool layers.
-- [ ] Agents reach hallpass on `localhost` or over TLS.
+- [ ] You chose in-process or a server knowing where the lookup credentials end up.
+- [ ] With a server: the API key is random (`openssl rand -hex 32`), stored in a secret manager,
+      and given only to the agents' tool layers, and agents reach hallpass on `localhost` or over
+      TLS.
 - [ ] Every upstream credential is read-only and scoped as its [integration page](../integrations/README.md)
       describes.
 - [ ] `hallpass probe` passes for every connection.
 - [ ] The decision log goes to your log pipeline (`decision_log: stdout` in containers).
 - [ ] You alert on a rise in `unknown` decisions; [Operating](operating.md#when-the-answer-is-unknown)
       lists the codes.
-- [ ] The image or binary is pinned to a version.
-- [ ] You ran [`examples/live-cases.yaml`](../../examples/live-cases.yaml) against your own systems
-      for each integration you rely on.
+- [ ] The image, chart or package is pinned to a version.
+- [ ] You ran the [live test](../development/testing.md#against-your-own-systems), with cases like
+      [`examples/live-cases.yaml`](../../examples/live-cases.yaml), against your own systems for
+      each integration you rely on.

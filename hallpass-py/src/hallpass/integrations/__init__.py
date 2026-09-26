@@ -36,24 +36,10 @@ NAMES = (
     "googlecloud",
 )
 
-# While the port from Go is in progress, a name whose package does not
-# exist yet is skipped. Removed once every integration is ported.
-_PORT_IN_PROGRESS = True
-
-
 def registry() -> Registry:
     """A registry with every integration."""
     r = Registry()
     for name in NAMES:
         mod_name = f"hallpass.integrations.{name}"
-        try:
-            mod = importlib.import_module(mod_name)
-            integ = mod.INTEGRATION
-        except Exception:
-            # A package still being written (missing, half-written or not
-            # yet exporting INTEGRATION) is skipped while the port runs.
-            if _PORT_IN_PROGRESS:
-                continue
-            raise
-        r.register(integ)
+        r.register(importlib.import_module(mod_name).INTEGRATION)
     return r

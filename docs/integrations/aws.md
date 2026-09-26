@@ -237,7 +237,7 @@ The simulation covers identity-based policies, permissions boundaries and SCPs. 
 
 ## Unverified
 
-Marked `// UNVERIFIED:` in the code:
+Marked `# UNVERIFIED:` in the code:
 
 - `identitystore:DescribeUser` returning a `UserStatus` field; when present and `DISABLED` the user is
   denied every action, otherwise the field is ignored.
@@ -248,7 +248,7 @@ Marked `// UNVERIFIED:` in the code:
   parent `PathPrefix` is a prefix match so they are expected to be listed.
 - For resource `all`, `ResourceArns` is omitted so IAM applies its documented default of `*`, rather than
   sending `*` as an ARN.
-- The China partition IAM endpoint and signing region (`internal/authx`).
+- The China partition IAM endpoint and signing region (`hallpass/authx`).
 - Whether SCP evaluation (`OrganizationsDecisionDetail`) needs any `organizations:*` permission on
   `role_arn`; none is granted in the policy above.
 

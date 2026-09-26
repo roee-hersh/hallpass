@@ -135,7 +135,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             metafunc.parametrize("case_index", [None], ids=["no-cases"])
 
 
-@dataclass
+@dataclass(repr=False)
 class Live:
     cases: list[Case]
     eng: engine.Engine | None

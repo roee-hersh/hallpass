@@ -2,7 +2,7 @@
 
 > **Warning: this integration was designed from secondary sources and has not been run against a
 > real org.** Every Salesforce behaviour it relies on is listed under [Unverified](#unverified) and
-> marked `// UNVERIFIED:` in the code. Confirm it in a Developer Edition org (setup, probe, one
+> marked `# UNVERIFIED:` in the code. Confirm it in a Developer Edition org (setup, probe, one
 > allow and one deny per action family) before using its answers for anything.
 
 hallpass authenticates as an External Client App acting as a read-only integration user, maps the
@@ -42,6 +42,8 @@ The JWT is signed RS256 with `iss` = consumer key, `sub` = `username`, `aud` = `
 now + 3 minutes. The access token it buys carries no expiry, so it is reused for `token_ttl` and
 minted again 5 minutes before that. A 401 from the API drops the token and retries the call once with
 a fresh one.
+
+The JWT bearer flow signs with `cryptography`: install `hallpass[crypto]` (the Docker image has it).
 
 ## Connection
 
@@ -227,7 +229,7 @@ All Data caveat.
 
 ## Unverified
 
-Each item is marked `// UNVERIFIED:` in the code and must be confirmed in a Developer Edition org.
+Each item is marked `# UNVERIFIED:` in the code and must be confirmed in a Developer Edition org.
 
 - The JWT bearer assertion must expire within 3 minutes; hallpass sets `exp` = now + 3 minutes with
   no `iat` or `jti`.
@@ -286,7 +288,7 @@ Confirmed: new connected apps cannot be created since Spring '26 (External Clien
 
 ## Test
 
-`go test ./internal/integrations/salesforce/` runs against a fake Salesforce that verifies the JWT
+`python -m pytest tests/integrations/salesforce` (in `hallpass-py`) runs against a fake Salesforce that verifies the JWT
 bearer assertion (RS256 signature, `iss`/`sub`/`aud`, `exp` within 3 minutes) and the client
 credentials form, hands out tokens with an `instance_url`, revokes them on demand, and answers
 `/query` by parsing the SOQL `FROM` object and its literals (so a test address `o'neil@example.com`

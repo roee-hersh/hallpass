@@ -1,7 +1,8 @@
 # HTTP API reference
 
-hallpass has two routes. Clients: [`hallpass-client`](../../sdk) for Python and Node, or any HTTP
-client.
+The hallpass server (`hallpass serve`) has two routes. Clients: `Hallpass.remote` in the
+[`hallpass` package](client.md), [`hallpass-client`](client.md#hallpass-client-node) for Node, or any
+HTTP client. The in-process engine answers with the same decisions and codes, without HTTP.
 
 ## POST /check
 
@@ -59,7 +60,7 @@ check narrows the window between the check and the action to the time between th
 not close it. Closing it needs a conditional write in the upstream system (for example `If-Match`
 with an ETag), which only some APIs support. A hallpass built before `fresh` existed rejects a
 request that carries it (`invalid_request: unknown field "fresh"`, which the clients report as
-`unknown`), so upgrade the service before turning it on in agents.
+`unknown`), so upgrade the server before turning it on in agents.
 
 ## GET /healthz
 

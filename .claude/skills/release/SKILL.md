@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a hallpass release now (choose the version, check main is green, start the release workflow, verify binaries and image). Use when asked to release, publish or tag a version.
+description: Cut a hallpass release now (choose the version, check main is green, start the release workflow, verify the Python packages, image, chart and npm package). Use when asked to release, publish or tag a version.
 ---
 
 # Releasing hallpass
@@ -22,7 +22,7 @@ Use this skill for a release now, or for a minor or major bump.
 
 - The latest `ci` run on `main` (event `push`) for the head commit must be `completed success`.
   If it is red or still running, fix or wait; never release a red `main`.
-- A failing nightly fuzz run on `main` is a bug to fix first, not a reason to skip.
+- A failing nightly run on `main` (the long property tests) is a bug to fix first, not a reason to skip.
 
 ## 3. Start the release
 
@@ -32,15 +32,25 @@ Actions → release → Run workflow). For a minor or major bump you can also ru
 
 ## 4. Verify
 
-- The run's `tag`, `binaries`, `image`, `chart`, `sdk`, `pypi` and `npm` jobs all succeed; if one fails, read its log and fix.
-- The release page lists `linux`/`darwin`/`windows` × `amd64`/`arm64` archives and `checksums.txt`.
-- `ghcr.io/roee-hersh/hallpass:<version>` and `:latest` exist, and
-  `helm show chart oci://ghcr.io/roee-hersh/charts/hallpass --version <version>` works without logging in.
+The release workflow builds everything from the tag: `tag`, then `image`, `chart`, `assets`,
+`pypi` and `npm`. `.github/scripts/build-python.sh` sets the version of `hallpass` (hallpass-py) and
+of the `hallpass-client` compatibility package (hallpass-py/compat/hallpass-client), pinned to
+`hallpass` at the same version.
+
+- The run's `tag`, `image`, `chart`, `assets`, `pypi` and `npm` jobs all succeed; if one fails,
+  read its log and fix.
+- `ghcr.io/roee-hersh/hallpass:<version>` and `:latest` exist (linux/amd64 and linux/arm64), and
+  `docker run --rm ghcr.io/roee-hersh/hallpass:<version> version` prints the version.
+- `helm show chart oci://ghcr.io/roee-hersh/charts/hallpass --version <version>` works without
+  logging in.
 - The `pypi` and `npm` jobs succeeded, not skipped (skipped means the `PUBLISH_PYPI` or
   `PUBLISH_NPM` variable is unset), and the registries serve the new version:
-  `https://pypi.org/pypi/hallpass-client/json` and `https://registry.npmjs.org/hallpass-client`.
-  The docs tell users to install from both, so a missing version is a failed release.
-- The `sdk` job succeeded and the release lists `hallpass-client-python.tar.gz`,
-  `hallpass_client-<version>-py3-none-any.whl`, `hallpass-client-node.tgz` and `sdk-checksums.txt`.
+  `https://pypi.org/pypi/hallpass/json`, `https://pypi.org/pypi/hallpass-client/json` and
+  `https://registry.npmjs.org/hallpass-client`. The docs tell users to install from them, so a
+  missing version is a failed release.
+- The `assets` job succeeded and the release lists `hallpass-python.tar.gz`,
+  `hallpass-client-python.tar.gz`, `hallpass-client-node.tgz`, the two wheels
+  (`hallpass-<version>-py3-none-any.whl`, `hallpass_client-<version>-py3-none-any.whl`) and
+  `checksums.txt`.
 
 Reply with the release link, the version, and a short list of what it contains (PR titles).

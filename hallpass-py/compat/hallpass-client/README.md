@@ -1,59 +1,54 @@
 # hallpass-client
 
-The Python client for [hallpass](https://github.com/roee-hersh/hallpass): before your AI agent
-acts for a user, ask the system that owns the resource whether that user may do it.
+**hallpass-client is now part of [hallpass](https://pypi.org/project/hallpass/).** This package
+depends on `hallpass` at the same version and re-exports it, so existing code keeps working. New
+projects should install `hallpass` instead:
 
 ```sh
-pip install hallpass-client
+pip install hallpass
 ```
 
-It is on [PyPI](https://pypi.org/project/hallpass-client/), and every hallpass
-[release](https://github.com/roee-hersh/hallpass/releases) also carries it as a download. Its version
-matches the hallpass release, so pin the one you run, e.g. `hallpass-client==0.4.0`.
+`hallpass` is the whole engine as a Python package: it can check permissions in-process, from a
+config file or connections given in code, with no service to deploy
+(`Hallpass.from_config("hallpass.yaml")`), and it is also the client of a hallpass server
+(`Hallpass.remote(url, api_key)`) and the server itself (`hallpass serve`).
 
-It needs a running hallpass service. The client has no dependencies beyond the standard library.
+## What stays the same
 
 ```python
 from contextvars import ContextVar
 from hallpass_client import Hallpass, guarded
 
-hp = Hallpass()  # HALLPASS_URL and HALLPASS_API_KEY from the environment
+hp = Hallpass()  # a client of a running hallpass server: HALLPASS_URL and HALLPASS_API_KEY
 current_user: ContextVar[str] = ContextVar("current_user")
 
-@tool  # LangChain, Strands, MCP, the Claude Agent SDK...
+@tool
 @guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
 def delete_issue(key: str) -> str:
     jira.delete_issue(key)  # the agent's own credential, only after hallpass said allow
     return f"deleted {key}"
-
-current_user.set(request.user.email)  # from your auth, per request or session
 ```
 
-- **The model never picks the user.** It comes from `user=`: a string, a zero-argument
-  callable, or a `ContextVar` your application sets. A `user` key in the tool's arguments is ignored.
-- **It fails closed.** `deny`, `unknown` and hallpass being unreachable all raise
-  `PermissionDenied` before the body runs. Pass `deny=` to return a message to the model instead.
-- **One package covers every framework.** `guarded` handles plain functions, `async def`,
-  and the Claude Agent SDK's `async def f(args: dict)` handler shape.
+- `hallpass_client.Hallpass(url=None, api_key=None, timeout=10.0)` is
+  `hallpass.Hallpass.remote(url, api_key, timeout)`: `check`, `allowed`, `require`, and now
+  `acheck` and `arequire`.
+- `guarded`, `current`, `Decision`, `PermissionDenied`, `ALLOW`, `DENY` and `UNKNOWN` are
+  hallpass's own.
+- `hallpass_client.strands` is `hallpass.strands`: `pip install "hallpass-client[strands]"`
+  installs `hallpass[strands]`.
 
-For Strands Agents, `pip install "hallpass-client[strands]"` adds an intervention handler that
-checks every tool call with a rule, with the user from `invocation_state`:
+It needs Python 3.10 or later. Its version matches the hallpass release; pin the one you run.
+
+## Moving to hallpass
 
 ```python
-from hallpass_client.strands import HallpassAuthorization
+from hallpass import Hallpass, guarded
 
-hallpass = HallpassAuthorization(hp, {"delete_issue": ("jira-main", "DELETE_ISSUES", "issue:{key}")})
-agent = Agent(tools=tools, interventions=[hallpass])
-agent(prompt, invocation_state={"user_id": request.user.email})
+hp = Hallpass.remote()                      # the same server, the same environment variables
+hp = Hallpass.from_config("hallpass.yaml")  # or the engine in this process, no server
 ```
 
-Without a decorator:
-
-```python
-d = hp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
-d.decision, d.reason        # "deny", "denied: ..."
-hp.require(...)             # raises PermissionDenied unless allow
-```
-
-Framework examples: [examples/agent](https://github.com/roee-hersh/hallpass/tree/main/examples/agent).
-The guide: [docs/guides/agent-tools.md](https://github.com/roee-hersh/hallpass/blob/main/docs/guides/agent-tools.md).
+`hallpass` also has adapters for Strands, LangChain and LangGraph, MCP, the OpenAI Agents SDK, the
+Claude Agent SDK, Google ADK, CrewAI, Pydantic AI and LlamaIndex.
+[The agent guide](https://github.com/roee-hersh/hallpass/blob/main/docs/guides/agent-tools.md) covers
+each one.

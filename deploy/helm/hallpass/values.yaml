@@ -114,7 +114,7 @@ rbac:
 podAnnotations: {}
 podLabels: {}
 
-# The image runs as the distroless `nonroot` user (uid/gid 65532).
+# The image runs as the non-root user uid/gid 65532.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532

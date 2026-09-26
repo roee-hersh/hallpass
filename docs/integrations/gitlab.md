@@ -175,7 +175,7 @@ of every matching rule are evaluated and the most permissive one wins:
 
 ## Unverified
 
-Marked `// UNVERIFIED:` in the code:
+Marked `# UNVERIFIED:` in the code:
 
 - `issue.edit` for Security Manager (25) is assumed allowed like Reporter.
 - `group.project.create` assumes the default group setting (Developers and above may create projects).
@@ -194,7 +194,7 @@ Marked `// UNVERIFIED:` in the code:
 
 ## Test
 
-Unit tests run against a fake GitLab API (`gitlab_test.go`) that models users (with `external`,
+Unit tests run against a fake GitLab API (`tests/integrations/gitlab/test_gitlab.py`) that models users (with `external`,
 `is_admin` and secondary emails, paginated search), enterprise users, SAML identities, projects (with
 issue settings), groups, memberships and protected branches, and answers only to the canary token.
 With `HALLPASS_SPECS_DIR` set every request is also validated against GitLab's OpenAPI description. No live fixtures. To try a real connection, configure it and run `hallpass probe`, then one

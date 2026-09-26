@@ -4,5 +4,6 @@
 
 ## Testing
 
-- [ ] `go test -race ./...` passes
-- [ ] `gofmt -l .` prints nothing
+- [ ] `ruff format --check src tests` and `ruff check src tests` pass (in `hallpass-py`)
+- [ ] `mypy --strict src/hallpass` passes
+- [ ] `python -m pytest -q` passes

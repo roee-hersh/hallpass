@@ -11,8 +11,12 @@ It is on [npm](https://www.npmjs.com/package/hallpass-client). Its version match
 release, so in a project pin the one you run (`npm install hallpass-client@0.4.0`). From 0.4.1 on,
 the hallpass release workflow publishes it with npm provenance.
 
-It needs a running hallpass service. The client has no dependencies; it uses Node's built-in `fetch`
-(Node 18.17 or later). It ships as an ES module with type declarations.
+It needs a running hallpass server: the `ghcr.io/roee-hersh/hallpass` image, the Helm chart, or
+`pip install hallpass` and `hallpass serve -config hallpass.yaml` (hallpass itself is a Python
+package; in Python you can also run its engine in-process, with no server). The client has no
+dependencies; it uses Node's built-in `fetch` (Node 18.17 or later). It ships as an ES module with
+type declarations. Its source is in
+[`hallpass-ts`](https://github.com/roee-hersh/hallpass/tree/main/hallpass-ts).
 
 ```ts
 import { AsyncLocalStorage } from "node:async_hooks";

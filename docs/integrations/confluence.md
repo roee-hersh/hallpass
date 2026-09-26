@@ -142,7 +142,7 @@ cannot verify without a resource.
 ## Test
 
 Unit tests run against one fake Atlassian site that serves both Jira's user search and Confluence's
-content, space and group APIs (`internal/integrations/confluence/confluence_test.go`). They wire a real
+content, space and group APIs (`hallpass-py/tests/integrations/confluence/test_confluence.py`). They wire a real
 jira connection as `identity_connection`, and cover content checks (including a `false` with an
 `errors` list), space evaluation through user and group principals with pagination, the space
 administrator rule, anonymous and role principals, exact space-key matching, the missing-identity

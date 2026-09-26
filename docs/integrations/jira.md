@@ -145,7 +145,7 @@ warns when Administer Jira is missing (every check for another user will answer 
 
 ## Test
 
-Unit tests run against a fake Jira Cloud site (`internal/integrations/jira/jira_test.go`) covering
+Unit tests run against a fake Jira Cloud site (`hallpass-py/tests/integrations/jira/test_jira.py`) covering
 the three auth modes, identity edge cases (display-name spoofing, hidden emails, paging and the
 too-many-candidates cap, empty email), project/issue/global checks, a check whose response does not
 echo the permission key, every action, the injected failure modes and the probe. With
