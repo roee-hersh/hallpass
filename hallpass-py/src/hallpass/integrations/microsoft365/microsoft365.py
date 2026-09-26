@@ -191,7 +191,7 @@ class Microsoft365(Integration):
             validate_guid(client_id)
         except ValueError as e:
             raise ValueError(f"client_id: {e}") from e
-        now = d.now or time.time
+        now = d.now if d.now is not None else time.time
         authority = s.get("authority_url").rstrip("/")
         if authority == "":
             authority = DEFAULT_AUTHORITY

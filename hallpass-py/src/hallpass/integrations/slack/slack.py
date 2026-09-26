@@ -569,7 +569,7 @@ class SlackConnection(Connection):
             raise _classified(err)
         if ch.id == "":
             ch.id = id
-        return ch
+        return ch  # type: ignore[no-any-return]
 
     def is_member(self, ctx: Context, user_id: str, channel_id: str) -> bool:
         """Whether the user is in the channel. users.conversations lists the
@@ -895,7 +895,7 @@ class SlackConnection(Connection):
                 raise _classified(err)
             for cid, general in chans:
                 if general and cid != "":
-                    return cid
+                    return str(cid)
             cursor = res.next_cursor
             if cursor == "":
                 return ""

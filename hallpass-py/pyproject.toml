@@ -83,8 +83,15 @@ warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
 # The framework adapters import their framework, an optional extra.
-module = ["strands.*", "langchain.*", "langchain_core.*", "langgraph.*", "mcp.*", "agents.*", "claude_agent_sdk.*", "google.adk.*", "google.genai.*", "pydantic_ai.*", "crewai.*", "llama_index.*"]
+module = ["strands.*", "langchain.*", "langchain_core.*", "langgraph.*", "mcp.*", "mcp_types.*", "agents.*", "claude_agent_sdk.*", "google.adk.*", "google.genai.*", "pydantic_ai.*", "crewai.*", "llama_index.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Without the framework installed its base classes are Any; the adapters
+# subclass them on purpose.
+module = ["hallpass.strands", "hallpass.langchain", "hallpass.mcp", "hallpass.openai_agents", "hallpass.claude_agent_sdk", "hallpass.google_adk", "hallpass.pydantic_ai", "hallpass.crewai", "hallpass.llamaindex"]
+disallow_subclassing_any = false
+warn_return_any = false
 
 [[tool.mypy.overrides]]
 module = ["hallpass._api"]

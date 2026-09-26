@@ -222,4 +222,3 @@ class Rules:
 def refusal(outcome: Outcome) -> str:
     """The text an adapter returns to the model for a refused call."""
     return f"hallpass refused this call: {outcome.reason}"
-

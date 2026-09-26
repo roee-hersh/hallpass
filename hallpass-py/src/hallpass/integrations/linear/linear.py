@@ -343,11 +343,12 @@ class LinearConnection(Connection):
                 ctx,
                 httpx.Request(method="POST", path=self.url, json={"query": q, "variables": variables}, idempotent=True, accept_4xx=True),
             )
-        except Exception as e:
-            he = httpx.classify(e)
-            if he is e:
+        except Exception as err:
+            he = httpx.classify(err)
+            if he is err:
                 raise
-            raise he  # wrap_error already carries e as the cause
+            assert he is not None
+            raise he  # wrap_error already carries err as the cause
         if resp.status == 401:
             raise errorf(Code.CREDENTIAL_REJECTED, "Linear rejected hallpass's credential (HTTP 401)")
         if resp.status == 403:
@@ -359,8 +360,8 @@ class LinearConnection(Connection):
         try:
             env = jsonx.obj(resp.json(), "response")
             errors = [decode_gql_error(e) for e in jsonx.arr(env, "errors")]
-        except ValueError as e:
-            raise wrap_error(Code.UPSTREAM_ERROR, e, f"Linear's response was not JSON (HTTP {resp.status})") from e
+        except ValueError as err:
+            raise wrap_error(Code.UPSTREAM_ERROR, err, f"Linear's response was not JSON (HTTP {resp.status})") from err
         for e in errors:
             t = go_lower(e.type)
             if t in ("ratelimited", "usage limit exceeded"):

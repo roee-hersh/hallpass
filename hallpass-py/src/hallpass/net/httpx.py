@@ -317,7 +317,7 @@ class Transport:
         raw = env.get(scheme)
         if not raw:
             return None
-        if urllib.request.proxy_bypass_environment(host, env):
+        if urllib.request.proxy_bypass_environment(host, env):  # type: ignore[attr-defined]
             return None
         try:
             return _parse_proxy(raw)
@@ -577,7 +577,7 @@ class _TunnelConnection(http.client.HTTPConnection):
             if self._proxy.scheme == "https":
                 # TLS inside TLS: the target's handshake runs over the
                 # proxy's TLS session through memory BIOs.
-                self.sock = _TLSInTLS(sock, self._ssl_context, self._server_name)  # type: ignore[assignment]
+                self.sock = _TLSInTLS(sock, self._ssl_context, self._server_name)  # type: ignore[arg-type]
             else:
                 self.sock = self._ssl_context.wrap_socket(sock, server_hostname=self._server_name)
         except BaseException:

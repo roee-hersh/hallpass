@@ -238,7 +238,7 @@ class _JSONParser:
 
     def string(self) -> str:
         try:
-            v, end = json.decoder.scanstring(self.s, self.i + 1, True)
+            v, end = json.decoder.scanstring(self.s, self.i + 1, True)  # type: ignore[attr-defined]
         except json.JSONDecodeError as e:
             raise PolicyError(f"invalid string: {e.msg}") from None
         self.i = end

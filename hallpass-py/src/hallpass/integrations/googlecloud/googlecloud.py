@@ -308,7 +308,7 @@ class GoogleCloudConnection(Connection):
         ws = s.get("googleworkspace_connection")
         if ws != "":
             self.workspace = d.connection(ws)
-        self.now: Callable[[], float] = d.now or time.time
+        self.now: Callable[[], float] = d.now if d.now is not None else time.time
         if self.token_url == "":
             self.token_url = DEFAULT_TOKEN_URL
         if self.metadata_url == "":

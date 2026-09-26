@@ -118,7 +118,7 @@ class Vault(Integration):
         c = VaultConnection(
             alias_mount=go_trim_space(s.get("alias_mount")),
             namespace=go_trim_space(s.get("namespace")),
-            now=d.now or time.time,
+            now=d.now if d.now is not None else time.time,
         )
         if not MOUNT_RE.fullmatch(c.alias_mount):
             raise ValueError("alias_mount is required and must be an auth mount path such as oidc/")
@@ -490,29 +490,29 @@ class VaultConnection(Connection):
         # The lookup response carries most of the entity, but not disabled;
         # the read does, and a disabled entity must be denied.
         try:
-            _, e = self._data(ctx, "GET", "/identity/entity/id/" + found_id, None, _decode_entity)
+            _, ent = self._data(ctx, "GET", "/identity/entity/id/" + found_id, None, _decode_entity)
         except Exception as err:  # noqa: BLE001 - classified and raised
             raise classify(
                 err,
                 "read the entity",
                 lambda: errorf(Code.UPSTREAM_ERROR, f"entity {found_id} vanished between lookup and read"),
             )
-        if e is None:
-            e = _Entity()
-        attrs: dict[str, str] = {"entity_name": e.name, "disabled": "unknown"}
-        if e.disabled is not None:
-            attrs["disabled"] = "true" if e.disabled else "false"
-        for k, v in e.metadata.items():
+        if ent is None:
+            ent = _Entity()
+        attrs: dict[str, str] = {"entity_name": ent.name, "disabled": "unknown"}
+        if ent.disabled is not None:
+            attrs["disabled"] = "true" if ent.disabled else "false"
+        for k, v in ent.metadata.items():
             attrs["meta:" + k] = v
-        for a in e.aliases:
+        for a in ent.aliases:
             attrs["alias:" + a.mount_accessor + ":id"] = a.id
             attrs["alias:" + a.mount_accessor + ":name"] = a.name
             for k, v in a.metadata.items():
                 attrs["alias:" + a.mount_accessor + ":meta:" + k] = v
-        policies: set[str] = set(e.policies)
+        policies: set[str] = set(ent.policies)
         groups: list[str] = []
         seen: set[str] = set()
-        for gid in [*e.group_ids, *e.inherited_group_ids]:
+        for gid in [*ent.group_ids, *ent.inherited_group_ids]:
             if gid == "" or gid in seen or not ID_RE.fullmatch(gid):
                 continue
             seen.add(gid)
@@ -589,9 +589,9 @@ class VaultConnection(Connection):
         the KV version. Mounts may span several segments."""
         mounts = self._listing(ctx, "/sys/mounts")
         mount = ""
-        for m in mounts:
-            if (path + "/").startswith(m) and len(m) > len(mount) + 1:
-                mount = m.removesuffix("/")
+        for mk in mounts:
+            if (path + "/").startswith(mk) and len(mk) > len(mount) + 1:
+                mount = mk.removesuffix("/")
         if mount == "" or len(path) <= len(mount) + 1:
             raise errorf(
                 Code.RESOURCE_NOT_VISIBLE,

@@ -146,7 +146,7 @@ class Databricks(Integration):
             client_id=s.get("client_id"),
             token_url=s.get("token_url").rstrip("/"),
             admins_rule=s.bool("admins_manage_all", True),
-            now=d.now or time.time,
+            now=d.now if d.now is not None else time.time,
         )
         if c.mode == "":
             c.mode = MODE_OAUTH

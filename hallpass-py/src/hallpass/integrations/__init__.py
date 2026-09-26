@@ -36,6 +36,7 @@ NAMES = (
     "googlecloud",
 )
 
+
 def registry() -> Registry:
     """A registry with every integration."""
     r = Registry()

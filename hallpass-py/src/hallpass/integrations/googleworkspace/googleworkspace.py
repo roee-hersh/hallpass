@@ -347,7 +347,7 @@ class GoogleWorkspaceConnection(Connection):
         self.token_url = s.get("token_url").rstrip("/")
         self.metadata_url = s.get("metadata_url").rstrip("/")
         self.iam_creds_url = s.get("iamcredentials_url").rstrip("/")
-        self.now: Callable[[], float] = d.now or time.time
+        self.now: Callable[[], float] = d.now if d.now is not None else time.time
         # "config" or "key" (use the key's token_uri).
         self.token_url_from = "config"
         self._mu = threading.Lock()

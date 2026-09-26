@@ -134,7 +134,7 @@ class HallpassToolset(WrapperToolset[Any]):
         self.policy = policy
 
     async def get_tools(self, ctx: RunContext[Any]) -> dict[str, ToolsetTool[Any]]:
-        tools = await self.wrapped.get_tools(ctx)
+        tools: dict[str, Any] = await self.wrapped.get_tools(ctx)
         self.policy.warn_missing(tools)
         return tools
 

@@ -129,7 +129,7 @@ class Hallpass:
         self._backend: _Backend = _Local(from_mapping(doc, registry(), "<connections>", require_api_key=False), logger)
 
     @classmethod
-    def from_config(cls, path: str | os.PathLike, *, logger: Any = None) -> Hallpass:
+    def from_config(cls, path: str | os.PathLike[str], *, logger: Any = None) -> Hallpass:
         """The in-process engine from a hallpass YAML file. The file's
         caches and decision log apply; ``listen`` and ``api_key`` are for
         the server and are not needed here."""
@@ -284,7 +284,7 @@ class _Remote(_Backend):
         self._opener = urllib.request.build_opener(_NoRedirect)
 
     def check(self, user: str, connection: str, action: str, resource: str, groups: list[str] | None, fresh: bool) -> Decision:
-        body: dict = {"user": user, "connection": connection, "action": action, "resource": resource}
+        body: dict[str, Any] = {"user": user, "connection": connection, "action": action, "resource": resource}
         if groups is not None:
             body["groups"] = groups
         if fresh:
@@ -395,7 +395,7 @@ def _log_write(
     )
 
 
-F = TypeVar("F", bound=Callable)
+F = TypeVar("F", bound=Callable[..., Any])
 
 # Where the acting user (or their groups) comes from: a fixed value, a
 # zero-argument callable, or a contextvars.ContextVar the application sets
@@ -491,7 +491,7 @@ def guarded(
         sig = inspect.signature(fn)
         one_dict = _takes_one_dict(sig)
 
-        def prepare(args: tuple, kwargs: dict):
+        def prepare(args: tuple[Any, ...], kwargs: dict[str, Any]):
             if one_dict:
                 if len(args) != 1 or kwargs or not isinstance(args[0], Mapping):
                     raise TypeError(f"{fn.__name__} takes one dict of arguments")
