@@ -122,7 +122,7 @@ instead of raising it, with `deny=`:
 |---|---|
 | LangChain, LangGraph | `deny=` (an unexpected exception ends the run) |
 | MCP server (`mcp` package) | `deny=` (the server hides exception text) |
-| Strands Agents | raise (reported as a tool error with the text) |
+| Strands Agents | raise (reported as a tool error with the text); the intervention handler below needs neither |
 | Claude Agent SDK | raise (reported as an `is_error` result with the text) |
 | Vercel AI SDK | `deny:` (so the model reads the reason whatever the SDK does with errors) |
 | MCP TypeScript SDK | raise (becomes an `isError` result with the text) |
@@ -136,11 +136,46 @@ Each recipe is a complete, tested file. They define two tools against the `demo`
 |---|---|---|
 | LangChain | [`langchain_tool.py`](../../examples/agent/langchain_tool.py) | `@tool` over `guarded`, with `deny=` |
 | LangGraph | [`langgraph_agent.py`](../../examples/agent/langgraph_agent.py) | the LangChain tools in `create_agent` or a `ToolNode` |
-| Strands Agents | [`strands_tool.py`](../../examples/agent/strands_tool.py) | `@tool` over `guarded` |
+| Strands Agents | [`strands_intervention.py`](../../examples/agent/strands_intervention.py) | `HallpassAuthorization` on the agent; see below |
+| Strands Agents, per tool | [`strands_tool.py`](../../examples/agent/strands_tool.py) | `@tool` over `guarded` |
 | Claude Agent SDK | [`claude_agent_sdk_tool.py`](../../examples/agent/claude_agent_sdk_tool.py) | handler takes `args: dict`; see below |
 | MCP server, any host | [`mcp_server.py`](../../examples/agent/mcp_server.py) | user from `AGENT_USER`; see below |
 | Vercel AI SDK | [`ai_sdk_tool.ts`](../../examples/agent-ts/ai_sdk_tool.ts) | `guarded(...)` as the tool's `execute` |
 | MCP TypeScript SDK | [`mcp_server.ts`](../../examples/agent-ts/mcp_server.ts) | user from `AGENT_USER` |
+
+**Strands Agents.** Use the intervention handler instead of `guarded`. It is configured once on
+the agent, checks every tool that has a rule before it runs, and composes with Strands' other
+interventions such as `CedarAuthorization`. The tools need no decorator, and the user comes from
+`invocation_state`, which your application passes and the model cannot write:
+
+```python
+# pip install "hallpass-client[strands]"
+from hallpass_client import Hallpass
+from hallpass_client.strands import HallpassAuthorization, Rule
+
+hallpass = HallpassAuthorization(Hallpass(), {
+    "open_config_pr": Rule("github-main", "repo.push", "repo:{owner}/{repo}", fresh=True),
+    "delete_issue": ("jira-main", "DELETE_ISSUES", "issue:{key}"),
+})
+
+agent = Agent(tools=tools, interventions=[hallpass])
+agent(body.message, invocation_state={"user_id": user.email})  # from your auth, per request
+```
+
+- A tool without a rule runs unchecked, so reads stay fast. With `strict=True` it is denied
+  instead, and a rule of `None` names a tool that may run unchecked. Use `strict=True` when the
+  agent loads tools you do not list yourself, such as MCP tools. A rule that names no tool of the
+  agent is logged as a warning.
+- The fields in a resource must be plain `str` or `int` parameters of the tool, and the model's value
+  must already have that type, so the resource hallpass checks is exactly the one the tool gets
+  (Strands would turn `"07"` into the integer 7). A field the model leaves out takes the tool's
+  default.
+- A missing user, a resource the tool's input cannot fill, any answer but `allow`, and any error in
+  the handler all deny the call. The model sees the reason as the tool result.
+- `groups_key="groups"` reads the user's groups from `invocation_state["groups"]`.
+- List it last in `interventions`, and do not rewrite tool calls in later hooks or in tool
+  middleware: that changes what runs after hallpass checked it. A call a hook moved to another tool
+  is denied.
 
 **Claude Agent SDK.** The handler receives one dict, and `guarded` reads the resource from it.
 With a long-lived `ClaudeSDKClient`, set the user before `connect()` and use one client per user.

@@ -6,4 +6,4 @@ langchain-core>=1,<2       # langchain_tool.py
 langgraph>=1,<2            # langgraph_agent.py
 langchain>=1,<2            # langgraph_agent.py (create_agent)
 claude-agent-sdk>=0.2,<1   # claude_agent_sdk_tool.py
-strands-agents>=1,<2       # strands_tool.py
+strands-agents>=1.57.1,<2  # strands_tool.py, strands_intervention.py

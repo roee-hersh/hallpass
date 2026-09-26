@@ -36,6 +36,17 @@ current_user.set(request.user.email)  # from your auth, per request or session
 - **One package covers every framework.** `guarded` handles plain functions, `async def`,
   and the Claude Agent SDK's `async def f(args: dict)` handler shape.
 
+For Strands Agents, `pip install "hallpass-client[strands]"` adds an intervention handler that
+checks every tool call with a rule, with the user from `invocation_state`:
+
+```python
+from hallpass_client.strands import HallpassAuthorization
+
+hallpass = HallpassAuthorization(hp, {"delete_issue": ("jira-main", "DELETE_ISSUES", "issue:{key}")})
+agent = Agent(tools=tools, interventions=[hallpass])
+agent(prompt, invocation_state={"user_id": request.user.email})
+```
+
 Without a decorator:
 
 ```python

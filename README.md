@@ -121,7 +121,7 @@ Working, tested examples for each framework:
 |---|---|
 | LangChain | [`langchain_tool.py`](examples/agent/langchain_tool.py) |
 | LangGraph | [`langgraph_agent.py`](examples/agent/langgraph_agent.py) |
-| Strands Agents | [`strands_tool.py`](examples/agent/strands_tool.py) |
+| Strands Agents | [`strands_intervention.py`](examples/agent/strands_intervention.py), an intervention handler for every tool |
 | Claude Agent SDK | [`claude_agent_sdk_tool.py`](examples/agent/claude_agent_sdk_tool.py) |
 | MCP, for any host (Claude Code, Claude Desktop, Cursor, ...) | [`mcp_server.py`](examples/agent/mcp_server.py) |
 | Vercel AI SDK (TypeScript) | [`ai_sdk_tool.ts`](examples/agent-ts/ai_sdk_tool.ts) |

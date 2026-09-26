@@ -10,7 +10,8 @@ never let the model choose the user. The client they use is the
 |---|---|
 | `langchain_tool.py` | The two tools as LangChain tools. |
 | `langgraph_agent.py` | A LangGraph agent (`create_agent`) and a `ToolNode` built from those tools. |
-| `strands_tool.py` | The two tools for Strands Agents. |
+| `strands_intervention.py` | The two tools for Strands Agents, checked by `HallpassAuthorization`, an intervention handler on the agent. |
+| `strands_tool.py` | The two tools for Strands Agents, with `guarded` on the write tool. |
 | `claude_agent_sdk_tool.py` | The two tools as an in-process MCP server for the Claude Agent SDK. |
 | `mcp_server.py` | A standalone MCP server over stdio for any MCP host. |
 | `test_hallpass_client.py` | Tests against a fake hallpass, through each framework's own invocation path. |
@@ -36,7 +37,7 @@ python examples/agent/langchain_tool.py dana@example.com
 python examples/agent/langchain_tool.py admin@example.com
 ```
 
-`langgraph_agent.py`, `strands_tool.py` and `claude_agent_sdk_tool.py` run
+`langgraph_agent.py`, `strands_intervention.py`, `strands_tool.py` and `claude_agent_sdk_tool.py` run
 one prompt through a model when executed directly and need that provider set
 up. `mcp_server.py` is launched by the MCP host; see the guide for the
 `claude mcp add` line.

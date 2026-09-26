@@ -76,6 +76,32 @@ class InstalledPackage(unittest.TestCase):
         with self.assertRaises(PermissionDenied):
             write(thing_id="1")
 
+    def test_strands_handler(self):
+        path = os.path.join(os.path.dirname(hallpass_client.__file__), "strands.py")
+        self.assertTrue(os.path.exists(path), "hallpass_client.strands must ship in the wheel")
+        try:
+            from hallpass_client.strands import HallpassAuthorization
+        except ImportError:
+            if os.environ.get("HALLPASS_SDK_REQUIRE_STRANDS") == "1":
+                raise
+            self.skipTest("strands-agents not installed (the strands extra)")
+        import asyncio
+        from types import SimpleNamespace
+
+        from strands.interventions import Deny, Proceed
+
+        handler = HallpassAuthorization(self.hp, {"write": ("demo", "thing.write", "thing:{thing_id}")})
+
+        def decide(user: str):
+            spec = {"inputSchema": {"json": {"properties": {"thing_id": {"type": "string"}}}}}
+            event = SimpleNamespace(tool_use={"toolUseId": "t1", "name": "write", "input": {"thing_id": "1"}},
+                                    selected_tool=SimpleNamespace(tool_name="write", tool_spec=spec),
+                                    invocation_state={"user_id": user})
+            return asyncio.run(handler.before_tool_call(event))
+
+        self.assertIsInstance(decide("admin@example.com"), Proceed)
+        self.assertIsInstance(decide("dana@example.com"), Deny)
+
 
 if __name__ == "__main__":
     sys.exit(unittest.main())
