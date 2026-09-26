@@ -308,13 +308,16 @@ def test_apply_keeps_callbacks_in_order_and_reaches_sub_agents(hp: Hallpass, cap
     def mine(tool: Any, args: Any, tool_context: Any) -> None:
         return None
 
+    def mine_after(tool: Any, args: Any, tool_context: Any, tool_response: Any) -> None:
+        return None
+
     child = LlmAgent(name="child", model=ScriptedLlm(), tools=[read_thing], before_tool_callback=mine)
-    parent = LlmAgent(name="parent", model=ScriptedLlm(), tools=[ping], sub_agents=[child], after_tool_callback=mine)
+    parent = LlmAgent(name="parent", model=ScriptedLlm(), tools=[ping], sub_agents=[child], after_tool_callback=mine_after)
     caplog.set_level(logging.WARNING, logger="hallpass")
     hooks = HallpassCallbacks(hp, {**RULES, "read_thingz": ("things", "thing.read", "thing:{thing_id}")})
     hooks.apply(parent)
     assert child.before_tool_callback == [mine, hooks.before_tool]
-    assert parent.after_tool_callback == [hooks.after_tool, mine]
+    assert parent.after_tool_callback == [hooks.after_tool, mine_after]
     assert "read_thingz" in caplog.text
 
 

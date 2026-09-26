@@ -18,9 +18,11 @@ __all__ = [
     "JoinedError",
     "as_error",
     "chain",
+    "go_equal_fold",
     "go_lower",
     "go_quote",
     "go_trim_space",
+    "go_upper",
     "is_error",
     "os_error_text",
     "path_error_text",
@@ -148,3 +150,36 @@ def os_error_text(e: BaseException) -> str:
 def path_error_text(op: str, path: str, e: BaseException) -> str:
     """Go's *fs.PathError text: "open /x: no such file or directory"."""
     return f"{op} {path}: {os_error_text(e)}"
+
+
+def go_upper(s: str) -> str:
+    """Go's strings.ToUpper: one rune for one rune. str.upper() uses the
+    full mapping (ß becomes SS); Go keeps a rune with no single-rune
+    uppercase as it is."""
+    if s.isascii():
+        return s.upper()
+    return "".join(u if len(u := c.upper()) == 1 else c for c in s)
+
+
+def _simple_fold(c: str) -> str:
+    """A representative of c's simple case-folding orbit, as Go's
+    unicode.SimpleFold cycles it: ſ, s and S together, ς with σ, the Kelvin
+    sign with k; the dotless ı and the dotted İ each alone."""
+    if c in ("ı", "İ"):
+        return c
+    u = c.upper()
+    if len(u) != 1:
+        u = c
+    lo = u.lower()
+    if len(lo) != 1:
+        lo = c.lower() if len(c.lower()) == 1 else c
+    return lo
+
+
+def go_equal_fold(a: str, b: str) -> bool:
+    """Go's strings.EqualFold: equal under simple Unicode case folding."""
+    if a.isascii() and b.isascii():
+        return a.lower() == b.lower()
+    if len(a) != len(b):
+        return False
+    return all(x == y or _simple_fold(x) == _simple_fold(y) for x, y in zip(a, b, strict=True))

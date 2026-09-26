@@ -445,7 +445,7 @@ def check(c: Connection, u: User, action: str, resource: str) -> Decision:
 def resolve(c: Connection, u: User) -> tuple[Identity | None, BaseException | None]:
     try:
         return c.resolve_identity(background(), u), None
-    except Exception as e:  # noqa: BLE001 - the error is the result
+    except Exception as e:
         return None, e
 
 
@@ -530,7 +530,10 @@ def test_bad_key(env: Env) -> None:
     deps, _ = itest.deps(srv)
     for cred in ("not json", '{"client_email":"x@y.z"}', '{"client_email":"x@y.z","private_key":"nope"}'):
         s = itest.settings(
-            "gws", "googleworkspace", {"admin_email": ADMIN_EMAIL, "token_url": srv.url + "/token", "api_url": srv.url}, {"credential": secret_literal(itest.CANARY + cred)}
+            "gws",
+            "googleworkspace",
+            {"admin_email": ADMIN_EMAIL, "token_url": srv.url + "/token", "api_url": srv.url},
+            {"credential": secret_literal(itest.CANARY + cred)},
         )
         c = GoogleWorkspace().new(background(), s, deps)
         d = check(c, dana, "drive.file.read", "file:" + FILE_A)
@@ -585,7 +588,9 @@ def test_resolve_identity(env: Env) -> None:
     assert err is None and id is not None and id.attr("archived") == "true", f"archived: {id} {err}"
     id, err = resolve(c, nostatus)
     assert err is None and id is not None and id.attr("suspended") == "unknown" and id.attr("archived") == "unknown", f"no status fields: {id} {err}"
-    srv.json("GET", "/admin/directory/v1/users/dana@example.com", 403, '{"error":{"code":403,"message":"' + itest.CANARY + '","errors":[{"reason":"forbidden"}]}}')
+    srv.json(
+        "GET", "/admin/directory/v1/users/dana@example.com", 403, '{"error":{"code":403,"message":"' + itest.CANARY + '","errors":[{"reason":"forbidden"}]}}'
+    )
     itest.expect_code(resolve_decision(c, dana), Code.CREDENTIAL_REJECTED)
 
 
@@ -753,7 +758,9 @@ def test_drive_not_found_other_reason(env: Env) -> None:
             d = check(c, dana, action, "file:" + FILE_A)
             itest.expect_code(d, Code.RESOURCE_NOT_VISIBLE)
             itest.assert_no_canary(d.text)
-    srv.json("GET", "/drive/v3/files/" + FILE_A, 404, '{"error":{"code":404,"message":"' + itest.CANARY + 'msg","errors":[{"domain":"global","reason":"notFound"}]}}')
+    srv.json(
+        "GET", "/drive/v3/files/" + FILE_A, 404, '{"error":{"code":404,"message":"' + itest.CANARY + 'msg","errors":[{"domain":"global","reason":"notFound"}]}}'
+    )
     itest.expect_code(check(c, dana, "drive.file.read", "file:" + FILE_A), Code.DENIED)
 
 
@@ -1049,7 +1056,7 @@ def test_probe_scope_missing(env: Env) -> None:
     with f.mu:
         f.bad_grant[ADMIN_EMAIL] = True
     c2 = env.setup_with(f)
-    with pytest.raises(Exception) as ei:  # noqa: B017 - any error; its code is checked
+    with pytest.raises(Exception) as ei:
         c2.probe(background())
     itest.expect_code(to_decision(ei.value), Code.CREDENTIAL_REJECTED)
 

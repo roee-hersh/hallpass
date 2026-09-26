@@ -519,7 +519,9 @@ class Microsoft365Connection(Connection):
         except ValueError as e:
             raise wrap_error(Code.UPSTREAM_ERROR, e, "Graph returned an unreadable response") from e
 
-    def _get_typed(self, ctx: Context, path: str, header: dict[str, str] | None, decode: Callable[[Any], Any], not_found: Callable[[], BaseException] | None) -> Any:
+    def _get_typed(
+        self, ctx: Context, path: str, header: dict[str, str] | None, decode: Callable[[Any], Any], not_found: Callable[[], BaseException] | None
+    ) -> Any:
         """GET and decode the body the way json.Unmarshal into a struct would."""
         v = self._get_json(ctx, path, header, not_found)
         try:
@@ -670,7 +672,11 @@ class Microsoft365Connection(Connection):
         # UNVERIFIED: GroupMember.Read.All is documented as sufficient for
         # GET /groups/{id}; visibility is null for security groups and
         # HiddenMembership only for Microsoft 365 groups created that way.
-        return str(self._get_typed(ctx, "/v1.0/groups/" + httpx.path_escape(group_id) + "?$select=id,visibility", None, decode, _resource_not_visible("group " + group_id)))
+        return str(
+            self._get_typed(
+                ctx, "/v1.0/groups/" + httpx.path_escape(group_id) + "?$select=id,visibility", None, decode, _resource_not_visible("group " + group_id)
+            )
+        )
 
     def _check_group(self, ctx: Context, ident: Identity, who: str, group_id: str) -> Decision:
         visibility = self._group_visibility(ctx, group_id)
@@ -882,7 +888,9 @@ class Microsoft365Connection(Connection):
             return allowed(f"{who} may {v} {what} via an organization-wide sharing link")
         direct = max(direct, org_link)
         if unknown_role:
-            return unsupported(f"{who} is granted a role on {what} that hallpass does not model (a custom SharePoint permission level); their access is unknown")
+            return unsupported(
+                f"{who} is granted a role on {what} that hallpass does not model (a custom SharePoint permission level); their access is unknown"
+            )
         if unknown_scope != "":
             return unsupported(f"{what} has a sharing link with scope {go_quote(unknown_scope)}, which hallpass does not model; {who}'s access is unknown")
         if action == "file.share" and direct >= LEVEL_READ:

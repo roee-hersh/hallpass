@@ -408,7 +408,7 @@ def check(c: Connection, u: User, action: str, resource: str) -> Decision:
 def resolve(c: Connection, u: User) -> tuple[Identity | None, BaseException | None]:
     try:
         return c.resolve_identity(background(), u), None
-    except Exception as e:  # noqa: BLE001 - the error is the result
+    except Exception as e:
         return None, e
 
 
@@ -806,9 +806,9 @@ def test_action_team_member_allow(env: Env) -> None:
     srv, _, c = env.setup()
     itest.expect_code(check(c, bob, "team.member", "team:" + TEAM_A), Code.ALLOWED)
     last = srv.last_call()
-    assert last.path == "/v1.0/teams/" + TEAM_A + "/members" and last.q("$filter") == "(microsoft.graph.aadUserConversationMember/userId eq '" + BOB_ID + "')", (
-        f"{last.path} {last.query}"
-    )
+    assert (
+        last.path == "/v1.0/teams/" + TEAM_A + "/members" and last.q("$filter") == "(microsoft.graph.aadUserConversationMember/userId eq '" + BOB_ID + "')"
+    ), f"{last.path} {last.query}"
 
 
 def test_action_team_member_deny(env: Env) -> None:
@@ -1194,7 +1194,7 @@ def test_probe_bad_credential(env: Env) -> None:
     with f.mu:
         f.tok = "x"
     srv.json("POST", "/" + TENANT_ID + "/oauth2/v2.0/token", 401, '{"error":"invalid_client","error_description":"' + itest.CANARY + 'nope"}')
-    with pytest.raises(Exception) as ei:  # noqa: B017 - any error; its code is checked
+    with pytest.raises(Exception) as ei:
         c.probe(background())
     itest.expect_code(to_decision(ei.value), Code.CREDENTIAL_REJECTED)
     itest.assert_no_canary(str(ei.value))
@@ -1204,4 +1204,3 @@ def test_actions_listed() -> None:
     for a in ACTION_LIST:
         assert find_action(Microsoft365(), a.name) is not None, f"{a.name} not found"
     assert len(Microsoft365().actions()) == 18, f"{len(Microsoft365().actions())} actions"
-

@@ -63,8 +63,8 @@ __all__ = [
     "MODE_KEY",
     "MODE_KEYLESS",
     "SCOPE_CLOUD_PLATFORM",
-    "STATE_CAN_ACCESS",
     "STATE_CANNOT_ACCESS",
+    "STATE_CAN_ACCESS",
     "STATE_UNKNOWN_CONDITIONAL",
     "STATE_UNKNOWN_INFO",
     "GoogleCloud",
@@ -378,7 +378,7 @@ class GoogleCloudConnection(Connection):
         def attempt() -> httpx.Response:
             try:
                 tok = self.tokens.get(ctx)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - Go: the error is decided on or classified
                 raise token_error(e)
             h = req.header.clone() if isinstance(req.header, httpx.Headers) else httpx.Headers(req.header or {})
             h.set("Authorization", "Bearer " + tok)
@@ -507,7 +507,9 @@ class GoogleCloudConnection(Connection):
             # UNVERIFIED: roles/iam.securityReviewer is assumed to be enough
             # for the troubleshooter to read every allow and deny policy
             # under scope.
-            warnings.append(f"the troubleshooter could not read every policy under {scope}: grant {who} roles/iam.securityReviewer there, or every check will be unknown")
+            warnings.append(
+                f"the troubleshooter could not read every policy under {scope}: grant {who} roles/iam.securityReviewer there, or every check will be unknown"
+            )
         else:
             warnings.append("the troubleshooter returned an unknown access state")
         if self.workspace is None:
@@ -516,4 +518,3 @@ class GoogleCloudConnection(Connection):
             )
         warnings.append("the Policy Troubleshooter discloses which permissions other principals hold; this is inherent to how hallpass checks")
         return ProbeResult(summary=summary, warnings=tuple(warnings))
-

@@ -55,7 +55,7 @@ def fuzz_parse_ref(action: str, resource: str) -> None:
         assert action in ACTION_INDEX, f"unknown action {action!r} accepted"
     assert well_formed(q.resource), f"unvalidated resource {q.resource!r} from {resource!r}"
     if res.type != "object":
-        assert not any(c in q.resource for c in " \t?#\"\\"), f"unexpected characters in {q.resource!r} from {resource!r}"
+        assert not any(c in q.resource for c in ' \t?#"\\'), f"unexpected characters in {q.resource!r} from {resource!r}"
     if res.type != "name":
         for piece in res.id.split("/"):
             assert go_lower(piece) in go_lower(q.resource), f"resource {resource!r} lost {piece!r} in {q.resource!r}"
@@ -80,7 +80,9 @@ _PIECE = st.one_of(st.text(), st.from_regex(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", ful
 _IDS = st.one_of(
     st.text(),
     st.lists(_PIECE, min_size=1, max_size=4).map("/".join),
-    st.builds(lambda h, p: "//" + h + ".googleapis.com/" + p, st.from_regex(r"[a-z][a-z0-9-]{0,10}", fullmatch=True), st.lists(_PIECE, max_size=4).map("/".join)),
+    st.builds(
+        lambda h, p: "//" + h + ".googleapis.com/" + p, st.from_regex(r"[a-z][a-z0-9-]{0,10}", fullmatch=True), st.lists(_PIECE, max_size=4).map("/".join)
+    ),
 )
 _RESOURCES = st.one_of(st.text(), st.builds(lambda t, i: t + ":" + i, _TYPES, _IDS))
 

@@ -281,7 +281,9 @@ def classify(err: BaseException) -> HallpassError:
             return wrap_error(Code.UPSTREAM_RATE_LIMIT, err, "rate limited by Google")
         if r in USER_LEVEL_REASONS:
             return wrap_error(
-                Code.UNSUPPORTED, err, f"Google refused the call for this user ({r}): a Drive or Workspace policy blocks it, so hallpass cannot evaluate the action"
+                Code.UNSUPPORTED,
+                err,
+                f"Google refused the call for this user ({r}): a Drive or Workspace policy blocks it, so hallpass cannot evaluate the action",
             )
         if r in CREDENTIAL_REASONS:
             return wrap_error(
@@ -319,12 +321,11 @@ def gmail_refused(err: BaseException, sub: str) -> Decision:
     st = httpx.status(err)
     if st == 404:
         return unsupported(f"Gmail answered 404 for {sub}: the account may have no Gmail mailbox")
-    if st == 400:
+    if st == 400 and r == "failedPrecondition":
         # UNVERIFIED: an account without a Gmail licence is assumed to answer
         # 400 failedPrecondition ("Mail service not enabled").
-        if r == "failedPrecondition":
-            return unsupported(f"Gmail is not enabled for {sub}")
-    elif st == 403:
+        return unsupported(f"Gmail is not enabled for {sub}")
+    if st == 403:
         # UNVERIFIED: a Gmail 403 forbidden or without a reason as the user
         # ("Delegation denied for <user>") is assumed to be about that
         # account, not hallpass's credential; only insufficientPermissions
@@ -434,9 +435,7 @@ class GoogleWorkspaceConnection(Connection):
         now = self.now()
         # The claims of the JWT bearer assertion: exactly one scope,
         # impersonating sub.
-        payload = go_json_marshal(
-            StructDict(iss=iss, scope=scope, aud=token_url, iat=math.floor(now), exp=math.floor(now + ASSERTION_TTL), sub=sub)
-        )
+        payload = go_json_marshal(StructDict(iss=iss, scope=scope, aud=token_url, iat=math.floor(now), exp=math.floor(now + ASSERTION_TTL), sub=sub))
         return jwt_bearer(self.plain, token_url, lambda c: sign(c, payload), None)(ctx)
 
     def _fetch_metadata_token(self, ctx: Context) -> Token:
@@ -516,7 +515,7 @@ class GoogleWorkspaceConnection(Connection):
         def attempt() -> httpx.Response:
             try:
                 tok = ts.get(ctx)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - Go: the error is decided on or classified
                 raise self.token_error(e, sub)
             h = req.header.clone() if isinstance(req.header, httpx.Headers) else httpx.Headers(req.header or {})
             h.set("Authorization", "Bearer " + tok)
@@ -548,7 +547,7 @@ class GoogleWorkspaceConnection(Connection):
         q = {"projection": "basic", "viewType": "admin_view"}
         try:
             du = self._get_json(ctx, self.admin, SCOPE_DIRECTORY_USER, "/admin/directory/v1/users/" + httpx.path_escape(email), q, _directory_user)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go: the error is decided on or classified
             if httpx.status(err) == 404:
                 raise user_not_found(f"no Workspace account for {email} (aliases resolve; external accounts do not)")
             raise classify(err)
@@ -613,7 +612,7 @@ class GoogleWorkspaceConnection(Connection):
         q = {"supportsAllDrives": "true", "fields": CAPABILITY_FIELDS}
         try:
             caps, trashed = self._get_json(ctx, user, SCOPE_DRIVE, "/drive/v3/files/" + httpx.path_escape(file_id), q, decode)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go: the error is decided on or classified
             if httpx.status(err) == 404:
                 if reason(err) == "notFound":
                     return denied(f"{user} has no access to file {file_id}, or the file does not exist: Drive does not distinguish")
@@ -638,9 +637,14 @@ class GoogleWorkspaceConnection(Connection):
         if cal_id != "primary" and not equal_fold(cal_id, user):
             try:
                 role = self._get_json(
-                    ctx, user, SCOPE_CALENDAR, "/calendar/v3/users/me/calendarList/" + httpx.path_escape(cal_id), None, lambda v: jsonx.s(jsonx.obj(v), "accessRole")
+                    ctx,
+                    user,
+                    SCOPE_CALENDAR,
+                    "/calendar/v3/users/me/calendarList/" + httpx.path_escape(cal_id),
+                    None,
+                    lambda v: jsonx.s(jsonx.obj(v), "accessRole"),
                 )
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001 - Go: the error is decided on or classified
                 if httpx.status(err) == 404:
                     return unsupported(f"calendar {cal_id} is not in {user}'s calendar list; ACL access may still exist")
                 raise classify(err)
@@ -661,7 +665,9 @@ class GoogleWorkspaceConnection(Connection):
 
     def _check_send_as(self, ctx: Context, user: str, mailbox: str) -> Decision:
         if not self.gmail:
-            return unsupported(f"send-as addresses are read with the gmail.settings.basic scope; set enable_gmail_settings to evaluate mail.send_as for {mailbox}")
+            return unsupported(
+                f"send-as addresses are read with the gmail.settings.basic scope; set enable_gmail_settings to evaluate mail.send_as for {mailbox}"
+            )
 
         def decode(v: Any) -> list[tuple[str, str, bool]]:
             out = []
@@ -675,7 +681,7 @@ class GoogleWorkspaceConnection(Connection):
         # same call and an account without Gmail is not a false allow.
         try:
             entries = self._get_json(ctx, user, SCOPE_GMAIL_SETTINGS, "/gmail/v1/users/me/settings/sendAs", None, decode)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go: the error is decided on or classified
             return gmail_refused(err, user)
         for email, status, is_primary in entries:
             if not equal_fold(email, mailbox):
@@ -702,7 +708,9 @@ class GoogleWorkspaceConnection(Connection):
 
     def _check_delegate(self, ctx: Context, user: str, mailbox: str) -> Decision:
         if not self.gmail:
-            return unsupported(f"delegates are read with the gmail.settings.basic scope; set enable_gmail_settings to evaluate mail.delegate_access for {mailbox}")
+            return unsupported(
+                f"delegates are read with the gmail.settings.basic scope; set enable_gmail_settings to evaluate mail.delegate_access for {mailbox}"
+            )
 
         def decode(v: Any) -> list[tuple[str, str]]:
             out = []
@@ -716,7 +724,7 @@ class GoogleWorkspaceConnection(Connection):
         # owner is the user: a 200 proves the mailbox is set up and reachable.
         try:
             delegates = self._get_json(ctx, mailbox, SCOPE_GMAIL_SETTINGS, "/gmail/v1/users/me/settings/delegates", None, decode)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go: the error is decided on or classified
             return gmail_refused(err, mailbox)
         if mailbox == user:
             return allowed(f"{user} owns mailbox {mailbox} and its Gmail settings are readable")
@@ -733,7 +741,7 @@ class GoogleWorkspaceConnection(Connection):
         path = "/admin/directory/v1/groups/" + httpx.path_escape(group) + "/hasMember/" + httpx.path_escape(user)
         try:
             is_member = self._get_json(ctx, self.admin, SCOPE_DIRECTORY_GROUP, path, None, lambda v: _opt_bool(jsonx.obj(v), "isMember"))
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go: the error is decided on or classified
             if httpx.status(err) in (400, 404):
                 return unsupported(f"group {group} is unknown or outside the domain, so membership of {user} cannot be checked")
             raise classify(err)
@@ -753,7 +761,7 @@ class GoogleWorkspaceConnection(Connection):
             users = self._get_json(
                 ctx, self.admin, SCOPE_DIRECTORY_USER, "/admin/directory/v1/users", q, lambda v: [_directory_user(x) for x in jsonx.arr(jsonx.obj(v), "users")]
             )
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go: the error is decided on or classified
             if httpx.status(err) in (404, 400):
                 raise wrap_error(Code.INVALID_REQUEST, err, f"the Directory rejected customer_id {self.customer}")
             raise classify(err)

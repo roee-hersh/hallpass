@@ -269,7 +269,12 @@ class FakeTroubleshooter:
                 json.dumps(
                     {
                         "overallAccessState": overall,
-                        "accessTuple": {"principal": principal, "permission": permission, "fullResourceName": resource, "permissionFqdn": itest.CANARY + "fqdn"},
+                        "accessTuple": {
+                            "principal": principal,
+                            "permission": permission,
+                            "fullResourceName": resource,
+                            "permissionFqdn": itest.CANARY + "fqdn",
+                        },
                         "allowPolicyExplanation": {
                             "allowAccessState": allow,
                             "relevance": "HEURISTIC_RELEVANCE_HIGH",
@@ -578,7 +583,9 @@ def test_project_numbers_and_object_names(env: Env) -> None:
     srv, f, c = env.setup()
     with f.mu:
         f.answers[("dana@example.com", "secretmanager.versions.access", "//secretmanager.googleapis.com/projects/123456789012/secrets/db-password")] = GRANT
-        f.answers[("dana@example.com", "storage.objects.get", "//storage.googleapis.com/projects/_/buckets/acme-data/objects/reports/Q1 2026 (final).pdf")] = GRANT
+        f.answers[("dana@example.com", "storage.objects.get", "//storage.googleapis.com/projects/_/buckets/acme-data/objects/reports/Q1 2026 (final).pdf")] = (
+            GRANT
+        )
     itest.expect_code(check(c, dana, "secret.read", "secret:123456789012/db-password"), Code.ALLOWED)
     itest.expect_code(check(c, dana, "project.view", "project:123456789012"), Code.DENIED)
     itest.expect_code(check(c, dana, "storage.read", "object:acme-data/reports/Q1 2026 (final).pdf"), Code.ALLOWED)
@@ -725,7 +732,9 @@ def test_token_cached_and_refreshed_on401(env: Env) -> None:
     itest.expect_code(check(c, dana, "project.view", "project:acme-prod"), Code.CREDENTIAL_REJECTED)
     for call in srv.calls():
         if call.path == "/v3/iam:troubleshoot":
-            assert call.header.get("Authorization").startswith("Bearer " + itest.CANARY), f"call without the minted bearer: {call.header.get('Authorization')!r}"
+            assert call.header.get("Authorization").startswith("Bearer " + itest.CANARY), (
+                f"call without the minted bearer: {call.header.get('Authorization')!r}"
+            )
 
 
 def test_keyless(env: Env) -> None:
@@ -751,7 +760,10 @@ def test_bad_key(env: Env) -> None:
     deps, _ = itest.deps(srv)
     for cred in ("not json", '{"client_email":"x@y.z"}', '{"client_email":"x@y.z","private_key":"nope"}'):
         s = itest.settings(
-            "gcp", "googlecloud", {"scope": "project:acme-prod", "token_url": srv.url + "/token", "api_url": srv.url}, {"credential": secret_literal(itest.CANARY + cred)}
+            "gcp",
+            "googlecloud",
+            {"scope": "project:acme-prod", "token_url": srv.url + "/token", "api_url": srv.url},
+            {"credential": secret_literal(itest.CANARY + cred)},
         )
         c = GoogleCloud().new(background(), s, deps)
         d = check(c, dana, "project.view", "project:acme-prod")
@@ -839,7 +851,7 @@ def test_probe(env: Env) -> None:
     # The API is disabled.
     with f.mu:
         f.status, f.reason = 403, "SERVICE_DISABLED"
-    with pytest.raises(Exception) as ei:  # noqa: B017 - probe passed with the API disabled otherwise
+    with pytest.raises(Exception) as ei:
         c.probe(background())
     itest.assert_no_canary(str(ei.value))
 
@@ -854,7 +866,7 @@ def test_probe_reports_key_errors(env: Env) -> None:
         {"credential": secret_literal('{"client_email":"x@y.z","private_key":"' + itest.CANARY + '"}')},
     )
     c = GoogleCloud().new(background(), s, deps)
-    with pytest.raises(Exception) as ei:  # noqa: B017 - the error text is checked
+    with pytest.raises(Exception) as ei:
         c.probe(background())
     assert "PEM RSA key" in str(ei.value), f"probe error {ei.value}, want the key parsing cause"
     itest.assert_no_canary(to_decision(ei.value).text)
