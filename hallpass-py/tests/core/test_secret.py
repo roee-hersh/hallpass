@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import pickle
+import re
 import sys
 from pathlib import Path
 
@@ -143,7 +144,7 @@ def test_get_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         assert str(ei.value) == f"secret: read {tmp_path}: read {tmp_path}: is a directory"
     blank = tmp_path / "blank"
     blank.write_bytes(b" \t\r\n")
-    with pytest.raises(SecretError, match=f"^secret: file {blank} is empty$"):
+    with pytest.raises(SecretError, match="^" + re.escape(f"secret: file {blank} is empty") + "$"):
         secret.parse(f"file:{blank}").get()
 
 
