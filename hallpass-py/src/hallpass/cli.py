@@ -31,7 +31,7 @@ from hallpass.core.declog import open_log
 from hallpass.core.duration import parse_duration
 from hallpass.core.engine import EngineError, Options, Request, build
 from hallpass.core.integration import Registry, validate_https_url
-from hallpass.core.log import WARN, JSONHandler, Logger, TextHandler, parse_level
+from hallpass.core.log import WARN, JSONHandler, Logger, TextHandler, go_json, parse_level
 from hallpass.integrations import registry as all_registry
 from hallpass.net import httpx
 from hallpass.server import Server, check_body
@@ -439,7 +439,7 @@ def _select_connection(cfg: Config, cid: str) -> None:
 
 def _print_decision(stdout: IO[str], outcome: str, reason: str, as_json: bool) -> int:
     if as_json:
-        stdout.write(json.dumps({"decision": outcome, "reason": reason}, ensure_ascii=False, separators=(",", ":")) + "\n")
+        stdout.write(go_json({"decision": outcome, "reason": reason}) + "\n")
     else:
         stdout.write(f"{outcome}\n  {_printable(reason)}\n")
     return {"allow": EXIT_ALLOW, "deny": EXIT_DENY}.get(outcome, EXIT_UNKNOWN)

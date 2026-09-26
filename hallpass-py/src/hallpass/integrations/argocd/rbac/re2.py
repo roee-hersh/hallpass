@@ -203,6 +203,11 @@ def translate(p: str) -> str:
                     stack.append([])
                     i = m.end()
                     continue
+                if p.startswith("(?:", i):
+                    out.append("(?:")
+                    stack.append([])
+                    i += 3
+                    continue
                 m = _FLAGS.match(p, i)
                 if not m or m.group(1) in ("", "-") or m.group(1).endswith("-") or "U" in m.group(1):
                     raise RE2Error("invalid or unsupported Perl syntax")

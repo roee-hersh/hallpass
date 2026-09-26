@@ -14,7 +14,7 @@ from typing import Any, Protocol
 from hallpass.core.context import Context, background
 from hallpass.core.decision import Code, Decision, unknown_decision
 from hallpass.core.engine import Request, Result
-from hallpass.core.log import Logger
+from hallpass.core.log import Logger, go_json
 from hallpass.core.secret import Secret
 
 __all__ = ["MAX_REQUEST_BODY", "Checker", "Server", "check_body", "decision_body"]
@@ -31,7 +31,7 @@ class Checker(Protocol):
 
 def decision_body(d: Decision) -> bytes:
     """The wire response of POST /check."""
-    return (json.dumps({"decision": d.outcome.value, "reason": d.reason()}, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+    return (go_json({"decision": d.outcome.value, "reason": d.reason()}) + "\n").encode()
 
 
 def check_body(req: Request) -> dict[str, Any]:
