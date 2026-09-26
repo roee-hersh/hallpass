@@ -48,9 +48,12 @@ def registry() -> Registry:
         mod_name = f"hallpass.integrations.{name}"
         try:
             mod = importlib.import_module(mod_name)
-        except ModuleNotFoundError as e:
-            if _PORT_IN_PROGRESS and e.name == mod_name:
+            integ = mod.INTEGRATION
+        except Exception:
+            # A package still being written (missing, half-written or not
+            # yet exporting INTEGRATION) is skipped while the port runs.
+            if _PORT_IN_PROGRESS:
                 continue
             raise
-        r.register(mod.INTEGRATION)
+        r.register(integ)
     return r

@@ -113,7 +113,7 @@ def _go_string_literal(lit: str) -> str:
     UTF-8 bytes as surrogate escapes."""
     out = bytearray()
     for part in re.split(r"(\\x[0-9a-fA-F]{2}|\\[0-7]{3})", lit[1:-1]):
-        if part.startswith("\\x") and len(part) == 4 or re.fullmatch(r"\\[0-7]{3}", part):
+        if (part.startswith("\\x") and len(part) == 4) or re.fullmatch(r"\\[0-7]{3}", part):
             out += ast.literal_eval('b"' + part + '"')
         else:
             out += ast.literal_eval('"' + part + '"').encode("utf-8")
@@ -184,7 +184,7 @@ def test_fuzz_parse_resource_corpus_outcomes() -> None:
 
 
 # Characters the parser treats specially, so generated inputs reach every branch.
-_RESOURCE_ALPHABET = st.sampled_from(list("az09_:?&=%/@.-+;#A ") + ["%zz", "%0A", "%C2%85", "%C3%A9", "%E6%97", "%FF", "%", "\x85", "\x00", "\x7f", " ", "é", "日"])
+_RESOURCE_ALPHABET = st.sampled_from([*"az09_:?&=%/@.-+;#A ", "%zz", "%0A", "%C2%85", "%C3%A9", "%E6%97", "%FF", "%", "\x85", "\x00", "\x7f", " ", "é", "日"])
 _resource_text = st.one_of(st.text(), st.lists(_RESOURCE_ALPHABET, max_size=30).map("".join))
 
 
@@ -253,7 +253,7 @@ def test_parse_resource_error_text(raw: str, want: str) -> None:
 
 def test_parse_resource_length_is_bytes() -> None:
     parse_resource("a:" + "é" * 511)  # 1024 bytes
-    with pytest.raises(ResourceError, match="longer than 1024 bytes"):
+    with pytest.raises(ResourceError, match=r"longer than 1024 bytes"):
         parse_resource("a:" + "é" * 511 + "x")
 
 
@@ -267,9 +267,9 @@ def test_parse_resource_invalid_utf8_value_reads_as_replacement() -> None:
 def test_parse_query_errors_like_go() -> None:
     # A later ';' error replaces an earlier escape error; the first escape
     # error is kept over a later one.
-    with pytest.raises(ResourceError, match="^invalid semicolon separator in query$"):
+    with pytest.raises(ResourceError, match=r"^invalid semicolon separator in query$"):
         parse_query("%zz&a;b")
-    with pytest.raises(ResourceError, match='^invalid URL escape "%zz"$'):
+    with pytest.raises(ResourceError, match=r'^invalid URL escape "%zz"$'):
         parse_query("%zz&%yy")
     assert parse_query("a=1&&b=2&a=3") == {"a": ["1", "3"], "b": ["2"]}
     assert query_unescape("a+b%41") == "a bA"
@@ -279,6 +279,6 @@ def test_validate_action_name_error_text() -> None:
     with pytest.raises(ValueError) as ei:
         validate_action_name("a\n")
     assert str(ei.value) == 'action "a\\n" contains characters outside ^[A-Za-z0-9][A-Za-z0-9_.:/*-]*$'
-    with pytest.raises(ValueError, match="^action is longer than 200 bytes$"):
+    with pytest.raises(ValueError, match=r"^action is longer than 200 bytes$"):
         validate_action_name("a" * 201)
     validate_action_name("a" * 200)
