@@ -123,11 +123,11 @@ class _YAMLFailure(Exception):
 
 def _event_parser(data: bytes | str) -> Any:
     if getattr(yaml, "__with_libyaml__", False):
-        from yaml.cyaml import CParser
+        from yaml.cyaml import CParser  # type: ignore[attr-defined]
 
         return CParser(data)
 
-    class _PyParser(yaml.reader.Reader, yaml.scanner.Scanner, yaml.parser.Parser):  # type: ignore[misc]
+    class _PyParser(yaml.reader.Reader, yaml.scanner.Scanner, yaml.parser.Parser):
         def __init__(self, stream: Any) -> None:
             yaml.reader.Reader.__init__(self, stream)
             yaml.scanner.Scanner.__init__(self)
@@ -184,7 +184,7 @@ class _Composer:
                 n.items.append((k, self.node()))
             p.get_event()
             return n
-        raise _YAMLFailure(f"unexpected event {type(ev).__name__}")  # pragma: no cover
+        raise _YAMLFailure(f"unexpected event {type(ev).__name__}", ev.start_mark)  # pragma: no cover
 
 
 def _directive_mark(data: bytes | str) -> Any:
@@ -193,7 +193,7 @@ def _directive_mark(data: bytes | str) -> Any:
     index = 0
     for i, line in enumerate(text.split("\n")):
         if line.startswith("%YAML"):
-            return yaml.error.Mark("", index, i, 0, None, None)
+            return yaml.error.Mark("", index, i, 0, None, 0)
         index += len(line) + 1
     return None
 
@@ -235,13 +235,13 @@ def _dispose(p: Any) -> None:
         dispose()
 
 
-class _LookaheadParser(yaml.parser.Parser):  # type: ignore[misc]
+class _LookaheadParser(yaml.parser.Parser):
     """libyaml's parser state machine (PyYAML's port of it) fed by libyaml's
     scanner the way yaml.v3 feeds its parser: whenever the parser looks at a
     token, the scanner has produced that token and two more."""
 
     def __init__(self, data: bytes | str) -> None:
-        from yaml.cyaml import CParser
+        from yaml.cyaml import CParser  # type: ignore[attr-defined]
 
         self._scanner = CParser(data)
         self._buf: collections.deque[Any] = collections.deque()
