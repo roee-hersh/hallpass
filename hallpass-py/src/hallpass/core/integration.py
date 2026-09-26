@@ -10,7 +10,6 @@ import ipaddress
 import re
 import threading
 import time
-import urllib.parse
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -19,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from hallpass.core.catalog import Action, Resource, validate_action_name
 from hallpass.core.context import Context
 from hallpass.core.decision import Decision
+from hallpass.core.errors import go_quote
 from hallpass.core.log import Logger
 from hallpass.core.secret import Secret
 
@@ -164,35 +164,171 @@ def validate_https_url(v: str) -> None:
     Plain http:// is allowed only when the host is exactly "localhost" or a
     loopback IP address, for local testing; a name that merely starts with
     "localhost" or "127.0.0.1" resolves wherever DNS says and would carry
-    the credential in clear text, so it is rejected.
+    the credential in clear text, so it is rejected. The URL is parsed as
+    Go's url.Parse does, so the same values pass and fail with the same text.
     """
     if v == "":
         return
     if any(c in v for c in " \t\r\n#?"):
-        raise ValueError(f"url \"{v}\" must not contain whitespace, '?' or '#'")
+        raise ValueError(f"url {go_quote(v)} must not contain whitespace, '?' or '#'")
     try:
-        u = urllib.parse.urlsplit(v)
-        host = u.hostname or ""
-        _ = u.port  # a malformed port raises
-    except ValueError as e:
-        raise ValueError(f'url "{v}": {e}') from None
-    if "@" in u.netloc:
-        raise ValueError(f'url "{v}" must not contain userinfo')
-    if u.scheme == "https":
+        scheme, has_user, host = _go_url_parse(v)
+    except _URLError as e:
+        raise ValueError(f"url {go_quote(v)}: parse {go_quote(v)}: {e}") from None
+    if has_user:
+        raise ValueError(f"url {go_quote(v)} must not contain userinfo")
+    if scheme == "https":
         return
-    if u.scheme == "http" and is_loopback_host(host):
+    if scheme == "http" and is_loopback_host(_hostname(host)):
         return
-    raise ValueError(f'url "{v}" must start with https://')
+    raise ValueError(f"url {go_quote(v)} must start with https://")
+
+
+class _URLError(ValueError):
+    pass
+
+
+_HEXDIGITS = frozenset(b"0123456789abcdefABCDEF")
+_HOST_OK = frozenset(b"!$&'()*+,;=:[]<>\"-_.~")
+_USERINFO_OK = frozenset("-._:~!$&'()*+,;=%@")
+
+
+def _quote_bytes(b: bytes) -> str:
+    return go_quote(b.decode("utf-8", "surrogateescape"))
+
+
+def _host_should_escape(c: int) -> bool:
+    """Go's shouldEscape(c, encodeHost) for an ASCII byte."""
+    if 0x30 <= c <= 0x39 or 0x41 <= c <= 0x5A or 0x61 <= c <= 0x7A:
+        return False
+    return c not in _HOST_OK
+
+
+def _unescape(s: bytes, mode: str) -> bytes:
+    """Go's url unescape for the modes url.Parse uses: "host", "zone",
+    "path" and "userinfo"."""
+    out = bytearray()
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == 0x25:  # %
+            if i + 2 >= n or s[i + 1] not in _HEXDIGITS or s[i + 2] not in _HEXDIGITS:
+                raise _URLError("invalid URL escape " + _quote_bytes(s[i : i + 3]))
+            v = int(s[i + 1 : i + 3], 16)
+            if mode == "host" and (v >> 4) < 8 and s[i : i + 3] != b"%25":
+                raise _URLError("invalid URL escape " + _quote_bytes(s[i : i + 3]))
+            if mode == "zone" and s[i : i + 3] != b"%25" and v != 0x20 and (v >= 0x80 or _host_should_escape(v)):
+                raise _URLError("invalid URL escape " + _quote_bytes(s[i : i + 3]))
+            out.append(v)
+            i += 3
+            continue
+        if mode in ("host", "zone") and c < 0x80 and _host_should_escape(c):
+            raise _URLError("invalid character " + _quote_bytes(s[i : i + 1]) + " in host name")
+        out.append(c)
+        i += 1
+    return bytes(out)
+
+
+def _valid_optional_port(port: bytes) -> bool:
+    if port == b"":
+        return True
+    return port[:1] == b":" and all(0x30 <= b <= 0x39 for b in port[1:])
+
+
+def _parse_host(host: bytes) -> bytes:
+    if host.startswith(b"["):
+        i = host.rfind(b"]")
+        if i < 0:
+            raise _URLError("missing ']' in host")
+        colon_port = host[i + 1 :]
+        if not _valid_optional_port(colon_port):
+            raise _URLError(f"invalid port {_quote_bytes(colon_port)} after host")
+        zone = host[:i].find(b"%25")
+        if zone >= 0:
+            return _unescape(host[:zone], "host") + _unescape(host[zone:i], "zone") + _unescape(host[i:], "host")
+    else:
+        i = host.rfind(b":")
+        if i != -1 and not _valid_optional_port(host[i:]):
+            raise _URLError(f"invalid port {_quote_bytes(host[i:])} after host")
+    return _unescape(host, "host")
+
+
+def _go_url_parse(raw: str) -> tuple[str, bool, bytes]:
+    """The parts of Go's url.Parse the validation reads: the lowercased
+    scheme, whether userinfo is present, and the host (with port)."""
+    b = raw.encode("utf-8", "surrogatepass")
+    if any(c < 0x20 or c == 0x7F for c in b):
+        raise _URLError("net/url: invalid control character in URL")
+    if b == b"*":
+        return "", False, b""
+    scheme, rest = b"", b
+    for i, c in enumerate(b):
+        if 0x61 <= c <= 0x7A or 0x41 <= c <= 0x5A:
+            continue
+        if 0x30 <= c <= 0x39 or c in b"+-.":
+            if i == 0:
+                break
+            continue
+        if c == 0x3A:  # :
+            if i == 0:
+                raise _URLError("missing protocol scheme")
+            scheme, rest = b[:i], b[i + 1 :]
+        break
+    sch = scheme.decode("ascii").lower()
+    if not rest.startswith(b"/"):
+        if sch:
+            return sch, False, b""  # opaque
+        if b":" in rest.split(b"/", 1)[0]:
+            raise _URLError("first path segment in URL cannot contain colon")
+    has_user, host = False, b""
+    if (sch or not rest.startswith(b"///")) and rest.startswith(b"//"):
+        authority, sep, path = rest[2:].partition(b"/")
+        rest = sep + path
+        at = authority.rfind(b"@")
+        host = _parse_host(authority[at + 1 :] if at >= 0 else authority)
+        if at >= 0:
+            userinfo = authority[:at].decode("utf-8", "surrogateescape")
+            if not all(c.isascii() and (c.isalnum() or c in _USERINFO_OK) for c in userinfo):
+                raise _URLError("net/url: invalid userinfo")
+            name, colon, password = authority[:at].partition(b":")
+            _unescape(name, "userinfo")
+            if colon:
+                _unescape(password, "userinfo")
+            has_user = True
+    _unescape(rest, "path")
+    return sch, has_user, host
+
+
+def _hostname(host: bytes) -> str:
+    """Go's URL.Hostname: the host without port and IPv6 brackets."""
+    colon = host.rfind(b":")
+    if colon != -1 and _valid_optional_port(host[colon:]):
+        host = host[:colon]
+    if host.startswith(b"[") and host.endswith(b"]"):
+        host = host[1:-1]
+    return host.decode("utf-8", "surrogateescape")
 
 
 def is_loopback_host(host: str) -> bool:
-    """host is "localhost" or a loopback IP address."""
+    """host is "localhost" or a loopback IP address, as Go's net.ParseIP
+    and IP.IsLoopback read it: 127.0.0.0/8 (also IPv4-mapped) or ::1, and
+    no zone. A bracketed IPv6 literal is accepted too."""
     if host == "localhost":
         return True
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if "%" in host:
+        return False
     try:
-        return ipaddress.ip_address(host.strip("[]")).is_loopback
+        ip = ipaddress.ip_address(host)
     except ValueError:
         return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv4Address):
+        return ip.packed[0] == 127
+    return ip == ipaddress.IPv6Address("::1")
 
 
 class Settings:

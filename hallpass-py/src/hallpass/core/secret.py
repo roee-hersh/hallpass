@@ -11,13 +11,19 @@ from __future__ import annotations
 import os
 from typing import NoReturn
 
-__all__ = ["REDACTED", "Secret", "SecretError", "env", "file", "literal", "must_parse", "parse"]
+from hallpass.core.errors import go_quote, path_error_text
+
+__all__ = ["REDACTED", "EmptySecretError", "Secret", "SecretError", "env", "file", "literal", "must_parse", "parse"]
 
 REDACTED = "[REDACTED]"
 
 
 class SecretError(ValueError):
     pass
+
+
+class EmptySecretError(SecretError):
+    """get() on the empty Secret (Go's secret.ErrEmpty)."""
 
 
 class Secret:
@@ -58,15 +64,18 @@ class Secret:
             try:
                 with open(self._ref, "rb") as f:
                     b = f.read()
-            except OSError as e:
-                raise SecretError(f"secret: read {self._ref}: {e.strerror or e}") from None
+            except (OSError, ValueError) as e:
+                # Go's os.ReadFile error, wrapped: "open /p: no such file or
+                # directory"; a directory opens and then fails to read.
+                op = "read" if isinstance(e, IsADirectoryError) else "open"
+                raise SecretError(f"secret: read {self._ref}: {path_error_text(op, self._ref, e)}") from e
             b = b.rstrip(b" \t\r\n")
             if not b:
                 raise SecretError(f"secret: file {self._ref} is empty")
             return b
         if self._kind == "literal":
             return self._ref.encode("utf-8", "surrogateescape")
-        raise SecretError("secret: empty")
+        raise EmptySecretError("secret: empty")
 
     def get_string(self) -> str:
         return self.get().decode("utf-8", "surrogateescape")
@@ -103,12 +112,12 @@ def parse(ref: str) -> Secret:
     if ref.startswith("env:"):
         name = ref[len("env:") :]
         if name == "" or any(c in name for c in " \t="):
-            raise SecretError(f'secret: invalid environment variable name in "{ref}"')
+            raise SecretError(f"secret: invalid environment variable name in {go_quote(ref)}")
         return Secret("env", name)
     if ref.startswith("file:"):
         path = ref[len("file:") :]
         if path == "":
-            raise SecretError(f'secret: empty file path in "{ref}"')
+            raise SecretError(f"secret: empty file path in {go_quote(ref)}")
         return Secret("file", path)
     if ref == "":
         raise SecretError("secret: empty reference")

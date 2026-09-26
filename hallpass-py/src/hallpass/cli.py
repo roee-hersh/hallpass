@@ -26,7 +26,7 @@ from hallpass import __version__
 from hallpass.core import secret as secretmod
 from hallpass.core.config import Config, ConfigError, ConfigErrors
 from hallpass.core.config import load as load_config
-from hallpass.core.context import background, with_cancel
+from hallpass.core.context import Context, background, with_cancel
 from hallpass.core.declog import open_log
 from hallpass.core.duration import parse_duration
 from hallpass.core.engine import EngineError, Options, Request, build
@@ -386,7 +386,7 @@ def check(args: list[str], stdout: IO[str], stderr: IO[str]) -> int:
     try:
         if v["server"]:
             try:
-                outcome, reason = _remote_check(v["server"], v["api-key"], v["ca-file"], v["timeout"], req)
+                outcome, reason = _remote_check(ctx, v["server"], v["api-key"], v["ca-file"], v["timeout"], req)
             except _RemoteError as e:
                 stderr.write(f"check: {e}\n")
                 return EXIT_ERROR
@@ -459,7 +459,7 @@ class _RemoteError(Exception):
 _MAX_REMOTE_BODY = 64 << 10
 
 
-def _remote_check(base: str, api_key: str, ca_file: str, timeout: float, req: Request) -> tuple[str, str]:
+def _remote_check(ctx: Context, base: str, api_key: str, ca_file: str, timeout: float, req: Request) -> tuple[str, str]:
     """POST {base}/check on a running hallpass. Any HTTP status with a
     well-formed body is an answer; anything else is an error."""
     try:
@@ -483,23 +483,44 @@ def _remote_check(base: str, api_key: str, ca_file: str, timeout: float, req: Re
         {"Authorization": "Bearer " + token, "Content-Type": "application/json", "Accept": "application/json", "User-Agent": f"hallpass/{__version__}"}
     )
     try:
-        raw = t.send(background(), httpx.PreparedRequest("POST", base + "/check", h, body), _MAX_REMOTE_BODY)
+        raw = t.send(ctx, httpx.PreparedRequest("POST", base + "/check", h, body), _MAX_REMOTE_BODY)
     except httpx.BodyTooLarge:
         raise _RemoteError(f"{base}: response larger than {_MAX_REMOTE_BODY} bytes") from None
     except Exception as e:  # noqa: BLE001
         raise _RemoteError(f'Post "{base}/check": {e}') from None
     finally:
         t.close()
-    try:
-        out = json.loads(raw.body)
-    except ValueError:
-        raise _RemoteError(f"{base} answered HTTP {raw.status} without a decision; is it hallpass?") from None
-    if not isinstance(out, dict):
+    decoded = _decode_check_response(raw.body)
+    if decoded is None:
         raise _RemoteError(f"{base} answered HTTP {raw.status} without a decision; is it hallpass?")
-    decision, reason = out.get("decision"), out.get("reason", "")
+    decision, reason = decoded
     if decision not in ("allow", "deny", "unknown"):
-        raise _RemoteError(f'{base} answered HTTP {raw.status} with decision "{decision if isinstance(decision, str) else ""}"; is it hallpass?')
-    return decision, reason if isinstance(reason, str) else ""
+        raise _RemoteError(f'{base} answered HTTP {raw.status} with decision "{decision}"; is it hallpass?')
+    return decision, reason
+
+
+def _decode_check_response(body: bytes) -> tuple[str, str] | None:
+    """The body as Go's json.Unmarshal fills a CheckResponse: keys match
+    the fields case-insensitively (the last one wins), null leaves a field
+    empty, unknown keys are ignored; None when it would fail (not JSON, not
+    an object, or a field of the wrong type)."""
+    try:
+        out = json.loads(body.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    if out is None:
+        return "", ""
+    if not isinstance(out, dict):
+        return None
+    fields = {"decision": "", "reason": ""}
+    for k, x in out.items():
+        name = k.lower()
+        if name not in fields or x is None:
+            continue
+        if not isinstance(x, str):
+            return None
+        fields[name] = x
+    return fields["decision"], fields["reason"]
 
 
 def catalog(args: list[str], stdout: IO[str], stderr: IO[str]) -> int:

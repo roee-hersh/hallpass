@@ -52,7 +52,7 @@ def _monotonic() -> float:
 class Context:
     """One node of a context tree. Immutable apart from cancellation."""
 
-    __slots__ = ("_callbacks", "_cancel_parent", "_deadline", "_err", "_key", "_lock", "_parent", "_val")
+    __slots__ = ("_callbacks", "_cancel_parent", "_deadline", "_err", "_err_at", "_key", "_lock", "_parent", "_val")
 
     def __init__(
         self,
@@ -70,6 +70,7 @@ class Context:
         self._val = val
         self._lock = threading.Lock()
         self._err: ContextEnded | None = None
+        self._err_at = 0.0  # monotonic time of the cancellation
         self._callbacks: list[Callable[[], None]] = []
 
     # -- deadline -------------------------------------------------------
@@ -95,17 +96,32 @@ class Context:
     # -- cancellation ---------------------------------------------------
 
     def err(self) -> ContextEnded | None:
-        """Why the context ended, or None while it lives."""
+        """Why the context ended, or None while it lives.
+
+        As in Go, the first way it ended wins: a context cancelled after
+        its deadline passed stays DeadlineExceeded (the common deferred
+        cancel), and one whose parent was cancelled before its own deadline
+        stays Cancelled.
+        """
+        end = self._end()
+        return None if end is None else end[1]
+
+    def _end(self) -> tuple[float, ContextEnded] | None:
+        """When and how this context ended first, or None while it lives."""
         with self._lock:
-            if self._err is not None:
-                return self._err
-        d = self.deadline()
+            err, at = self._err, self._err_at
+        ends: list[tuple[float, ContextEnded]] = []
+        if err is not None:
+            ends.append((at, err))
+        d = self._deadline
         if d is not None and _monotonic() >= d:
-            return DeadlineExceeded()
+            ends.append((d, DeadlineExceeded()))
         p = self._cancel_parent
         if p is not None:
-            return p.err()
-        return None
+            pe = p._end()
+            if pe is not None:
+                ends.append(pe)
+        return min(ends, key=lambda e: e[0]) if ends else None
 
     def check(self) -> None:
         """Raise the context's error when it has ended."""
@@ -118,6 +134,7 @@ class Context:
             if self._err is not None:
                 return
             self._err = err
+            self._err_at = _monotonic()
             callbacks, self._callbacks = self._callbacks, []
         for cb in callbacks:
             try:

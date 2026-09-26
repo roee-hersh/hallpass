@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from hallpass.core.errors import go_lower, go_quote, go_trim_space
+
 __all__ = [
     "Template",
     "email_domain",
@@ -32,7 +34,7 @@ class Template(str):
 def validate_template(s: str) -> None:
     """Every "{...}" must name a placeholder, braces must balance, and
     {email} or {local} must occur, otherwise every user gets the same name."""
-    if s.strip() == "":
+    if go_trim_space(s) == "":
         raise ValueError("must not be empty")
     rest = s
     while True:
@@ -80,7 +82,7 @@ def email_domain(email: str) -> str:
     _, at, domain = email.partition("@")
     if not at:
         return ""
-    return domain.lower()
+    return go_lower(domain)
 
 
 def parse_email_domains(v: str) -> list[str]:
@@ -89,12 +91,12 @@ def parse_email_domains(v: str) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for raw in v.split(","):
-        d = raw.strip().lower()
+        d = go_lower(go_trim_space(raw))
         if d == "":
             raise ValueError("must be a comma-separated list of domains with no empty entries (acme.com,acme.io)")
         err = _check_domain(d)
         if err:
-            raise ValueError(f'"{raw.strip()}" {err}')
+            raise ValueError(f"{go_quote(go_trim_space(raw))} {err}")
         if d in seen:
             continue
         seen.add(d)
@@ -109,12 +111,12 @@ def validate_email_domains(v: str) -> None:
 
 
 def _check_domain(d: str) -> str:
-    if len(d.encode()) > 253:
+    if len(d.encode("utf-8", "surrogatepass")) > 253:
         return "is longer than 253 characters"
     for label in d.split("."):
         if label == "":
             return "is not a domain name (empty label)"
-        if len(label.encode()) > 63:
+        if len(label.encode("utf-8", "surrogatepass")) > 63:
             return "is not a domain name (label longer than 63 characters)"
         if label[0] == "-" or label[-1] == "-":
             return "is not a domain name (label starts or ends with a hyphen)"

@@ -76,7 +76,9 @@ def _decode(body: bytes) -> dict[str, Any]:
     if stripped[end:].strip(" \t\r\n"):
         raise _BadRequest("trailing data")
     if v is None:
-        return {}
+        # Go decodes null into the struct as a no-op: an empty request,
+        # which the engine answers as invalid.
+        v = {}
     if not isinstance(v, dict):
         raise _BadRequest("wrong type for field ")
     # Field names match case-insensitively, as Go's decoder matches them;

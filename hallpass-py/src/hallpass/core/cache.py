@@ -19,7 +19,7 @@ from hallpass.core import evidence
 from hallpass.core.context import Context, with_timeout, without_cancel
 from hallpass.core.errors import as_error
 
-__all__ = ["DEFAULT_FILL_TIMEOUT", "FRESH_JOIN_WINDOW", "TTL", "FillExited", "PanicError", "detach", "is_panic_type"]
+__all__ = ["DEFAULT_FILL_TIMEOUT", "FRESH_JOIN_WINDOW", "TTL", "FillExited", "PanicError", "detach", "is_panic_type", "panic_stack"]
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -51,15 +51,29 @@ def is_panic_type(e: BaseException) -> bool:
     return isinstance(e, _PANIC_TYPES)
 
 
-class PanicError(Exception):
-    """Every caller of a fill that crashed gets this error."""
+def panic_stack(e: BaseException) -> str:
+    """The frames e went through, as Go's debug.Stack() shows a goroutine:
+    function, then file:line. No source text and no message."""
+    return "".join(f"{f.name}(...)\n\t{f.filename}:{f.lineno}\n" for f in traceback.extract_tb(e.__traceback__))
 
-    def __init__(self, value: BaseException, stack: str) -> None:
+
+class PanicError(Exception):
+    """Every caller of a fill that crashed gets this error.
+
+    value is the exception the fill raised (Go: the value passed to panic)
+    and stack the frames it went through. Like Go's debug.Stack(), the
+    stack names functions and file:line only: neither the source text nor
+    the exception's message, which may quote upstream data, so an operator
+    can log it where the value itself must not go.
+    """
+
+    def __init__(self, value: BaseException, stack: str | None = None) -> None:
         self.value = value
-        self.stack = stack
+        self.stack = panic_stack(value) if stack is None else stack
         self._reported = False
         self._lock = threading.Lock()
-        super().__init__(f"fill panicked: {type(value).__name__}")
+        # Go: fmt.Sprintf("fill panicked: %v", Value).
+        super().__init__(f"fill panicked: {type(value).__name__}: {value}")
 
     def first_report(self) -> bool:
         """True once per PanicError: the first caller to ask logs it."""
@@ -242,7 +256,10 @@ class TTL(Generic[K, V]):
             fctx, cancel = with_timeout(ctx, DEFAULT_FILL_TIMEOUT)
         try:
             fctx, cl.rec = evidence.with_recorder(fctx)
-            self._fill(k, cl, fctx, fill)
+            # On the caller's own thread, like Go's Refresh: a
+            # KeyboardInterrupt or SystemExit (Go: runtime.Goexit) still
+            # leaves the key clean, then keeps unwinding the caller.
+            self._fill(k, cl, fctx, fill, reraise_exit=True)
         finally:
             cancel()
         r = evidence.recorder_from(ctx)
@@ -357,17 +374,19 @@ class TTL(Generic[K, V]):
             return None
         return e
 
-    def _fill(self, k: K, cl: _Call[V], ctx: Context, fill: Callable[[Context], tuple[V, float]]) -> None:
+    def _fill(self, k: K, cl: _Call[V], ctx: Context, fill: Callable[[Context], tuple[V, float]], reraise_exit: bool = False) -> None:
         ttl = 0.0
+        exited: BaseException | None = None
         try:
             try:
                 cl.v, ttl = fill(ctx)
             except Exception as e:  # noqa: BLE001 - every failure reaches the waiters
                 cl.v = None
-                cl.err = PanicError(e, "".join(traceback.format_exception(e))) if is_panic_type(e) else e
-            except BaseException:  # noqa: BLE001 - a thread must always close done
+                cl.err = PanicError(e) if is_panic_type(e) else e
+            except BaseException as e:  # noqa: BLE001 - a thread must always close done
                 cl.v = None
                 cl.err = FillExited()
+                exited = e
         finally:
             rec = cl.rec
             cl.ev = rec.evidence() if rec is not None else None
@@ -390,3 +409,5 @@ class TTL(Generic[K, V]):
                     # older entry it has just superseded.
                     self._store_locked(k, cl.v, ttl, cl.ev, cl.read_at, cl.started, cl.began, self._now())
             cl.done.set()
+        if exited is not None and reraise_exit:
+            raise exited

@@ -15,6 +15,7 @@ import http.client
 import json
 import os
 import random
+import re
 import socket
 import ssl
 import threading
@@ -23,7 +24,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NoReturn
 
 from hallpass.core import evidence
 from hallpass.core.context import Context, DeadlineExceeded, context_ended
@@ -374,7 +375,7 @@ class Transport:
         try:
             port = u.port or (443 if scheme == "https" else 80)
         except ValueError as e:
-            raise TransportError(e) from None
+            raise TransportError(e) from e
         proxy = self._proxy_for(scheme, host)
         deadline = time.monotonic() + self.timeout
         cd = ctx.deadline()
@@ -459,13 +460,13 @@ class Transport:
         except (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError) as e:
             if not sent or isinstance(e, http.client.RemoteDisconnected):
                 raise _Stale(sent) from e
-            raise TransportError(e) from None
+            raise TransportError(e) from e
         except TimeoutError as e:
             if ctx.err() is not None or time.monotonic() >= deadline:
-                raise _timeout_error(ctx, e) from None
-            raise TransportError(e) from None
+                _raise_timeout(ctx, e)
+            raise TransportError(e) from e
         except (OSError, http.client.HTTPException, ssl.SSLError) as e:
-            raise TransportError(e) from None
+            raise TransportError(e) from e
         try:
             out = bytearray()
             while True:
@@ -481,9 +482,9 @@ class Transport:
         except BodyTooLarge:
             raise
         except TimeoutError as e:
-            raise _timeout_error(ctx, e) from None
+            _raise_timeout(ctx, e)
         except (OSError, http.client.HTTPException) as e:
-            raise TransportError(e) from None
+            raise TransportError(e) from e
         h = Headers()
         for k, v in r.getheaders():
             h.add(k, v)
@@ -508,6 +509,16 @@ def _deadline_error(ctx: Context) -> BaseException:
     if e is not None:
         return e
     return TransportError(TimeoutError("Client.Timeout exceeded while awaiting headers"))
+
+
+def _raise_timeout(ctx: Context, cause: BaseException) -> NoReturn:
+    """Raise the context's own error when it ended, else a TransportError
+    whose cause is the socket timeout (Go's transportError unwraps to it).
+    The context's error is shared by every caller, so it gets no cause."""
+    err = _timeout_error(ctx, cause)
+    if isinstance(err, TransportError):
+        raise err from cause
+    raise err from None
 
 
 def _timeout_error(ctx: Context, cause: BaseException) -> BaseException:
@@ -549,9 +560,10 @@ class _TunnelConnection(http.client.HTTPConnection):
         sock = socket.create_connection((self._proxy.host, self._proxy.port), self.timeout)
         try:
             if self._proxy.scheme == "https":
-                pctx = ssl.create_default_context()
-                pctx.minimum_version = ssl.TLSVersion.TLSv1_2
-                sock = pctx.wrap_socket(sock, server_hostname=self._proxy.host)
+                # The proxy is verified with the connection's own TLS
+                # settings (its ca_file, TLS 1.2+), as Go's transport
+                # verifies an https:// proxy with its TLSClientConfig.
+                sock = self._ssl_context.wrap_socket(sock, server_hostname=self._proxy.host)
             th, tp = self._target
             hp = f"[{th}]:{tp}" if ":" in th else f"{th}:{tp}"
             lines = [f"CONNECT {hp} HTTP/1.1", f"Host: {hp}"]
@@ -952,7 +964,7 @@ class Client:
             self._log_call(req, 0, start, e)
             raise
         self._log_call(req, raw.status, start, None)
-        out = Response(raw.status, raw.headers, raw.body, method=req.method, path=u.path or "/")
+        out = Response(raw.status, raw.headers, raw.body, method=req.method, path=u.path)
         if _absolute(r.path):
             out.host = self._foreign_host(u)
         if raw.status >= 400 and not (r.accept_4xx and raw.status < 500):
@@ -984,18 +996,23 @@ class Client:
 
     # -- helpers --
 
-    def get_json(self, ctx: Context, path: str, q: Mapping[str, str | list[str]] | None = None) -> tuple[Response, Any]:
-        """do + JSON decode for a GET."""
+    def get_json(self, ctx: Context, path: str, q: Mapping[str, str | list[str]] | None = None, decode: bool = True) -> tuple[Response, Any]:
+        """do + JSON decode for a GET. decode=False skips the decode (Go's
+        nil out) and returns None as the value."""
         resp = self.do(ctx, Request(method="GET", path=path, query=q))
+        if not decode:
+            return resp, None
         try:
             return resp, resp.json()
         except ValueError as e:
             raise ValueError(f"decode {_redact_url(path)}: {e}") from e
 
-    def post_json(self, ctx: Context, path: str, body: Any, idempotent: bool = False) -> tuple[Response, Any]:
+    def post_json(self, ctx: Context, path: str, body: Any, idempotent: bool = False, decode: bool = True) -> tuple[Response, Any]:
         """do + JSON decode for a POST with a JSON body. POST is not
-        retried unless idempotent is set."""
+        retried unless idempotent is set. decode=False skips the decode."""
         resp = self.do(ctx, Request(method="POST", path=path, json=body, idempotent=idempotent))
+        if not decode:
+            return resp, None
         try:
             return resp, resp.json()
         except ValueError as e:
@@ -1111,13 +1128,19 @@ def _backoff(attempt: int) -> float:
     return base / 2 + random.random() * (base / 2)
 
 
+_ATOI = re.compile(r"[+-]?[0-9]+")
+
+
 def _retry_after(h: Headers) -> float:
     v = h.get("Retry-After").strip()
     if v == "":
         return 0.0
-    if v.lstrip("+-").isdigit():
+    if _ATOI.fullmatch(v):
+        # Go's strconv.Atoi: an optional sign and ASCII digits within
+        # int64; anything else falls through to the date form.
         secs = int(v)
-        return float(secs) if secs >= 0 else 0.0
+        if -(1 << 63) <= secs < (1 << 63):
+            return float(secs) if secs >= 0 else 0.0
     try:
         t = email.utils.parsedate_to_datetime(v)
     except (TypeError, ValueError):

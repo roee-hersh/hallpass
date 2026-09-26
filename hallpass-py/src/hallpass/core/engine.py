@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from hallpass.core import evidence
-from hallpass.core.cache import TTL, PanicError, is_panic_type
+from hallpass.core.cache import TTL, PanicError, is_panic_type, panic_stack
 from hallpass.core.catalog import ResourceError, parse_resource, validate_action_name
 from hallpass.core.config import Config
 from hallpass.core.context import Context, background, with_timeout
@@ -196,7 +196,7 @@ class Engine:
                 out.append(ProbeReport(id=id, integration=c.settings.integration, result=r))
             except Exception as e:  # noqa: BLE001 - a probe failure is a report
                 if is_panic_type(e):
-                    self._logger.error("probe panicked", connection=id, type=type(e).__name__, stack=_stack(e))
+                    self._logger.error("probe panicked", connection=id, type=type(e).__name__, stack=panic_stack(e))
                 self._log_panic(id, "probe", e)
                 out.append(ProbeReport(id=id, integration=c.settings.integration, err=e))
             finally:
@@ -206,7 +206,7 @@ class Engine:
     def check(self, ctx: Context | None, req: Request) -> Result:
         """Answer one request."""
         ctx = ctx or background()
-        start = time.monotonic()
+        start = self._now()
         res = self._check(ctx, req)
         # Safety: the outcome always follows the code. Allow needs ALLOWED.
         d = res.decision.with_(outcome=outcome_of(res.decision.code))
@@ -224,7 +224,7 @@ class Engine:
                     reason=d.text,
                     cached=res.cached,
                     fresh=req.fresh,
-                    duration_ms=int((time.monotonic() - start) * 1000),
+                    duration_ms=int((self._now() - start) * 1000),
                     status=res.status,
                     remote=req.remote,
                     evidence=d.evidence,
@@ -269,13 +269,17 @@ class Engine:
             try:
                 identity = self._identity(cctx, c, user)
             except Exception as e:  # noqa: BLE001 - every failure is an unknown decision
+                if is_panic_type(e):
+                    # A crash outside the identity cache (it is off): logged
+                    # like one inside it, type and stack, never the value.
+                    self._logger.error("lookup panicked", connection=req.connection, action=req.action, type=type(e).__name__, stack=panic_stack(e))
                 self._log_panic(req.connection, req.action, e)
                 return Result(to_decision(e).with_(evidence=rec.evidence()), 200)
             try:
                 d = c.c.check(cctx, CheckRequest(user=user, identity=identity, action=action, action_name=req.action, resource=resource))
             except Exception as e:  # noqa: BLE001
                 if is_panic_type(e):
-                    self._logger.error("check panicked", connection=req.connection, action=req.action, type=type(e).__name__, stack=_stack(e))
+                    self._logger.error("check panicked", connection=req.connection, action=req.action, type=type(e).__name__, stack=panic_stack(e))
                 self._log_panic(req.connection, req.action, e)
                 d = to_decision(e)
                 self._logger.debug("check failed", connection=req.connection, action=req.action, code=str(d.code), error=str(e))
@@ -311,9 +315,10 @@ class Engine:
         def fill(fctx: Context) -> tuple[_IdEntry, float]:
             try:
                 return _IdEntry(id=c.c.resolve_identity(fctx, u)), self._id_ttl
-            except HallpassError as e:
-                if e.code in (Code.USER_NOT_FOUND, Code.USER_AMBIGUOUS):
-                    return _IdEntry(err=e), self._neg_ttl
+            except Exception as e:
+                ie = as_error(e, HallpassError)
+                if ie is not None and ie.code in (Code.USER_NOT_FOUND, Code.USER_AMBIGUOUS):
+                    return _IdEntry(err=ie), self._neg_ttl
                 raise
 
         if self._id_ttl > 0:
@@ -332,12 +337,6 @@ class Engine:
         self._id_cache.set_clock(self._now)
         self._decs: TTL[str, Decision] = TTL()
         self._decs.set_clock(self._now)
-
-
-def _stack(e: BaseException) -> str:
-    import traceback
-
-    return "".join(traceback.format_exception(e))
 
 
 _MAX_EMAIL = 320

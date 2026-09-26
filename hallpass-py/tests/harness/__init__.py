@@ -21,6 +21,7 @@ import io
 import ipaddress
 import json
 import os
+import socket
 import ssl
 import tempfile
 import threading
@@ -286,6 +287,9 @@ class Server:
         self.spec_errors: list[str] = []
         self.tls = tls
         self._closed = threading.Event()
+        # Open client connections, dropped by close() as Go's
+        # httptest.Server.Close drops them.
+        self._conns: set[Any] = set()
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -293,6 +297,19 @@ class Server:
 
             def log_message(self, format: str, *args: Any) -> None:
                 pass
+
+            def setup(self) -> None:
+                super().setup()
+                with outer._lock:
+                    outer._conns.add(self.connection)
+
+            def finish(self) -> None:
+                with outer._lock:
+                    outer._conns.discard(self.connection)
+                try:
+                    super().finish()
+                except OSError:
+                    pass
 
             def _serve(self) -> None:
                 n = int(self.headers.get("Content-Length") or 0)
@@ -309,16 +326,21 @@ class Server:
                     self.close_connection = True
                     return
                 data = w.buf.getvalue()
-                self.send_response_only(w.status or 200)
-                for k, vs in w.header().items():
-                    for v in vs:
-                        self.send_header(k, v)
-                if "Content-Length" not in w.header():
-                    self.send_header("Content-Length", str(len(data)))
-                self.send_header("Date", self.date_time_string())
-                self.end_headers()
-                if self.command != "HEAD":
-                    self.wfile.write(data)
+                try:
+                    self.send_response_only(w.status or 200)
+                    for k, vs in w.header().items():
+                        for v in vs:
+                            self.send_header(k, v)
+                    if "Content-Length" not in w.header():
+                        self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Date", self.date_time_string())
+                    self.end_headers()
+                    if self.command != "HEAD":
+                        self.wfile.write(data)
+                except (BrokenPipeError, ConnectionResetError):
+                    # The client gave up (its timeout); Go's server drops
+                    # the write the same way, silently.
+                    self.close_connection = True
 
             do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _serve  # noqa: N815
 
@@ -430,9 +452,23 @@ class Server:
             self.spec, self.spec_opts = spec, opts
 
     def close(self) -> None:
+        """Stop listening and drop every open connection, so a client's
+        idle keep-alive connection cannot reach the closed server."""
         self._closed.set()
         self._httpd.shutdown()
         self._httpd.server_close()
+        with self._lock:
+            conns = list(self._conns)
+            self._conns.clear()
+        for c in conns:
+            try:
+                c.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                c.close()
+            except OSError:
+                pass
 
     def __enter__(self) -> Server:
         return self

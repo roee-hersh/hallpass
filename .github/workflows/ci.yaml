@@ -50,6 +50,62 @@ jobs:
           npm ci
           npm test
 
+  hallpass-py:
+    # The Python engine: lint, types and the whole suite on the oldest and
+    # newest Python it supports, on Linux and Windows; then the built wheel,
+    # installed into a clean environment, tested from outside the checkout.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: hallpass-py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --quiet -e ".[crypto]" pytest pytest-timeout hypothesis ruff mypy types-PyYAML build
+      - name: lint
+        if: runner.os == 'Linux'
+        run: |
+          ruff format --check src tests
+          ruff check src tests
+      - name: types
+        if: runner.os == 'Linux'
+        run: mypy --strict src/hallpass
+      - run: python -m pytest -q
+      - name: the installed wheel
+        if: runner.os == 'Linux'
+        run: |
+          python -m build -o /tmp/dist .
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install --quiet "$(ls /tmp/dist/*.whl)[crypto]" pytest pytest-timeout hypothesis
+          cp -r tests /tmp/wheel-tests
+          cd /tmp && HALLPASS_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m pytest -q -p no:cacheprovider --rootdir /tmp /tmp/wheel-tests
+
+  parity:
+    # The Go and Python implementations on the same scenarios, against one
+    # fake upstream: any difference in decision or reason fails.
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: go build -o /tmp/hallpass-go ./cmd/hallpass
+      - run: python -m pip install --quiet -e "./hallpass-py[crypto]" pytest pytest-timeout hypothesis
+      - working-directory: hallpass-py
+        run: HALLPASS_GO_BIN=/tmp/hallpass-go python -m pytest -v tests/parity
+
   sdk-python:
     # Builds the Python package and tests the wheel as users get it, on the
     # oldest and newest Python it supports.
