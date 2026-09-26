@@ -60,7 +60,7 @@ sequenceDiagram
 | **OPA / Cedar** | Policies you write, over data you feed in | The policy, and a sync of each system's roles into that data | Rules of your own application |
 | **OpenFGA / SpiceDB** | A relationship store you write tuples into | The tuples, kept in step with every system | Your own application's object graph |
 | **Per-user OAuth** | The system itself, through the user's own token | Every user connecting every system; the agent holding their tokens | Systems that support it, for users who will connect |
-| **hallpass** | The system itself, through one read-only credential | One credential per system, nothing to sync | Permissions that already exist in Jira, GitHub, AWS, Kubernetes, ... |
+| **hallpass** | The system itself, through one lookup credential | One credential per system, nothing to sync | Permissions that already exist in Jira, GitHub, AWS, Kubernetes, ... |
 
 hallpass has no policy language and stores no rules. It asks the system that owns the resource,
 at call time, and passes the answer through. Use it next to a policy engine, not instead of one:
@@ -75,11 +75,11 @@ covers the many that do not, and the agents that cannot ask every user to connec
   authenticated; `guarded` binds it when the tool is built.
 - **Fails closed.** `deny`, `unknown` and an unreachable hallpass all mean the tool does not run.
 - **Read-only, per resource, from the source of truth.** Each check is answered live by the system
-  that owns the resource, with a read-only credential.
+  that owns the resource, with a credential that is read-only wherever the product allows it.
 - **The lookup credentials stay out of the agent.** The agent keeps its own credential to act.
-  Asking what *another* user may do often takes more access than acting does (Administer Jira,
-  Kubernetes `SubjectAccessReview`, IAM policy simulation). Running hallpass as its own service
-  means the agent never holds those credentials.
+  Asking what *another* user may do takes different, more sensitive access: it reveals what anyone
+  may do, and in Jira it needs Administer Jira. Run hallpass in its own container or service, with
+  those credentials mounted only there, and the agent's process never holds them.
 - **Every decision is logged** as a JSON line, with the upstream calls it was based on.
 
 Not goals: approving changes, making check and action atomic, or proving who the user is.

@@ -135,12 +135,14 @@ decides anything.
 - **hallpass's own credentials are read-only** wherever the product allows it. Each
   [integration page](../integrations/README.md) says exactly what to grant, and where a product forces
   a broader grant.
-- **The lookup credentials stay out of the agent.** The agent needs its own credential to act, and
-  hallpass changes neither that nor agent code that skips the check: the check guards against the
-  model choosing to act, not against a compromised agent. What a separate hallpass keeps out of the
-  agent is the credential that answers for other users, which often needs more access than acting
-  does: Administer Jira, creating `SubjectAccessReview`s, simulating anyone's IAM policies. Run it
-  as its own service, not on the agent's machine, wherever real credentials are involved.
+- **The lookup credentials stay out of the agent.** The agent needs its own credential to act.
+  hallpass does not take that credential away and cannot stop agent code that skips the check: the
+  check guards against the model choosing to act, not against a compromised agent. What a separate
+  hallpass keeps out of the agent is the credential that answers for other users. That access is
+  different and more sensitive than acting: it reveals what anyone may do (a `SubjectAccessReview`
+  about any user, IAM policy simulation), and in Jira it needs Administer Jira. Run hallpass in its
+  own container or as a shared service, with its credentials mounted only there. A hallpass process
+  on the agent's host under the agent's own user gives that up.
 - **Secrets never sit in the config.** Every credential is an `env:NAME` or `file:/path` reference,
   and files are re-read on every use, so a rotated token keeps working. Secrets are redacted in
   logs. Request and response bodies of upstream calls are never logged.
@@ -149,7 +151,9 @@ decides anything.
 
 ## What it deliberately does not do
 
-- **Act.** It never performs the action and holds no credential that could.
+- **Act.** It never performs the action. Its credentials are read-only wherever the product allows
+  it; where one does not (Jira's permission check needs Administer Jira), the
+  [integration page](../integrations/README.md) says so.
 - **Approve.** Whether an allowed change *should* happen (at 3 a.m., without review) is a separate
   decision. Add a confirmation step in the agent after an `allow`.
 - **Make check and action atomic.** Permissions can change in between. A `fresh` check narrows the

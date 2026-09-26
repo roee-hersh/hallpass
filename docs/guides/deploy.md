@@ -12,7 +12,7 @@ it. The [quickstart](../quickstart.md) runs it locally in two minutes. The
 | **Shape** | One hallpass container next to each agent, in the same pod or on the same host | One hallpass deployment that every agent calls |
 | **Agent URL** | `http://localhost:8080` | `https://hallpass.example.internal` |
 | **TLS** | Not needed: traffic never leaves the pod | Needed in front of hallpass (see below) |
-| **Upstream credentials** | In every agent's pod | In one place |
+| **Upstream credentials** | In every agent's pod, mounted only into the hallpass container | In one place |
 | **Cache** | Per agent | Shared by every agent that hits the same replica |
 | **Choose it when** | One or two agents, or you want the API key never to cross the network | Several agents or teams, or you want the upstream credentials held in one place |
 
@@ -121,7 +121,10 @@ spec:
 ```
 
 For a sidecar, add the hallpass image as a second container in the agent's own pod, with the same
-config ConfigMap and Secrets, and point the agent at `http://localhost:8080`.
+config ConfigMap and Secrets, and point the agent at `http://localhost:8080`. Mount the Secrets
+only into the hallpass container, never into the agent's: they answer for every user, and in Jira
+they need Administer Jira, so the agent should not be able to read them
+([trust boundaries](../concepts/architecture.md#trust-boundaries)).
 
 ## Scaling and availability
 
