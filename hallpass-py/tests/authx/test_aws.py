@@ -14,7 +14,7 @@ from hallpass.authx import xmlutil
 from hallpass.authx.awscreds import ContainerProvider, OSEnv, _container_relative_endpoint, _validate_container_uri, ambient_provider, static_from_json
 from hallpass.authx.awsquery import AWSClient, AWSError, classify_aws_error, decode_json_error, decode_xml_error, query_form
 from hallpass.authx.sigv4 import AWSCredentials
-from hallpass.authx.sts import _STS_VERSION, CachedProvider, STSClient, StaticProvider, assume_role_provider
+from hallpass.authx.sts import _STS_VERSION, CachedProvider, StaticProvider, STSClient, assume_role_provider
 from hallpass.core.context import Cancelled, Context, DeadlineExceeded, background, with_cancel
 from hallpass.core.decision import Code
 from hallpass.core.errors import is_error

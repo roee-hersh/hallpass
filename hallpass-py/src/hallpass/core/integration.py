@@ -146,16 +146,16 @@ def validate_fields(fields: list[Field] | tuple[Field, ...]) -> None:
     seen: set[str] = set()
     for f in fields:
         if not _FIELD_NAME_RE.fullmatch(f.name):
-            raise ValueError(f'field "{f.name}": name must match ^[a-z][a-z0-9_]*$')
+            raise ValueError(f"field {go_quote(f.name)}: name must match ^[a-z][a-z0-9_]*$")
         if f.name in seen:
-            raise ValueError(f'field "{f.name}" declared twice')
+            raise ValueError(f"field {go_quote(f.name)} declared twice")
         seen.add(f.name)
         if f.name in COMMON_FIELDS:
-            raise ValueError(f'field "{f.name}" is a common field and may not be redeclared')
+            raise ValueError(f"field {go_quote(f.name)} is a common field and may not be redeclared")
         if f.ref and not f.name.endswith("_connection"):
-            raise ValueError(f'field "{f.name}" references a connection so its name must end in _connection')
+            raise ValueError(f"field {go_quote(f.name)} references a connection so its name must end in _connection")
         if f.secret and f.default:
-            raise ValueError(f'field "{f.name}": secret fields cannot have defaults')
+            raise ValueError(f"field {go_quote(f.name)}: secret fields cannot have defaults")
 
 
 def validate_https_url(v: str) -> None:
@@ -468,20 +468,20 @@ class Registry:
         A programming error raises: registration happens at import time."""
         name = i.name()
         if not _NAME_RE.fullmatch(name):
-            raise ValueError(f'integration name "{name}" must match ^[a-z][a-z0-9]*$')
+            raise ValueError(f"integration name {go_quote(name)} must match ^[a-z][a-z0-9]*$")
         try:
             validate_fields(i.fields())
         except ValueError as e:
-            raise ValueError(f"integration {name}: {e}") from None
+            raise ValueError(f"integration {name}: {e}") from e
         seen: set[str] = set()
         for a in i.actions():
             if not a.pattern:
                 try:
                     validate_action_name(a.name)
                 except ValueError as e:
-                    raise ValueError(f'integration {name}: action "{a.name}": {e}') from None
+                    raise ValueError(f"integration {name}: action {go_quote(a.name)}: {e}") from e
             if a.name in seen:
-                raise ValueError(f'integration {name}: action "{a.name}" declared twice')
+                raise ValueError(f"integration {name}: action {go_quote(a.name)} declared twice")
             seen.add(a.name)
         with self._lock:
             if name in self._items:
