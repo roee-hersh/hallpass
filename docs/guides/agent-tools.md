@@ -214,6 +214,11 @@ claude mcp add hallpass \
 `AGENT_GROUPS` (comma-separated) passes group memberships. The TypeScript server runs the same way
 with `node /path/to/hallpass/examples/agent-ts/mcp_server.ts` (Node 22.18 or later).
 
+`localhost` suits the demo connection. With real credentials, run hallpass where the agent cannot
+read them, as a shared service behind TLS, and point `HALLPASS_URL` there; a coding agent with
+shell access on your machine could otherwise read hallpass's secrets. See the
+[deploy guide](deploy.md).
+
 ## Run the examples
 
 From a clone of the repository, install the examples' dependencies first:
