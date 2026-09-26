@@ -3,12 +3,12 @@
   "version": "0.0.0",
   "description": "Check with hallpass whether a user may do something before your AI agent does it for them.",
   "keywords": ["ai-agents", "authorization", "permissions", "llm", "tools", "mcp"],
-  "homepage": "https://github.com/roee-hersh/hallpass/tree/main/sdk/node",
+  "homepage": "https://github.com/roee-hersh/hallpass/tree/main/hallpass-ts",
   "bugs": "https://github.com/roee-hersh/hallpass/issues",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/roee-hersh/hallpass.git",
-    "directory": "sdk/node"
+    "directory": "hallpass-ts"
   },
   "license": "Apache-2.0",
   "type": "module",

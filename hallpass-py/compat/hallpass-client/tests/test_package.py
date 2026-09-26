@@ -1,8 +1,8 @@
 """Checks the installed package, not the source tree.
 
-    pip install ./sdk/python && python -m unittest discover -s sdk/python/tests
+    pip install ./hallpass-py ./hallpass-py/compat/hallpass-client && python -m unittest discover -s hallpass-py/compat/hallpass-client/tests
 
-The client's behaviour is tested in examples/agent/test_hallpass_client.py.
+The behaviour is hallpass's own, tested in hallpass-py/tests.
 This makes sure the distribution itself is complete and works.
 """
 

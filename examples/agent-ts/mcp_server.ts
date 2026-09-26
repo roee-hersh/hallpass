@@ -24,7 +24,7 @@ import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { Hallpass, guarded } from "../../sdk/node/src/index.ts"; // in your project: from "hallpass-client"
+import { Hallpass, guarded } from "../../hallpass-ts/src/index.ts"; // in your project: from "hallpass-client"
 
 const hp = new Hallpass();
 const AGENT_USER = process.env.AGENT_USER ?? "";

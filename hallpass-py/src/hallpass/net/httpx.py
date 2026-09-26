@@ -1243,7 +1243,7 @@ def link_next(h: Headers) -> str:
 def path_escape(s: str) -> str:
     """Escape one path segment (Go's url.PathEscape). Slashes are encoded,
     so the value cannot climb out of its position in a path template."""
-    return urllib.parse.quote(s, safe="-_.~!$&'()*+,;=:@")
+    return urllib.parse.quote(s, safe="-_.~$&+=:@")
 
 
 TokenFunc = Callable[[Context], str]
