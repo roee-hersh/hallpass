@@ -33,6 +33,12 @@ crypto = ["cryptography>=42"]
 strands = ["strands-agents>=1.57.1"]
 langchain = ["langchain>=1.4", "langgraph>=1.2"]
 mcp = ["mcp>=2.1"]
+openai-agents = ["openai-agents>=0.22"]
+claude-agent-sdk = ["claude-agent-sdk>=0.2.160"]
+google-adk = ["google-adk>=2.10"]
+pydantic-ai = ["pydantic-ai-slim>=2.51"]
+crewai = ["crewai>=1.15"]
+llamaindex = ["llama-index-core>=0.14"]
 
 [project.scripts]
 hallpass = "hallpass.cli:main"
@@ -74,6 +80,11 @@ markers = [
 python_version = "3.10"
 strict = true
 warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+# The framework adapters import their framework, an optional extra.
+module = ["strands.*", "langchain.*", "langchain_core.*", "langgraph.*", "mcp.*", "agents.*", "claude_agent_sdk.*", "google.adk.*", "google.genai.*", "pydantic_ai.*", "crewai.*", "llama_index.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["hallpass._api"]
