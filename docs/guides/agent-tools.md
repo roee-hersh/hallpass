@@ -163,12 +163,19 @@ agent(body.message, invocation_state={"user_id": user.email})  # from your auth,
 ```
 
 - A tool without a rule runs unchecked, so reads stay fast. With `strict=True` it is denied
-  instead, and a rule of `None` names a tool that may run unchecked.
+  instead, and a rule of `None` names a tool that may run unchecked. Use `strict=True` when the
+  agent loads tools you do not list yourself, such as MCP tools. A rule that names no tool of the
+  agent is logged as a warning.
+- The fields in a resource must be string or integer parameters of the tool, and the model's value
+  must already have that type, so the resource hallpass checks is exactly the one the tool gets
+  (Strands would turn `"07"` into the integer 7). A field the model leaves out takes the tool's
+  default.
 - A missing user, a resource the tool's input cannot fill, any answer but `allow`, and any error in
   the handler all deny the call. The model sees the reason as the tool result.
 - `groups_key="groups"` reads the user's groups from `invocation_state["groups"]`.
-- List it last in `interventions`: a later handler or hook that rewrites the tool call changes
-  what runs after hallpass checked it.
+- List it last in `interventions`, and do not rewrite tool calls in later hooks or in tool
+  middleware: that changes what runs after hallpass checked it. A call a hook moved to another tool
+  is denied.
 
 **Claude Agent SDK.** The handler receives one dict, and `guarded` reads the resource from it.
 With a long-lived `ClaudeSDKClient`, set the user before `connect()` and use one client per user.

@@ -93,7 +93,9 @@ class InstalledPackage(unittest.TestCase):
         handler = HallpassAuthorization(self.hp, {"write": ("demo", "thing.write", "thing:{thing_id}")})
 
         def decide(user: str):
+            spec = {"inputSchema": {"json": {"properties": {"thing_id": {"type": "string"}}}}}
             event = SimpleNamespace(tool_use={"toolUseId": "t1", "name": "write", "input": {"thing_id": "1"}},
+                                    selected_tool=SimpleNamespace(tool_name="write", tool_spec=spec),
                                     invocation_state={"user_id": user})
             return asyncio.run(handler.before_tool_call(event))
 
