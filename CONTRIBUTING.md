@@ -15,8 +15,8 @@ hallpass is a Python package in `hallpass-py/` (Python 3.10 or later). From ther
 
 ```sh
 pip install -e ".[crypto]" pytest pytest-timeout hypothesis ruff mypy types-PyYAML
-ruff format --check src tests   # must report nothing to reformat
-ruff check src tests
+ruff format --check src tests examples   # must report nothing to reformat
+ruff check src tests examples
 mypy --strict src/hallpass
 python -m pytest -q             # unit tests against fake upstreams
 ```

@@ -105,10 +105,15 @@ class HallpassMiddleware:
         self._user, self._groups = user, groups
         self._user_claim, self._groups_claim = user_claim, groups_claim
         self._warned: set[str] = set()
+        # The missing-rule warning is given once, on the first tools/call.
+        self._listed = False
 
     async def __call__(self, ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:
-        if ctx.method != "tools/call" or ctx.request_id is None:
+        if ctx.method != "tools/call":
             return await call_next(ctx)
+        # Every tools/call is checked, whatever its shape (with or without a
+        # request id): a guard that skipped a shape it did not expect would
+        # fail open.
         try:
             name, outcome = await self._decide(ctx.params)
         except Exception as e:  # noqa: BLE001 - any failure in the check refuses
@@ -143,10 +148,15 @@ class HallpassMiddleware:
         args = params.get("arguments")
         if args is None:
             args = {}  # what the server runs the tool with
-        tools = {t.name: t for t in await self.server.list_tools()}
-        self._warn_missing(tools)
         if self.rules.entries.get(name) is None:
-            return name, await self.rules.adecide(name, args, user=None)  # no rule: strict alone decides
+            # No rule (or a None rule): strict alone decides, and the tool
+            # list is not needed.
+            if not self._listed:
+                self._warn_missing({t.name: t for t in await self.server.list_tools()})
+            return name, await self.rules.adecide(name, args, user=None)
+        tools = {t.name: t for t in await self.server.list_tools()}
+        if not self._listed:
+            self._warn_missing(tools)
         tool = tools.get(name)
         if tool is None:
             return name, Outcome(False, f"the server has no tool {name!r}")
@@ -158,17 +168,28 @@ class HallpassMiddleware:
     def _sources(self) -> tuple[Any, Any, str | None]:
         """The user and groups for this request, or a refusal reason."""
         token = get_access_token()
-        user = _MISSING if token is None else _claim(token, self._user_claim)
-        if user is _MISSING:
+        if token is None:
+            # No token at all (stdio, unauthenticated HTTP): the user= source.
             if self._user is None:
-                where = "carries no access token" if token is None else f"has an access token without a {self._user_claim!r} claim"
-                return None, None, f"no user for this request: the request {where}"
-            user = self._user
-        elif not isinstance(user, str):
+                return None, None, "no user for this request: the request carries no access token"
+            user: Any = self._user
+        else:
+            # A verified token speaks for the caller. When it lacks the claim
+            # the request is refused: falling back to user= would check a
+            # different person than the one who sent it.
+            user = _claim(token, self._user_claim)
+            if user is _MISSING:
+                return None, None, f"no user for this request: the request has an access token without a {self._user_claim!r} claim"
+        if token is not None and not isinstance(user, str):
             return None, None, f"no user for this request: the access token's {self._user_claim!r} claim is not a string"
         groups: Any = None
         if self._groups_claim is not None or self._groups is not None:
-            groups = _MISSING if token is None or self._groups_claim is None else _claim(token, self._groups_claim)
+            if token is not None and self._groups_claim is not None:
+                groups = _claim(token, self._groups_claim)
+                if groups is _MISSING:
+                    return None, None, f"no groups for this request: the request has an access token without a {self._groups_claim!r} claim"
+            else:
+                groups = _MISSING
             if groups is _MISSING:
                 try:
                     # Resolved here, so a source that yields nothing refuses rather than checking without groups.
@@ -180,6 +201,7 @@ class HallpassMiddleware:
         return user, groups, None
 
     def _warn_missing(self, tools: Mapping[str, Any]) -> None:
+        self._listed = True
         missing = self.rules.missing(tools) - self._warned
         if missing:
             self._warned |= missing

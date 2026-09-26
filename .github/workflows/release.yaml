@@ -33,6 +33,21 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git tag -a "$VERSION" -m "hallpass $VERSION"
           git push origin "refs/tags/$VERSION"
+      - name: create release
+        # The GitHub release the assets job uploads to, with notes generated
+        # from the merged pull requests. A version with a suffix (v1.2.3-rc.1)
+        # is a prerelease.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            echo "release $VERSION exists"
+            exit 0
+          fi
+          pre=""
+          case "$VERSION" in *-*) pre="--prerelease" ;; esac
+          gh release create "$VERSION" --verify-tag --title "hallpass $VERSION" --generate-notes $pre
 
   image:
     needs: tag

@@ -23,8 +23,8 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-# hallpass_client.strands, the intervention handler. Strands needs Python 3.10+;
-# on 3.9 the extra installs nothing and importing the module says why.
+# hallpass_client.strands, the intervention handler. Like hallpass itself,
+# this package needs Python 3.10 or later (0.x releases on 3.9 stay on PyPI).
 strands = ["hallpass[strands]==0.0.0"]
 
 [project.urls]

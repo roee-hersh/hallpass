@@ -158,3 +158,112 @@ def test_null_body_is_an_empty_request(running: list[Running]) -> None:
     res, out = h.post("Bearer " + KEY, "null", "")
     assert res.status == 200 and out["decision"] == "deny", (res.status, out)
     assert c.last is not None and c.last.user == "" and c.last.connection == "" and not c.last.groups, c.last
+
+
+# -- request framing and shutdown (hardening found in review) ------------------
+
+
+def _raw(r: Running, head: bytes, body: bytes = b"", *, close_after: bool = False, read_timeout: float = 5.0) -> bytes:
+    """Send bytes as they are on a fresh socket and return what comes back."""
+    import socket
+
+    with socket.create_connection((r.host, r.port), timeout=read_timeout) as s:
+        s.sendall(head + body)
+        if close_after:
+            s.shutdown(socket.SHUT_WR)
+        out = b""
+        try:
+            while b"\r\n\r\n" not in out or len(out) < out.find(b"\r\n\r\n") + 4 + _clen(out):
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                out += chunk
+        except TimeoutError:
+            pass
+        return out
+
+
+def _clen(resp: bytes) -> int:
+    for line in resp.split(b"\r\n"):
+        if line.lower().startswith(b"content-length:"):
+            return int(line.split(b":", 1)[1])
+    return 0
+
+
+def _post_head(extra: str) -> bytes:
+    return (f"POST /check HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {KEY}\r\n" + extra + "\r\n").encode()
+
+
+def test_negative_chunk_size_is_refused_not_read_to_eof(running: list[Running]) -> None:
+    # int(b"-1", 16) is -1 and rfile.read(-1) reads to EOF without a cap:
+    # the size must be hex digits only, so the server answers at once.
+    r = start(running, StubChecker(), secret.literal(KEY))
+    out = _raw(r, _post_head("Transfer-Encoding: chunked\r\n"), b"-1\r\n" + b"x" * 1000)
+    assert out.startswith(b"HTTP/1.1 400"), out[:200]
+    assert b"could not read body" in out
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"40\r\n" + b"a" * 20,  # the peer closes mid-chunk
+        b"0x4\r\nabcd\r\n0\r\n\r\n",  # not hex digits
+        b"+4\r\nabcd\r\n0\r\n\r\n",  # a sign
+        b"4\r\nabcdXX0\r\n\r\n",  # chunk not followed by CRLF
+        b"",  # no size line at all
+    ],
+)
+def test_malformed_chunked_bodies_are_unreadable(running: list[Running], body: bytes) -> None:
+    r = start(running, StubChecker(), secret.literal(KEY))
+    out = _raw(r, _post_head("Transfer-Encoding: chunked\r\n"), body, close_after=True)
+    assert out.startswith(b"HTTP/1.1 400"), out[:200]
+    assert b"could not read body" in out
+
+
+def test_chunked_body_is_decoded(running: list[Running]) -> None:
+    c = StubChecker()
+    r = start(running, c, secret.literal(KEY))
+    body = json.dumps({"user": "a@x.com", "connection": "c", "action": "a", "resource": "r:1"}).encode()
+    chunks = b"".join(f"{len(p):x};ext=1\r\n".encode() + p + b"\r\n" for p in (body[:10], body[10:]))
+    out = _raw(r, _post_head("Transfer-Encoding: chunked\r\n"), chunks + b"0\r\nX-Trailer: 1\r\n\r\n")
+    assert out.startswith(b"HTTP/1.1 200"), out[:200]
+    assert c.last is not None and c.last.user == "a@x.com"
+
+
+@pytest.mark.parametrize("cl", ["+5", " 5", "5_0", "-1", "0x5", "５"])
+def test_content_length_must_be_digits(running: list[Running], cl: str) -> None:
+    r = start(running, StubChecker(), secret.literal(KEY))
+    out = _raw(r, _post_head(f"Content-Length: {cl}\r\n".encode().decode("latin-1")), b"{}{}{}", close_after=True)
+    assert out.startswith(b"HTTP/1.1 400"), out[:200]
+
+
+def test_shutdown_lets_requests_in_flight_finish(running: list[Running]) -> None:
+    import threading
+    import time
+
+    entered, release = threading.Event(), threading.Event()
+
+    class Slow(StubChecker):
+        def check(self, ctx: Context | None, req: Request) -> Result:
+            entered.set()
+            release.wait(5)
+            return super().check(ctx, req)
+
+    r = Running(Server(Slow(), secret.literal(KEY)))
+    got: list[tuple[int, dict[str, Any]]] = []
+
+    def call() -> None:
+        res, out = r.post("Bearer " + KEY, json.dumps({"user": "a@x.com", "connection": "c", "action": "a", "resource": "r:1"}), "")
+        got.append((res.status, out))
+
+    t = threading.Thread(target=call)
+    t.start()
+    assert entered.wait(5)
+    stopper = threading.Thread(target=r.server.shutdown)
+    stopper.start()
+    time.sleep(0.3)
+    assert stopper.is_alive(), "shutdown returned while a request was still being answered"
+    release.set()
+    stopper.join(5)
+    t.join(5)
+    assert got == [(200, {"decision": "allow", "reason": "allowed: ok"})]

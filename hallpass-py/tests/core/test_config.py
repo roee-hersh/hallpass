@@ -358,3 +358,14 @@ def test_go_values() -> None:
     # A literal block keeps its trailing newline, as yaml.v3's Node.Value does.
     assert a.secret("credential").ref() == "env:T\n"
     assert a.timeout == 300
+
+
+def test_from_mapping_secret_only_for_secret_fields() -> None:
+    # A Secret given for a field that is not a secret field is an error, not
+    # the placeholder reference validated as the value.
+    from hallpass.core import config as cfgmod
+    from hallpass.core.secret import literal
+    from hallpass.integrations import registry
+
+    with pytest.raises(cfgmod.ConfigError, match='connection "f": users is not a secret field; pass a plain string'):
+        cfgmod.from_mapping({"connections": [{"id": "f", "integration": "fake", "users": literal("a@x.com")}]}, registry(), require_api_key=False)

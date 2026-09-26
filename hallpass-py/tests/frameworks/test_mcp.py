@@ -12,6 +12,7 @@ live test lets a real Claude model pick the calls through the Anthropic API.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -406,6 +407,19 @@ class Tokens:
 
 @pytest.fixture
 def fw_mcp_http(fw_mcp_hp: RecordingHallpass) -> Iterator[str]:
+    with _http_server(fw_mcp_hp) as url:
+        yield url
+
+
+@pytest.fixture
+def fw_mcp_http_fallback(fw_mcp_hp: RecordingHallpass) -> Iterator[str]:
+    # A server that also serves stdio, so it sets a user= fallback.
+    with _http_server(fw_mcp_hp, user=ADMIN) as url:
+        yield url
+
+
+@contextlib.contextmanager
+def _http_server(hp: RecordingHallpass, **guard_kw: Any) -> Iterator[str]:
     uvicorn = pytest.importorskip("uvicorn")
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -422,7 +436,7 @@ def fw_mcp_http(fw_mcp_hp: RecordingHallpass) -> Iterator[str]:
         token_verifier=tokens,
         auth=AuthSettings(issuer_url="https://auth.example.com", resource_server_url=url, validate_token_resource=False),  # type: ignore[arg-type]
     )
-    guard(server, fw_mcp_hp, {"write_thing": WRITE}, groups_claim="groups")
+    guard(server, hp, {"write_thing": WRITE}, groups_claim="groups", **guard_kw)
     srv = uvicorn.Server(uvicorn.Config(server.streamable_http_app(), host="127.0.0.1", port=port, log_level="warning"))
     t = threading.Thread(target=srv.run, daemon=True)
     t.start()
@@ -430,9 +444,30 @@ def fw_mcp_http(fw_mcp_hp: RecordingHallpass) -> Iterator[str]:
     while not srv.started:
         assert time.monotonic() < deadline, "uvicorn did not start"
         time.sleep(0.02)
-    yield url
-    srv.should_exit = True
-    t.join(5)
+    try:
+        yield url
+    finally:
+        srv.should_exit = True
+        t.join(5)
+
+
+def test_http_token_without_claim_never_falls_back(fw_mcp_http_fallback: str, fw_mcp_hp: RecordingHallpass) -> None:
+    """A verified token that lacks the user claim is refused, even when the
+    server has a user= fallback for stdio: the fallback would check someone
+    other than the caller."""
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+
+    async def call(token: str) -> CallToolResult:
+        async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + token}) as http:
+            async with Client(streamable_http_client(fw_mcp_http_fallback, http_client=http)) as client:
+                [res] = await drive(client, [("write_thing", {"thing_id": "1", "content": "hi"})])
+                return res
+
+    nobody = asyncio.run(call("no-email-token"))
+    assert (nobody.is_error, text(nobody)) == (True, REFUSED + "no user for this request: the request has an access token without a 'email' claim")
+    assert fw_mcp_hp.seen == [], "hallpass must not be asked about the fallback user"
+    assert RAN == []
 
 
 def test_http_user_from_access_token(fw_mcp_http: str, fw_mcp_hp: RecordingHallpass) -> None:

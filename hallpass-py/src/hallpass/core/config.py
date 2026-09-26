@@ -620,8 +620,14 @@ def from_mapping(doc: Mapping[str, Any], reg: Registry, name: str = "<config>", 
             for i, c in enumerate(v):
                 if isinstance(c, Mapping):
                     cc: dict[str, Any] = {}
+                    integ = reg.lookup(c["integration"]) if isinstance(c.get("integration"), str) else None
+                    secret_fields = {f.name for f in integ.fields() if f.secret} if integ is not None else None
                     for ck, cv in c.items():
                         if isinstance(cv, Secret):
+                            # Only a secret field takes a Secret; anywhere else it
+                            # would be validated as the placeholder reference.
+                            if secret_fields is not None and ck not in secret_fields:
+                                raise ConfigError(name, 0, f'connection "{c.get("id", "")}": {ck} is not a secret field; pass a plain string')
                             in_code[(i, str(ck))] = cv
                             cc[ck] = "env:HALLPASS_IN_CODE_SECRET"
                         else:

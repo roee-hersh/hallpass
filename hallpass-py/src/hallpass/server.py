@@ -22,6 +22,7 @@ __all__ = ["MAX_REQUEST_BODY", "Checker", "Server", "check_body", "decision_body
 # Bounds a /check body.
 MAX_REQUEST_BODY = 64 << 10
 _MAX_HEADER_BYTES = 16 << 10
+_HEX_DIGITS = frozenset(b"0123456789abcdefABCDEF")
 _FIELDS = ("user", "groups", "connection", "action", "resource", "fresh")
 
 
@@ -124,6 +125,9 @@ class Server:
         self.api_key = api_key
         self.logger = logger or Logger()
         self._httpd: ThreadingHTTPServer | None = None
+        # Requests being answered, so shutdown can let them finish.
+        self._inflight = threading.Condition()
+        self._active = 0
 
     def authorized(self, header: str) -> bool:
         try:
@@ -190,6 +194,16 @@ class Server:
                     self.wfile.write(body)
 
             def _route(self) -> None:
+                with server._inflight:
+                    server._active += 1
+                try:
+                    self._route_counted()
+                finally:
+                    with server._inflight:
+                        server._active -= 1
+                        server._inflight.notify_all()
+
+            def _route_counted(self) -> None:
                 start = time.monotonic()
                 path = self.path.split("?", 1)[0]
                 status = 200
@@ -236,11 +250,10 @@ class Server:
                 cl = self.headers.get("Content-Length")
                 if cl is None:
                     return 0
-                try:
-                    n = int(cl)
-                except ValueError:
+                # Digits only: int() would also take "+5", " 5" and "5_0".
+                if not cl or not cl.isascii() or not cl.isdigit():
                     return -1
-                return n
+                return int(cl)
 
             def _body(self) -> tuple[bytes | None, bool]:
                 n = self._length()
@@ -264,20 +277,36 @@ class Server:
                 return data, False
 
             def _chunked(self) -> tuple[bytes | None, bool]:
+                """A chunked body, strictly: each size is hex digits only (no
+                sign), every chunk is read in full and ends with CRLF, and the
+                total stays under the cap. Anything else is unreadable and the
+                connection closes."""
                 out = bytearray()
                 try:
                     while True:
                         line = self.rfile.readline(1024)
-                        size = int(line.split(b";", 1)[0].strip() or b"0", 16)
+                        if not line.endswith(b"\n"):
+                            raise ValueError("truncated chunk size line")
+                        digits = line.split(b";", 1)[0].strip(b" \t\r\n")
+                        if not digits or len(digits) > 16 or any(c not in _HEX_DIGITS for c in digits):
+                            raise ValueError("bad chunk size")
+                        size = int(digits, 16)
                         if size == 0:
-                            while self.rfile.readline(1024) not in (b"\r\n", b"\n", b""):
-                                pass
-                            return bytes(out), False
+                            while True:
+                                trailer = self.rfile.readline(1024)
+                                if not trailer.endswith(b"\n"):
+                                    raise ValueError("truncated trailer")
+                                if trailer in (b"\r\n", b"\n"):
+                                    return bytes(out), False
                         if len(out) + size > MAX_REQUEST_BODY:
                             self.close_connection = True
                             return None, True
-                        out.extend(self.rfile.read(size))
-                        self.rfile.readline(1024)
+                        data = self.rfile.read(size)
+                        if len(data) != size:
+                            raise ValueError("truncated chunk")
+                        out.extend(data)
+                        if self.rfile.readline(1024) not in (b"\r\n", b"\n"):
+                            raise ValueError("chunk not followed by CRLF")
                 except (TimeoutError, OSError, ValueError):
                     self.close_connection = True
                     return None, False
@@ -333,10 +362,21 @@ class Server:
         t.start()
         return t
 
-    def shutdown(self) -> None:
-        if self._httpd is not None:
-            self._httpd.shutdown()
-            self._httpd.server_close()
+    def shutdown(self, grace: float = 10.0) -> None:
+        """Stop accepting, let requests in flight finish (up to grace
+        seconds, as the Go server's Shutdown did), then close."""
+        if self._httpd is None:
+            return
+        self._httpd.shutdown()
+        deadline = time.monotonic() + grace
+        with self._inflight:
+            while self._active > 0:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    self.logger.warn("shutdown", error=f"{self._active} request(s) still in flight after {grace:g}s")
+                    break
+                self._inflight.wait(left)
+        self._httpd.server_close()
 
 
 class _V6Server(ThreadingHTTPServer):
