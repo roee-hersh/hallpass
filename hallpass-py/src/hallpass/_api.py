@@ -281,7 +281,13 @@ class _Remote(_Backend):
         if not self.api_key:
             raise ValueError("hallpass API key missing: pass api_key or set HALLPASS_API_KEY")
         self.timeout = timeout
-        self._opener = urllib.request.build_opener(_NoRedirect)
+        handlers: list[urllib.request.BaseHandler] = [_NoRedirect()]
+        host = urllib.parse.urlsplit(self.url).hostname or ""
+        if host == "localhost" or _is_loopback_ip(host):
+            # Never through a proxy: the API key would travel to it, and Go's
+            # proxy selection skips loopback too.
+            handlers.append(urllib.request.ProxyHandler({}))
+        self._opener = urllib.request.build_opener(*handlers)
 
     def check(self, user: str, connection: str, action: str, resource: str, groups: list[str] | None, fresh: bool) -> Decision:
         body: dict[str, Any] = {"user": user, "connection": connection, "action": action, "resource": resource}
@@ -334,6 +340,13 @@ def _validate_url(url: str) -> str:
         if loopback:
             return url.rstrip("/")
     raise ValueError(f"hallpass url {url!r} must start with https:// (http:// only for localhost)")
+
+
+def _is_loopback_ip(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _group_list(groups: Iterable[str]) -> list[str]:

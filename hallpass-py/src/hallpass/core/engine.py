@@ -31,7 +31,7 @@ from hallpass.core.decision import (
     unsupported,
 )
 from hallpass.core.declog import DecisionLog, Entry
-from hallpass.core.errors import as_error
+from hallpass.core.errors import as_error, go_lower
 from hallpass.core.integration import CheckRequest, Connection, Deps, Identity, Integration, ProbeResult, Settings, User
 from hallpass.core.log import Logger
 
@@ -380,4 +380,4 @@ def _normalize_groups(gs: list[str]) -> list[str]:
 def _identity_key(conn_id: str, u: User) -> str:
     """The connection, the lowercased email and the normalized groups:
     integrations such as kubernetes embed the groups in the Identity."""
-    return "\x00".join([conn_id, u.email.lower(), *u.groups])
+    return "\x00".join([conn_id, go_lower(u.email), *u.groups])
