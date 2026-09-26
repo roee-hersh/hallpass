@@ -178,7 +178,7 @@ class HallpassGuardrails:
         async def hallpass_check(data: ToolInputGuardrailData) -> ToolGuardrailFunctionOutput:
             try:
                 outcome = await self._decide(tool, data.context)
-            except Exception as e:  # fail closed, and keep the run going
+            except Exception as e:  # noqa: BLE001 - fail closed, and keep the run going
                 outcome = Outcome(False, f"the check failed: {type(e).__name__}: {e}")
             if not outcome.allowed:
                 return ToolGuardrailFunctionOutput.reject_content(refusal(outcome), output_info=outcome.reason)

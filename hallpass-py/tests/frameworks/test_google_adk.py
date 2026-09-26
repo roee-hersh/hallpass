@@ -25,8 +25,6 @@ import pytest
 
 pytest.importorskip("google.adk")
 
-warnings.filterwarnings("ignore", message=r"\[EXPERIMENTAL\]")
-
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
 from google.adk.models import BaseLlm, LlmRequest, LlmResponse
@@ -37,6 +35,8 @@ from google.genai import types
 from hallpass import Hallpass, literal
 from hallpass.google_adk import HallpassCallbacks, Rule
 from tests import harness as itest
+
+warnings.filterwarnings("ignore", message=r"\[EXPERIMENTAL\]")
 
 ALICE = "alice@example.com"  # a known user: may read
 ADMIN = "admin@example.com"  # an admin: may write

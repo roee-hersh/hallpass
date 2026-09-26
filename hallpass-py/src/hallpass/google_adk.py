@@ -167,7 +167,7 @@ class HallpassCallbacks:
         """Answer the call with the refusal unless hallpass allowed it."""
         try:
             outcome = await self._decide(tool, args, tool_context)
-        except Exception as e:  # fail closed, and keep the run going
+        except Exception as e:  # noqa: BLE001 - fail closed, and keep the run going
             outcome = Outcome(False, f"the check failed: {type(e).__name__}: {e}")
         if not outcome.allowed:
             return {"error": refusal(outcome)}

@@ -133,7 +133,7 @@ class HallpassHooks:
             return Outcome(False, "the call names no tool")
         try:
             return await self.rules.adecide(tool, tool_input, user=self._user, groups=self._groups)
-        except Exception as e:  # fail closed
+        except Exception as e:  # noqa: BLE001 - fail closed
             return Outcome(False, f"the check failed: {type(e).__name__}: {e}")
 
     async def pre_tool_use(self, input_data: Any, tool_use_id: str | None, context: HookContext) -> HookJSONOutput:
@@ -150,7 +150,7 @@ class HallpassHooks:
                         self._pending.popitem(last=False)
                 return {}
             reason = refusal(outcome)
-        except Exception as e:  # fail closed: a hook error must not let the call through
+        except Exception as e:  # noqa: BLE001 - fail closed: Claude Code runs the tool when a hook raises
             reason = refusal(Outcome(False, f"the check failed: {type(e).__name__}: {e}"))
         return {
             "hookSpecificOutput": {
