@@ -17,6 +17,7 @@ import socket
 import sys
 import threading
 import unittest
+import uuid
 from contextvars import ContextVar
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -756,17 +757,24 @@ class StrandsInterventionTest(unittest.TestCase):
         from strands import tool
 
         @tool
-        def tagged(tags: list[str]) -> str:
+        def tagged(tags: list[str], ref: uuid.UUID) -> str:
             """Tag things.
 
             Args:
                 tags: labels
+                ref: a reference
             """
             return "tagged"
 
         handler = self.Handler(self.mod.hp, {"tagged": ("demo", "thing.write", "thing:{tags}")})
-        [res] = self.run_agent([("tagged", {"tags": ["allowed"]})], {"user_id": DANA}, [handler], [tagged])
+        [res] = self.run_agent([("tagged", {"tags": ["allowed"], "ref": str(uuid.uuid4())})], {"user_id": DANA},
+                               [handler], [tagged])
         self.assertIn("does not declare 'tags' as a string or an integer", self.text(res))
+        # A UUID is a string in the schema, but Strands would normalise it before the tool runs.
+        handler = self.Handler(self.mod.hp, {"tagged": ("demo", "thing.write", "thing:{ref}")})
+        [res] = self.run_agent([("tagged", {"tags": [], "ref": str(uuid.uuid4()).upper()})], {"user_id": DANA},
+                               [handler], [tagged])
+        self.assertIn("does not declare 'ref' as a string or an integer", self.text(res))
         self.assertEqual(FakeHallpass.seen, [])
 
     def test_rerouted_call_denies(self):

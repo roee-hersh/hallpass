@@ -93,7 +93,7 @@ HallpassAuthorization(hp, rules, *, user_key="user_id", groups_key=None, strict=
 
 | Parameter | Meaning |
 |---|---|
-| `rules` | Tool name to `Rule(connection, action, resource, fresh=False)` or a `(connection, action, resource)` tuple. `resource` is a template over the tool's input; each field must be one string or integer parameter of the tool. A rule naming no tool of the agent is logged as a warning |
+| `rules` | Tool name to `Rule(connection, action, resource, fresh=False)` or a `(connection, action, resource)` tuple. `resource` is a template over the tool's input; each field must be one plain `str` or `int` parameter of the tool (not a UUID, URL or path, which Strands converts). A rule naming no tool of the agent is logged as a warning |
 | `user_key` | The `invocation_state` key the user is read from |
 | `groups_key` | Optional. The `invocation_state` key the user's groups are read from, a list of strings |
 | `strict` | Deny tools with no rule. A rule of `None` lets a tool run unchecked |

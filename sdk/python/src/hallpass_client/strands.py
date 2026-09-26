@@ -47,9 +47,11 @@ _STATE_KEY = "hallpass_checks"
 
 # The JSON Schema types a resource field may have, and the one Python type the
 # model's value must have for each. Strands validates the input before the tool
-# runs and converts, for example, "01", 1.0 and true to the integer 1; a value of
-# exactly this type reaches the tool unchanged, so the resource hallpass checks
-# is the one the tool acts on.
+# runs and converts, for example, "01", 1.0 and true to the integer 1. A value of
+# exactly this type reaches a plain str or int parameter unchanged, so the
+# resource hallpass checks is the one the tool acts on. A string with a
+# "format" (UUID, URL, path) is converted too, so it is refused. A validator
+# that rewrites a plain str is the tool's own doing and cannot be seen here.
 _FIELD_TYPES = {"string": str, "integer": int}
 
 
@@ -59,7 +61,7 @@ class Rule:
 
     ``resource`` is a format string over the tool's input, e.g.
     ``"issue:{key}"``. Each field must be a plain input name, and the tool
-    must declare that input as a string or an integer. ``fresh=True`` makes
+    must declare that input as a plain ``str`` or ``int`` parameter. ``fresh=True`` makes
     the check skip hallpass's caches; use it for destructive tools.
     """
 
@@ -108,7 +110,7 @@ def _resource(template: str, fields: tuple[str, ...], tool_input: Any, schema: A
     for field in fields:
         prop = props.get(field) if isinstance(props, Mapping) else None
         want = _FIELD_TYPES.get(prop.get("type")) if isinstance(prop, Mapping) else None
-        if want is None:
+        if want is None or "format" in prop:
             raise ValueError(f"the tool does not declare {field!r} as a string or an integer")
         if field in tool_input:
             value = tool_input[field]

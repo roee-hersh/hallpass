@@ -166,7 +166,7 @@ agent(body.message, invocation_state={"user_id": user.email})  # from your auth,
   instead, and a rule of `None` names a tool that may run unchecked. Use `strict=True` when the
   agent loads tools you do not list yourself, such as MCP tools. A rule that names no tool of the
   agent is logged as a warning.
-- The fields in a resource must be string or integer parameters of the tool, and the model's value
+- The fields in a resource must be plain `str` or `int` parameters of the tool, and the model's value
   must already have that type, so the resource hallpass checks is exactly the one the tool gets
   (Strands would turn `"07"` into the integer 7). A field the model leaves out takes the tool's
   default.
