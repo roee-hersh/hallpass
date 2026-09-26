@@ -136,8 +136,8 @@ curl -X POST localhost:8080/check -H 'Authorization: Bearer change-me' \
 {"decision":"deny","reason":"denied: dana@example.com is not an admin"}
 ```
 
-and change one line in the agent: `hp = Hallpass.remote("http://localhost:8080", api_key)`. The
-methods and `guarded` are the same. From Node, `npm install hallpass-client` talks to the server.
+Then change one line in the agent, `hp = Hallpass.remote("http://localhost:8080", api_key)`. The
+methods and `guarded` stay the same. From Node, `npm install hallpass-client` talks to the server.
 
 The [quickstart](docs/quickstart.md) walks through all of it, including connecting a real system.
 Each framework has an adapter that checks every tool call with a rule, configured once on the
