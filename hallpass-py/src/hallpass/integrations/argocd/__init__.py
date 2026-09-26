@@ -141,7 +141,9 @@ class Bundle:
                     raise
                 # Argo CD falls back to the enforcer without the project
                 # policy when the project policy is invalid.
-                e = rbac.Enforcer(rbac.Options(builtin=rbac.BUILTIN_POLICY_CSV, user=self.user_policy, match_mode=self.match_mode, default_role=self.default_role))
+                e = rbac.Enforcer(
+                    rbac.Options(builtin=rbac.BUILTIN_POLICY_CSV, user=self.user_policy, match_mode=self.match_mode, default_role=self.default_role)
+                )
             self._enforcers[project] = e
             return e
 

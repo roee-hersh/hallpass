@@ -194,11 +194,18 @@ def classify(err: BaseException | None) -> HallpassError | None:
 # -- decoding (Go decodes into typed structs: a wrong type is an error) -------
 
 
-def raw(d: Mapping[str, Any], key: str) -> str:
-    """A json.RawMessage field: the value's JSON text, "" when absent."""
-    if key not in d:
+# The member for a key the way Go's decoder finds a struct field: an exact
+# match, else a case-insensitive one. None for a missing key or null.
+member = jsonx._get
+
+
+def raw(d: dict[str, Any], key: str) -> str:
+    """A json.RawMessage field: the value's JSON text, "" when absent. (Go
+    holds "null" for a null value; both parse to no posting rule.)"""
+    v = member(d, key)
+    if v is None:
         return ""
-    return json.dumps(d[key])
+    return json.dumps(v)
 
 
 @dataclass(frozen=True)
@@ -243,7 +250,7 @@ class SlackUser:
 def decode_user(v: Any) -> SlackUser:
     d = jsonx.obj(v, "user")
     p = jsonx.o(d, "profile")
-    eu_raw = d.get("enterprise_user")
+    eu_raw = member(d, "enterprise_user")
     eu = None
     if eu_raw is not None:
         e = jsonx.obj(eu_raw, "enterprise_user")
@@ -438,7 +445,7 @@ class Channel:
 def decode_channel(v: Any) -> Channel:
     d = jsonx.obj(v, "channel")
     props: str | None = None
-    if d.get("properties") is not None:
+    if member(d, "properties") is not None:
         props = raw(jsonx.o(d, "properties"), "posting_restricted_to")
     return Channel(
         id=jsonx.s(d, "id"),
@@ -502,8 +509,8 @@ class SlackConnection(Connection):
     def resolve_identity(self, ctx: Context, u: User) -> Identity:
         """Look the email up with users.lookupByEmail."""
         try:
-            _, usr = self.call(ctx, "users.lookupByEmail", {"email": u.email}, lambda b: decode_user(b.get("user")))
-        except Exception as err:
+            _, usr = self.call(ctx, "users.lookupByEmail", {"email": u.email}, lambda b: decode_user(jsonx.o(b, "user")))
+        except Exception as err:  # noqa: BLE001 - Go's error return: every error is classified
             if api_code(err) in ("users_not_found", "user_not_found"):
                 raise user_not_found(f"no Slack account for {u.email}") from None
             raise _classified(err)
@@ -545,7 +552,7 @@ class SlackConnection(Connection):
 
     def channel(self, ctx: Context, id: str) -> Channel:
         try:
-            _, ch = self.call(ctx, "conversations.info", {"channel": id}, lambda b: decode_channel(b.get("channel")))
+            _, ch = self.call(ctx, "conversations.info", {"channel": id}, lambda b: decode_channel(jsonx.o(b, "channel")))
         except Exception as err:
             code = api_code(err)
             if code == "channel_not_found":
@@ -576,7 +583,7 @@ class SlackConnection(Connection):
                 q["cursor"] = cursor
             try:
                 res, ids = self.call(ctx, "users.conversations", q, _decode_channel_ids)
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001 - Go's error return: every error is classified
                 raise _classified(err)
             if channel_id in ids:
                 return True
@@ -590,7 +597,7 @@ class SlackConnection(Connection):
                 q["cursor"] = cursor
             try:
                 res, members = self.call(ctx, "conversations.members", q, lambda b: jsonx.strs(b, "members"))
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001 - Go's error return: every error is classified
                 raise _classified(err)
             if user_id in members:
                 return True
@@ -603,7 +610,7 @@ class SlackConnection(Connection):
         """Who may post in #general."""
         try:
             _, raw_msg = self.call(ctx, "team.preferences.list", None, lambda b: raw(b, "who_can_post_general"))
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go's error return: every error is classified
             if api_code(err) == "missing_scope" and self.assume_defaults:
                 return Posters()
             raise _classified(err)
@@ -625,7 +632,7 @@ class SlackConnection(Connection):
         group is not listed (unknown id, or a disabled group)."""
         try:
             _, groups = self.call(ctx, "usergroups.list", {"include_users": "true"}, _decode_usergroups)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go's error return: every error is classified
             raise _classified(err)
         for gid, handle, users in groups:
             if gid == id:
@@ -731,7 +738,8 @@ class SlackConnection(Connection):
             return denied(f"{ident.display} is a {role(ident)} and not a member of {ch.label()}")
         if self.other_workspace(ident):
             return unsupported(
-                f"{ident.display} belongs to another workspace of the organization; whether they are a member of the workspace that owns {ch.label()} is not visible"
+                f"{ident.display} belongs to another workspace of the organization; "
+                f"whether they are a member of the workspace that owns {ch.label()} is not visible"
             )
         return allowed(f"{ch.label()} is public{archived}; any full member may read it")
 
@@ -746,7 +754,8 @@ class SlackConnection(Connection):
             return denied(f"{ident.display} is a {role(ident)} and cannot join channels on their own")
         if self.other_workspace(ident):
             return unsupported(
-                f"{ident.display} belongs to another workspace of the organization; whether they are a member of the workspace that owns {ch.label()} is not visible"
+                f"{ident.display} belongs to another workspace of the organization; "
+                f"whether they are a member of the workspace that owns {ch.label()} is not visible"
             )
         return allowed(f"{ch.label()} is public; any full member may join it")
 
@@ -777,10 +786,12 @@ class SlackConnection(Connection):
             # connection opts in with assume_default_prefs.
             if self.assume_defaults:
                 return allowed(
-                    f"{ident.display} is a member of {ch.label()}; no posting restriction is visible to the bot and assume_default_prefs treats the channel as unrestricted"
+                    f"{ident.display} is a member of {ch.label()}; no posting restriction is visible to the bot "
+                    "and assume_default_prefs treats the channel as unrestricted"
                 )
             return unsupported(
-                f"posting restrictions of {ch.label()} are not visible to the bot (no posting_restricted_to property); set assume_default_prefs: true to treat the channel as unrestricted"
+                f"posting restrictions of {ch.label()} are not visible to the bot (no posting_restricted_to property); "
+                "set assume_default_prefs: true to treat the channel as unrestricted"
             )
         if is_admin(ident):
             return allowed(f"{ident.display} is a member of {ch.label()}")
@@ -818,7 +829,7 @@ class SlackConnection(Connection):
         any write scope the token carries."""
         try:
             res, auth = self.call(ctx, "auth.test", None, _decode_auth)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go's error return: every error is classified
             raise _classified(err)
         user_id, bot_id, team, _team_id, enterprise = auth
         summary = f"authenticated as bot user {user_id} in workspace {team}"
@@ -834,7 +845,7 @@ class SlackConnection(Connection):
 
         try:
             self.call(ctx, "users.lookupByEmail", {"email": "hallpass-probe-does-not-exist@example.invalid"})
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - Go's error return: every error is classified
             code = api_code(err)
             if code in ("users_not_found", "user_not_found"):
                 pass
@@ -846,7 +857,7 @@ class SlackConnection(Connection):
         for method, scope in (("team.preferences.list", "team.preferences:read"), ("usergroups.list", "usergroups:read")):
             try:
                 self.call(ctx, method, None)
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001 - Go's error return: every error is classified
                 if api_code(err) == "missing_scope":
                     warnings.append(f"the token lacks the optional scope {scope}; {OPTIONAL_SCOPES[scope]}")
                     continue
@@ -856,7 +867,8 @@ class SlackConnection(Connection):
         gen_id = self.general_channel_id(ctx)
         if gen_id == "":
             warnings.append(
-                f"#general was not found among the first {GENERAL_LIST_PAGES} pages of public channels; whether channel properties are visible to the bot was not checked"
+                f"#general was not found among the first {GENERAL_LIST_PAGES} pages of public channels; "
+                "whether channel properties are visible to the bot was not checked"
             )
             return ProbeResult(summary=summary, warnings=tuple(warnings))
         gen = self.channel(ctx, gen_id)
@@ -864,7 +876,8 @@ class SlackConnection(Connection):
             summary += "; channel properties visible"
         else:
             warnings.append(
-                f"conversations.info on #general ({gen_id}) returned no properties object; message.post answers unknown for channels without a visible posting_restricted_to unless assume_default_prefs is set"
+                f"conversations.info on #general ({gen_id}) returned no properties object; message.post answers unknown "
+                "for channels without a visible posting_restricted_to unless assume_default_prefs is set"
             )
         return ProbeResult(summary=summary, warnings=tuple(warnings))
 
@@ -878,7 +891,7 @@ class SlackConnection(Connection):
                 q["cursor"] = cursor
             try:
                 res, chans = self.call(ctx, "conversations.list", q, _decode_general_list)
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001 - Go's error return: every error is classified
                 raise _classified(err)
             for cid, general in chans:
                 if general and cid != "":

@@ -295,7 +295,7 @@ def test_new_validation(servers: _Servers) -> None:
         s = itest.settings("j", "jira", values, {"credential": sec})
         try:
             Jira().new(background(), s, deps)
-        except Exception:  # noqa: BLE001 - Go: any error rejects
+        except Exception:
             continue
         pytest.fail(f"{name}: new accepted")
     assert len(srv.calls()) == 0, "new touched the network"
@@ -680,227 +680,227 @@ def global_deny(setup: Setup, action: str) -> None:
     itest.expect_code(check(c, bob, action, "global"), Code.DENIED)
 
 
-def test_action_BROWSE_PROJECTS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_BROWSE_PROJECTS_allow(setup: Setup) -> None:
     project_allow(setup, "BROWSE_PROJECTS")
 
 
-def test_action_BROWSE_PROJECTS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_BROWSE_PROJECTS_deny(setup: Setup) -> None:
     _, _, c = setup(MODE_BASIC)
     itest.expect_code(check(c, bob, "BROWSE_PROJECTS", "project:SEC"), Code.DENIED)
     itest.expect_code(check(c, bob, "BROWSE_PROJECTS", "issue:SEC-7"), Code.DENIED)
 
 
-def test_action_CREATE_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_CREATE_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "CREATE_ISSUES")
 
 
-def test_action_CREATE_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_CREATE_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "CREATE_ISSUES")
 
 
-def test_action_EDIT_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_EDIT_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "EDIT_ISSUES")
 
 
-def test_action_EDIT_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_EDIT_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "EDIT_ISSUES")
 
 
-def test_action_DELETE_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_DELETE_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "DELETE_ISSUES")
 
 
-def test_action_DELETE_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_DELETE_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "DELETE_ISSUES")
 
 
-def test_action_ASSIGN_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_ASSIGN_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "ASSIGN_ISSUES")
 
 
-def test_action_ASSIGN_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_ASSIGN_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "ASSIGN_ISSUES")
 
 
-def test_action_ASSIGNABLE_USER_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_ASSIGNABLE_USER_allow(setup: Setup) -> None:
     project_allow(setup, "ASSIGNABLE_USER")
 
 
-def test_action_ASSIGNABLE_USER_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_ASSIGNABLE_USER_deny(setup: Setup) -> None:
     project_deny(setup, "ASSIGNABLE_USER")
 
 
-def test_action_TRANSITION_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_TRANSITION_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "TRANSITION_ISSUES")
 
 
-def test_action_TRANSITION_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_TRANSITION_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "TRANSITION_ISSUES")
 
 
-def test_action_RESOLVE_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_RESOLVE_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "RESOLVE_ISSUES")
 
 
-def test_action_RESOLVE_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_RESOLVE_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "RESOLVE_ISSUES")
 
 
-def test_action_CLOSE_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_CLOSE_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "CLOSE_ISSUES")
 
 
-def test_action_CLOSE_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_CLOSE_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "CLOSE_ISSUES")
 
 
-def test_action_MOVE_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_MOVE_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "MOVE_ISSUES")
 
 
-def test_action_MOVE_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_MOVE_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "MOVE_ISSUES")
 
 
-def test_action_LINK_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_LINK_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "LINK_ISSUES")
 
 
-def test_action_LINK_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_LINK_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "LINK_ISSUES")
 
 
-def test_action_ADD_COMMENTS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_ADD_COMMENTS_allow(setup: Setup) -> None:
     project_allow(setup, "ADD_COMMENTS")
 
 
-def test_action_ADD_COMMENTS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_ADD_COMMENTS_deny(setup: Setup) -> None:
     project_deny(setup, "ADD_COMMENTS")
 
 
-def test_action_EDIT_ALL_COMMENTS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_EDIT_ALL_COMMENTS_allow(setup: Setup) -> None:
     project_allow(setup, "EDIT_ALL_COMMENTS")
 
 
-def test_action_EDIT_ALL_COMMENTS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_EDIT_ALL_COMMENTS_deny(setup: Setup) -> None:
     project_deny(setup, "EDIT_ALL_COMMENTS")
 
 
-def test_action_DELETE_ALL_COMMENTS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_DELETE_ALL_COMMENTS_allow(setup: Setup) -> None:
     project_allow(setup, "DELETE_ALL_COMMENTS")
 
 
-def test_action_DELETE_ALL_COMMENTS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_DELETE_ALL_COMMENTS_deny(setup: Setup) -> None:
     project_deny(setup, "DELETE_ALL_COMMENTS")
 
 
-def test_action_CREATE_ATTACHMENTS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_CREATE_ATTACHMENTS_allow(setup: Setup) -> None:
     project_allow(setup, "CREATE_ATTACHMENTS")
 
 
-def test_action_CREATE_ATTACHMENTS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_CREATE_ATTACHMENTS_deny(setup: Setup) -> None:
     project_deny(setup, "CREATE_ATTACHMENTS")
 
 
-def test_action_WORK_ON_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_WORK_ON_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "WORK_ON_ISSUES")
 
 
-def test_action_WORK_ON_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_WORK_ON_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "WORK_ON_ISSUES")
 
 
-def test_action_MANAGE_WATCHERS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_MANAGE_WATCHERS_allow(setup: Setup) -> None:
     project_allow(setup, "MANAGE_WATCHERS")
 
 
-def test_action_MANAGE_WATCHERS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_MANAGE_WATCHERS_deny(setup: Setup) -> None:
     project_deny(setup, "MANAGE_WATCHERS")
 
 
-def test_action_VIEW_VOTERS_AND_WATCHERS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_VIEW_VOTERS_AND_WATCHERS_allow(setup: Setup) -> None:
     project_allow(setup, "VIEW_VOTERS_AND_WATCHERS")
 
 
-def test_action_VIEW_VOTERS_AND_WATCHERS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_VIEW_VOTERS_AND_WATCHERS_deny(setup: Setup) -> None:
     project_deny(setup, "VIEW_VOTERS_AND_WATCHERS")
 
 
-def test_action_SCHEDULE_ISSUES_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_SCHEDULE_ISSUES_allow(setup: Setup) -> None:
     project_allow(setup, "SCHEDULE_ISSUES")
 
 
-def test_action_SCHEDULE_ISSUES_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_SCHEDULE_ISSUES_deny(setup: Setup) -> None:
     project_deny(setup, "SCHEDULE_ISSUES")
 
 
-def test_action_SET_ISSUE_SECURITY_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_SET_ISSUE_SECURITY_allow(setup: Setup) -> None:
     project_allow(setup, "SET_ISSUE_SECURITY")
 
 
-def test_action_SET_ISSUE_SECURITY_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_SET_ISSUE_SECURITY_deny(setup: Setup) -> None:
     project_deny(setup, "SET_ISSUE_SECURITY")
 
 
-def test_action_MANAGE_SPRINTS_PERMISSION_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_MANAGE_SPRINTS_PERMISSION_allow(setup: Setup) -> None:
     project_allow(setup, "MANAGE_SPRINTS_PERMISSION")
 
 
-def test_action_MANAGE_SPRINTS_PERMISSION_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_MANAGE_SPRINTS_PERMISSION_deny(setup: Setup) -> None:
     project_deny(setup, "MANAGE_SPRINTS_PERMISSION")
 
 
-def test_action_ADMINISTER_PROJECTS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_ADMINISTER_PROJECTS_allow(setup: Setup) -> None:
     project_allow(setup, "ADMINISTER_PROJECTS")
 
 
-def test_action_ADMINISTER_PROJECTS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_ADMINISTER_PROJECTS_deny(setup: Setup) -> None:
     project_deny(setup, "ADMINISTER_PROJECTS")
 
 
-def test_action_ADMINISTER_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_ADMINISTER_allow(setup: Setup) -> None:
     global_allow(setup, "ADMINISTER")
 
 
-def test_action_ADMINISTER_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_ADMINISTER_deny(setup: Setup) -> None:
     global_deny(setup, "ADMINISTER")
 
 
-def test_action_SYSTEM_ADMIN_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_SYSTEM_ADMIN_allow(setup: Setup) -> None:
     global_allow(setup, "SYSTEM_ADMIN")
 
 
-def test_action_SYSTEM_ADMIN_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_SYSTEM_ADMIN_deny(setup: Setup) -> None:
     global_deny(setup, "SYSTEM_ADMIN")
 
 
-def test_action_USER_PICKER_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_USER_PICKER_allow(setup: Setup) -> None:
     global_allow(setup, "USER_PICKER")
 
 
-def test_action_USER_PICKER_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_USER_PICKER_deny(setup: Setup) -> None:
     global_deny(setup, "USER_PICKER")
 
 
-def test_action_CREATE_SHARED_OBJECTS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_CREATE_SHARED_OBJECTS_allow(setup: Setup) -> None:
     global_allow(setup, "CREATE_SHARED_OBJECTS")
 
 
-def test_action_CREATE_SHARED_OBJECTS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_CREATE_SHARED_OBJECTS_deny(setup: Setup) -> None:
     global_deny(setup, "CREATE_SHARED_OBJECTS")
 
 
-def test_action_MANAGE_GROUP_FILTER_SUBSCRIPTIONS_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_MANAGE_GROUP_FILTER_SUBSCRIPTIONS_allow(setup: Setup) -> None:
     global_allow(setup, "MANAGE_GROUP_FILTER_SUBSCRIPTIONS")
 
 
-def test_action_MANAGE_GROUP_FILTER_SUBSCRIPTIONS_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_MANAGE_GROUP_FILTER_SUBSCRIPTIONS_deny(setup: Setup) -> None:
     global_deny(setup, "MANAGE_GROUP_FILTER_SUBSCRIPTIONS")
 
 
-def test_action_BULK_CHANGE_allow(setup: Setup) -> None:  # noqa: N802
+def test_action_BULK_CHANGE_allow(setup: Setup) -> None:
     global_allow(setup, "BULK_CHANGE")
 
 
-def test_action_BULK_CHANGE_deny(setup: Setup) -> None:  # noqa: N802
+def test_action_BULK_CHANGE_deny(setup: Setup) -> None:
     global_deny(setup, "BULK_CHANGE")

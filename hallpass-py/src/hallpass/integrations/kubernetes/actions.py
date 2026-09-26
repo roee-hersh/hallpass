@@ -182,9 +182,7 @@ def build_attributes(action_name: str, res: Resource) -> Attributes:
     elif action_name == "impersonate":
         a.resource = "users"
     elif action_name.startswith("raw:") and ":" not in action_name[4:]:
-        raise ValueError(
-            f"action {action_name} is the non-resource form; use it with nonresource:<path>, or add ?resource=<plural>[.<group>] to the request"
-        )
+        raise ValueError(f"action {action_name} is the non-resource form; use it with nonresource:<path>, or add ?resource=<plural>[.<group>] to the request")
     else:
         raise ValueError(f"action {action_name} needs a resource: add ?resource=<plural>[.<group>] to the request")
     if act_sub != "" and req_sub != "" and act_sub != req_sub:

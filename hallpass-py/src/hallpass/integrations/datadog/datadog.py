@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -115,7 +116,7 @@ class Datadog(Integration):
             r.headers.set("DD-API-KEY", go_trim_space(a))
             r.headers.set("DD-APPLICATION-KEY", go_trim_space(k))
 
-        return DatadogConnection(httpx.Client(http=hc, base=base, auth=auth, logger=d.logger), d.now or time.time)
+        return DatadogConnection(httpx.Client(http=hc, base=base, auth=auth, logger=d.logger), d.now)
 
 
 def _fold(c: str) -> str:
@@ -212,7 +213,7 @@ def _author_is(author: str, ident: Identity) -> bool:
 class DatadogConnection(Connection):
     """One Datadog organization."""
 
-    def __init__(self, api: httpx.Client, now: Any) -> None:
+    def __init__(self, api: httpx.Client, now: Callable[[], float] = time.time) -> None:
         self.api = api
         self.now = now
         # Each role's permission names, kept for PERMISSIONS_TTL.
@@ -395,16 +396,17 @@ class DatadogConnection(Connection):
                 if not sep:
                     continue
                 if kind == "org":
-                    return allowed(f"the restriction policy of {t} grants {b.relation} to the whole org, and a role of {ident.display} carries {t.permission()}")
+                    return allowed(
+                        f"the restriction policy of {t} grants {b.relation} to the whole org, and a role of {ident.display} carries {t.permission()}"
+                    )
                 if kind == "user":
                     if pid == ident.id:
                         return allowed(f"the restriction policy of {t} grants {b.relation} to {ident.display}, whose role carries {t.permission()}")
                 elif kind == "role":
                     if pid in ident.groups:
                         return allowed(f"the restriction policy of {t} grants {b.relation} to a role of {ident.display}, which carries {t.permission()}")
-                elif kind == "team":
-                    if _uuid_ok(pid) and pid not in teams:
-                        teams.append(pid)
+                elif kind == "team" and _uuid_ok(pid) and pid not in teams:
+                    teams.append(pid)
         for team in teams:
             try:
                 member = self._team_member(ctx, team, ident.id, ident.display)
@@ -416,7 +418,8 @@ class DatadogConnection(Connection):
                 raise classify(e, "read the members of team " + team) from e
             if member:
                 return allowed(
-                    f"the restriction policy of {t} grants {t.relation()} to team {team}, of which {ident.display} is a member, and a role carries {t.permission()}"
+                    f"the restriction policy of {t} grants {t.relation()} to team {team}, of which {ident.display} is a member, "
+                    f"and a role carries {t.permission()}"
                 )
         return denied(f"the restriction policy of {t} grants {t.relation()} to none of {ident.display}'s roles, teams or user")
 

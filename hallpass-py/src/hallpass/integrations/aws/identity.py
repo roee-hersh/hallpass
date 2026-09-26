@@ -116,7 +116,7 @@ def _parse_bool(src: str) -> bool:
         return True
     if s in ("0", "f", "F", "FALSE", "false", "False"):
         return False
-    raise ValueError(f'strconv.ParseBool: parsing {go_quote(s)}: invalid syntax')
+    raise ValueError(f"strconv.ParseBool: parsing {go_quote(s)}: invalid syntax")
 
 
 def xml_bools(e: ET.Element | None, *path: str) -> bool | None:

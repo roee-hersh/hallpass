@@ -17,6 +17,7 @@ import json
 import math
 import os
 import re
+import stat
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -70,9 +71,11 @@ from hallpass.integrations.github.identity import (
     MODE_MAP_FILE,
     MODE_SAML,
     MODE_TEMPLATE,
+    SAML_CACHE_TTL,
     IdentityMixin,
     SamlData,
     SamlIndex,
+    api_status,
     decode_saml_data,
     member,
 )
@@ -193,7 +196,7 @@ class GitHub(Integration):
             now=d.now,
         )
         c.saml.set_clock(c.now)
-        c.saml.set_fresh_max_age(_saml_cache_ttl())
+        c.saml.set_fresh_max_age(SAML_CACHE_TTL)
         if c.mode == "":
             c.mode = MODE_SAML
         if c.template == "":
@@ -216,10 +219,10 @@ class GitHub(Integration):
             if c.map_file == "":
                 raise ValueError("identity_mode map_file requires user_map_file")
             try:
-                is_dir = os.path.isdir(c.map_file) if os.stat(c.map_file) else False
+                fi = os.stat(c.map_file)
             except (OSError, ValueError) as e:
                 raise ValueError(f"user_map_file: {path_error_text('stat', c.map_file, e)}") from e
-            if is_dir:
+            if stat.S_ISDIR(fi.st_mode):
                 raise ValueError(f"user_map_file {c.map_file} is a directory")
         else:
             raise ValueError(f"identity_mode {go_quote(c.mode)} must be one of saml, template, map_file")
@@ -232,12 +235,6 @@ class GitHub(Integration):
         c.rest = httpx.Client(http=hc, base=rest_base, logger=d.logger, auth=c._token_auth)
         c.tokens = TokenSource(fetch=c._mint_token, default_ttl=TOKEN_LIFETIME, now=c.now)
         return c
-
-
-def _saml_cache_ttl() -> float:
-    from hallpass.integrations.github import identity
-
-    return identity.SAML_CACHE_TTL
 
 
 # -- decoding ----------------------------------------------------------------
@@ -287,7 +284,7 @@ def _json_number(d: dict[str, Any], key: str) -> str:
     if isinstance(v, _Num):
         return v.text
     if isinstance(v, str):
-        if v != "" and _JSON_NUMBER_RE.fullmatch(v) is None:
+        if _JSON_NUMBER_RE.fullmatch(v) is None:
             raise jsonx.DecodeError(f"json: invalid number literal, trying to unmarshal {go_quote(json.dumps(v))} into Number")
         return v
     raise jsonx.DecodeError(f"json: cannot unmarshal into field {key} of type json.Number")
@@ -313,16 +310,7 @@ def _decode_installation(resp: httpx.Response) -> _Installation:
     d = jsonx.obj(_decode_with_numbers(resp))
     perms_raw = member(d, "permissions")
     perms = _decode_str_map(perms_raw, "permissions") if perms_raw is not None else {}
-    account = member(d, "account")
-    login = ""
-    if account is not None:
-        a = jsonx.obj(account, "account")
-        if isinstance(member(a, "login"), _Num):
-            raise jsonx.DecodeError("json: cannot unmarshal number into field login of type string")
-        login = jsonx.s(a, "login")
-    for k in perms_raw.values() if isinstance(perms_raw, dict) else ():
-        if isinstance(k, _Num):
-            raise jsonx.DecodeError("json: cannot unmarshal number into field permissions of type string")
+    login = jsonx.s(jsonx.o(d, "account"), "login")
     return _Installation(_json_number(d, "id"), perms, login)
 
 
@@ -449,15 +437,6 @@ def _unauthorized(err: BaseException) -> bool:
     return resp is not None and resp.status == 401
 
 
-def api_status(err: BaseException) -> int:
-    """The HTTP status of a failed API call, or 0 when the failure was
-    already classified (for example a 404 from the token exchange, which
-    must not read as "user not found")."""
-    if as_error(err, HallpassError) is not None:
-        return 0
-    return httpx.status(err)
-
-
 def err_text(err: BaseException) -> str:
     """The code and text of an integration error, never its cause."""
     he = as_error(err, HallpassError)
@@ -516,11 +495,11 @@ class GitHubConnection(IdentityMixin, Connection):
         try:
             pem_text = self.settings.secret("credential").get_string()
         except Exception as e:  # noqa: BLE001 - any failure to read the secret
-            raise wrap_error(Code.CREDENTIAL_REJECTED, e, "the App private key could not be read") from e
+            raise wrap_error(Code.CREDENTIAL_REJECTED, e, "the App private key could not be read")
         try:
             key = authx_jwt.parse_rsa_private_key(pem_text.encode("utf-8", "surrogateescape"))
         except Exception as e:  # noqa: BLE001 - ValueError, or the crypto package missing
-            raise wrap_error(Code.CREDENTIAL_REJECTED, e, "the App private key is not a PEM RSA key") from e
+            raise wrap_error(Code.CREDENTIAL_REJECTED, e, "the App private key is not a PEM RSA key")
         now = self.now()
         claims = authx_jwt.standard_claims(iss=self.app_id, iat=math.floor(now - JWT_BACKDATE), exp=math.floor(now + JWT_LIFETIME))
         return authx_jwt.sign_jwt(key, authx_jwt.Header(alg=authx_jwt.RS256), claims)
@@ -547,8 +526,8 @@ class GitHubConnection(IdentityMixin, Connection):
             return _decode_installation(resp)
         except Exception as e:  # noqa: BLE001 - classified below
             if httpx.status(e) == 404:
-                raise wrap_error(Code.CREDENTIAL_REJECTED, e, f"the App is not installed in organization {self.org} (or app_id is wrong)") from e
-            raise self.classify(e, "read its installation in " + self.org) from e
+                raise wrap_error(Code.CREDENTIAL_REJECTED, e, f"the App is not installed in organization {self.org} (or app_id is wrong)")
+            raise self.classify(e, "read its installation in " + self.org)
 
     def _installation_id_for(self, ctx: Context) -> str:
         """The configured or discovered installation id."""
@@ -575,8 +554,8 @@ class GitHubConnection(IdentityMixin, Connection):
             token, expires_at = jsonx.s(d, "token"), jsonx.s(d, "expires_at")
         except Exception as e:  # noqa: BLE001 - classified below
             if httpx.status(e) == 404:
-                raise wrap_error(Code.CREDENTIAL_REJECTED, e, f"installation {iid} was not found for this App") from e
-            raise self.classify(e, "create an installation token") from e
+                raise wrap_error(Code.CREDENTIAL_REJECTED, e, f"installation {iid} was not found for this App")
+            raise self.classify(e, "create an installation token")
         if token == "":
             raise errorf(Code.UPSTREAM_ERROR, "the installation token response carried no token")
         expiry: float | None = None
@@ -609,9 +588,12 @@ class GitHubConnection(IdentityMixin, Connection):
         st = httpx.status(err)
         if st == 403:
             se = as_error(err, httpx.StatusError)
-            if se is not None and se.header is not None:
-                if go_trim_space(se.header.get("X-RateLimit-Remaining")) == "0" or se.header.get("Retry-After") != "":
-                    return wrap_error(Code.UPSTREAM_RATE_LIMIT, err, "GitHub rate limit exhausted for the App installation")
+            if (
+                se is not None
+                and se.header is not None
+                and (go_trim_space(se.header.get("X-RateLimit-Remaining")) == "0" or se.header.get("Retry-After") != "")
+            ):
+                return wrap_error(Code.UPSTREAM_RATE_LIMIT, err, "GitHub rate limit exhausted for the App installation")
             return wrap_error(Code.CREDENTIAL_REJECTED, err, f"the App may not {what} (HTTP 403); check its permissions")
         if st == 401:
             return wrap_error(Code.CREDENTIAL_REJECTED, err, "the App's credential was rejected (HTTP 401)")
@@ -636,7 +618,7 @@ class GitHubConnection(IdentityMixin, Connection):
                 self.tokens.invalidate()
                 resp = do()
         except Exception as e:  # noqa: BLE001 - classified below
-            raise self.classify(e, "query GraphQL") from e
+            raise self.classify(e, "query GraphQL")
         try:
             env = jsonx.obj(resp.json())
             errors = []
@@ -644,7 +626,7 @@ class GitHubConnection(IdentityMixin, Connection):
                 x = jsonx.obj(x)
                 errors.append((jsonx.s(x, "type"), jsonx.s(x, "message")))
         except Exception as e:  # noqa: BLE001 - any decode failure
-            raise wrap_error(Code.UPSTREAM_ERROR, e, "GraphQL response was not JSON") from e
+            raise wrap_error(Code.UPSTREAM_ERROR, e, "GraphQL response was not JSON")
         for typ, _ in errors:
             if typ.upper() in ("INSUFFICIENT_SCOPES", "FORBIDDEN"):
                 raise errorf(
@@ -666,7 +648,7 @@ class GitHubConnection(IdentityMixin, Connection):
         try:
             return decode_saml_data(data)
         except Exception as e:  # noqa: BLE001 - any decode failure
-            raise wrap_error(Code.UPSTREAM_ERROR, e, "GraphQL data could not be decoded") from e
+            raise wrap_error(Code.UPSTREAM_ERROR, e, "GraphQL data could not be decoded")
 
     # -- check -----------------------------------------------------------
 
@@ -692,8 +674,8 @@ class GitHubConnection(IdentityMixin, Connection):
             return _decode_repo_meta(self._get(ctx, repo_path))
         except Exception as e:  # noqa: BLE001 - classified below
             if api_status(e) == 404:
-                raise errorf(Code.RESOURCE_NOT_VISIBLE, f"repository {repo} is not visible to the App") from e
-            raise self.classify(e, "read repository " + repo) from e
+                raise errorf(Code.RESOURCE_NOT_VISIBLE, f"repository {repo} is not visible to the App")
+            raise self.classify(e, "read repository " + repo)
 
     def _check_repo(self, ctx: Context, a: GHAction, t: Target, login: str) -> Decision:
         repo_path = "/repos/" + httpx.path_escape(t.owner) + "/" + httpx.path_escape(t.repo)
@@ -705,7 +687,7 @@ class GitHubConnection(IdentityMixin, Connection):
                     Code.RESOURCE_NOT_VISIBLE,
                     f"repository {t.owner}/{t.repo} is not visible to the App, or {login} is not a collaborator on a private repository",
                 )
-            raise self.classify(e, "read collaborator permissions on " + t.owner + "/" + t.repo) from e
+            raise self.classify(e, "read collaborator permissions on " + t.owner + "/" + t.repo)
         repo = t.owner + "/" + t.repo
         if rec.has_user and rec.perms is not None:
             perms = rec.perms
@@ -771,10 +753,10 @@ class GitHubConnection(IdentityMixin, Connection):
         except Exception as e:  # noqa: BLE001 - classified below
             st = api_status(e)
             if st == 403:
-                raise self._forbidden(e, f"branch rules of {t} not readable; grant the App Repository Administration: read") from e
+                raise self._forbidden(e, f"branch rules of {t} not readable; grant the App Repository Administration: read")
             if st == 404:
-                raise errorf(Code.RESOURCE_NOT_VISIBLE, f"branch {t} does not exist or is not visible to the App") from e
-            raise self.classify(e, "read branch rules of " + t.owner + "/" + t.repo) from e
+                raise errorf(Code.RESOURCE_NOT_VISIBLE, f"branch {t} does not exist or is not visible to the App")
+            raise self.classify(e, "read branch rules of " + t.owner + "/" + t.repo)
 
     def _branch_protection(self, ctx: Context, t: Target, repo_path: str) -> _Protection | None:
         """The classic protection of the branch; None when the branch has
@@ -786,8 +768,8 @@ class GitHubConnection(IdentityMixin, Connection):
             if st == 404:
                 return None
             if st == 403:
-                raise self._forbidden(e, f"branch protection of {t} not readable; grant the App Repository Administration: read") from e
-            raise self.classify(e, "read branch protection of " + t.owner + "/" + t.repo) from e
+                raise self._forbidden(e, f"branch protection of {t} not readable; grant the App Repository Administration: read")
+            raise self.classify(e, "read branch protection of " + t.owner + "/" + t.repo)
 
     def _in_restrictions(self, ctx: Context, t: Target, prot: _Protection, login: str) -> bool:
         """Whether the login may push under the branch's push restrictions:
@@ -808,8 +790,8 @@ class GitHubConnection(IdentityMixin, Connection):
                 if st == 404:
                     continue
                 if st == 403:
-                    raise self._forbidden(e, f"branch {t} restricts pushes to team {slug}, whose members the App may not read") from e
-                raise self.classify(e, "read memberships of team " + t.owner + "/" + slug) from e
+                    raise self._forbidden(e, f"branch {t} restricts pushes to team {slug}, whose members the App may not read")
+                raise self.classify(e, "read memberships of team " + t.owner + "/" + slug)
             if m.state == "active":
                 return True
             if m.state == "":
@@ -875,7 +857,7 @@ class GitHubConnection(IdentityMixin, Connection):
         except Exception as e:  # noqa: BLE001 - classified below
             if api_status(e) == 404:
                 return None
-            raise self.classify(e, "read organization memberships of " + t.owner) from e
+            raise self.classify(e, "read organization memberships of " + t.owner)
 
     def _check_org(self, ctx: Context, a: GHAction, t: Target, login: str) -> Decision:
         m = self._org_membership(ctx, t, login)
@@ -905,9 +887,11 @@ class GitHubConnection(IdentityMixin, Connection):
                 ("internal", _opt_bool(org, "members_can_create_internal_repositories")),
             ]
         except Exception as e:  # noqa: BLE001 - classified below
-            raise self.classify(e, "read organization " + t.owner) from e
+            raise self.classify(e, "read organization " + t.owner)
         if can_create is None:
-            return unsupported(f"GitHub did not report whether members of {t.owner} may create repositories; the App may need Organization administration: read")
+            return unsupported(
+                f"GitHub did not report whether members of {t.owner} may create repositories; the App may need Organization administration: read"
+            )
         if not can_create:
             return denied(f"{login} is a member of organization {t.owner}, whose members may not create repositories")
         kinds = [name for name, v in kinds_raw if v]
@@ -922,7 +906,7 @@ class GitHubConnection(IdentityMixin, Connection):
             m = _decode_membership(self._get(ctx, team_path + "/memberships/" + httpx.path_escape(login)))
         except Exception as e:  # noqa: BLE001 - classified below
             if api_status(e) != 404:
-                raise self.classify(e, "read memberships of team " + str(t)) from e
+                raise self.classify(e, "read memberships of team " + str(t))
             # 404 is both "not a member" and "no such team"; tell them apart
             # so a typo in the slug is not reported as a deny.
             try:
@@ -930,7 +914,7 @@ class GitHubConnection(IdentityMixin, Connection):
             except Exception as e2:  # noqa: BLE001 - classified below
                 if api_status(e2) == 404:
                     return unknown_decision(Code.RESOURCE_NOT_VISIBLE, f"team {t} does not exist or is not visible to the App")
-                raise self.classify(e2, "read team " + str(t)) from e2
+                raise self.classify(e2, "read team " + str(t))
             return denied(f"{login} is not a member of team {t}")
         if m.state == "":
             return unsupported(f"GitHub reported no membership state for {login} in team {t}")
@@ -953,15 +937,13 @@ class GitHubConnection(IdentityMixin, Connection):
             d = jsonx.obj(v)
             slug, app_name = jsonx.s(d, "slug"), jsonx.s(d, "name")
         except Exception as e:  # noqa: BLE001 - classified below
-            raise self.classify(e, "read the App (GET /app)") from e
+            raise self.classify(e, "read the App (GET /app)")
         inst = self._installation(ctx)
         name = slug or _or_empty(app_name, self.app_id)
         summary = f"app {name} installed in {self.org}"
         warnings: list[str] = []
         if self.installation_id != "" and inst.id != self.installation_id:
-            warnings.append(
-                f"installation_id {self.installation_id} does not match the installation GitHub reports for {self.org} ({inst.id})"
-            )
+            warnings.append(f"installation_id {self.installation_id} does not match the installation GitHub reports for {self.org} ({inst.id})")
         if inst.permissions.get("metadata", "") == "":
             warnings.append("the installation lacks Repository metadata: read; repository permission checks will fail")
         if inst.permissions.get("members", "") == "":

@@ -779,8 +779,13 @@ class Response:
         stripped = text.lstrip(" \t\r\n")
         if not stripped:
             raise ValueError("empty body")
-        v, _ = json.JSONDecoder().raw_decode(stripped)
+        v, _ = json.JSONDecoder(parse_constant=_reject_constant).raw_decode(stripped)
         return v
+
+
+def _reject_constant(name: str) -> Any:
+    """NaN, Infinity and -Infinity are not JSON; Go's decoder rejects them."""
+    raise ValueError(f"invalid character {name[0]!r} looking for beginning of value")
 
 
 def encode_query(q: Mapping[str, str | list[str]] | None) -> str:

@@ -56,7 +56,10 @@ def site_fields() -> list[Field]:
             name="auth_mode",
             default=MODE_BASIC,
             enum=(MODE_BASIC, MODE_SCOPED_TOKEN, MODE_OAUTH_CLIENT),
-            description="basic: email + API token against the site; scoped_token: scoped API token against api.atlassian.com; oauth_client: OAuth 2.0 client credentials",
+            description=(
+                "basic: email + API token against the site; scoped_token: scoped API token against api.atlassian.com; "
+                "oauth_client: OAuth 2.0 client credentials"
+            ),
         ),
         Field(name="username", description="email of the bot account (required for auth_mode basic)"),
         credential_field(True, "API token (basic, scoped_token) or OAuth client secret (oauth_client)"),
@@ -182,7 +185,7 @@ def new_site(s: Settings, d: Deps, product: str) -> Site:
         product=product,
         gateway=GATEWAY.rstrip("/"),
         token_url=TOKEN_URL,
-        now=d.now or time.time,
+        now=d.now if callable(d.now) else time.time,
     )
     site._plain = httpx.Client(http=hc, logger=d.logger)
 

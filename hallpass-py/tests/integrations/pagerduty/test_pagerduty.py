@@ -155,7 +155,13 @@ class Fake:
             if svc is None:
                 pd_err(w, 404, 2100)
                 return
-            inc: dict[str, Any] = {"id": iid, "type": "incident", "status": "triggered", "title": itest.CANARY, "teams": refs(self.incident_teams.get(iid, []), "team")}
+            inc: dict[str, Any] = {
+                "id": iid,
+                "type": "incident",
+                "status": "triggered",
+                "title": itest.CANARY,
+                "teams": refs(self.incident_teams.get(iid, []), "team"),
+            }
             if r.q("include[]") == "services" and not self.no_expand:
                 inc["service"] = {"id": svc, "type": "service", "teams": refs(self.objects.get("services/" + svc, []), "team")}
             else:
@@ -495,7 +501,7 @@ def test_probe(setup: Callable[[], Env]) -> None:
 def test_new_rejects_bad_settings(srv: itest.Server) -> None:
     deps, _ = itest.deps(srv)
     s = itest.settings("pd", "pagerduty", {}, None)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         PagerDuty().new(background(), s, deps)
     validate_fields(PagerDuty().fields())
 

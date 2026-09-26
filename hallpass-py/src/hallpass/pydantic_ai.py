@@ -149,7 +149,7 @@ class HallpassToolset(WrapperToolset[Any]):
                     outcome = Outcome(True)
             else:
                 outcome = await self.policy.decide(name, tool_args, ctx, tool.tool_def.parameters_json_schema)
-        except Exception as e:  # fail closed: an error in the check refuses the call
+        except Exception as e:  # noqa: BLE001 - fail closed: an error in the check refuses the call
             outcome = Outcome(False, f"the hallpass check failed: {type(e).__name__}: {e}")
         if not outcome.allowed:
             raise ToolFailed(refusal(outcome))

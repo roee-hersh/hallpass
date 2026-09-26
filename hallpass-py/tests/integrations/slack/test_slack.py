@@ -396,7 +396,7 @@ def is_code(err: BaseException | None, code: Code) -> bool:
 def probe_err(c: Connection) -> BaseException | None:
     try:
         c.probe(background())
-    except Exception as e:  # noqa: BLE001 - the error is what the test inspects
+    except Exception as e:
         return e
     return None
 
@@ -417,7 +417,9 @@ def test_identity(env: Env) -> None:
     assert ident.attr(ATTR_ENTERPRISE_ADMIN) == "", "non-Grid user should have no enterprise attrs"
     assert isinstance(ident.native, SlackUser), f"native is {type(ident.native)}"
     last = srv.last_call()
-    assert last.method == "GET" and last.path == "/api/users.lookupByEmail" and last.q("email") == dana.email, f"lookup call {last.method} {last.path} {last.query}"
+    assert last.method == "GET" and last.path == "/api/users.lookupByEmail" and last.q("email") == dana.email, (
+        f"lookup call {last.method} {last.path} {last.query}"
+    )
     assert "team_id" not in last.query, "team_id sent without configuration"
 
     ident = c.resolve_identity(background(), admin)
@@ -916,7 +918,7 @@ def test_failures(env: Env) -> None:
                 background(),
                 CheckRequest(user=dana, identity=ident, action=act, action_name="channel.read", resource=must_res("channel:" + G_PRIVATE)),
             )
-        except Exception as e:  # noqa: BLE001 - Go: ToDecision(err)
+        except Exception as e:  # Go: ToDecision(err)
             return to_decision(e)
 
     itest.failure_cases(srv, direct)
@@ -925,14 +927,16 @@ def test_failures(env: Env) -> None:
 def test_probe(env: Env) -> None:
     _, f, c = env.setup()
     r = c.probe(background())
-    assert "U0000HALLP" in r.summary and "Acme" in r.summary and "B0000HALLP" in r.summary and "channel properties visible" in r.summary, f"summary {r.summary!r}"
+    assert "U0000HALLP" in r.summary and "Acme" in r.summary and "B0000HALLP" in r.summary and "channel properties visible" in r.summary, (
+        f"summary {r.summary!r}"
+    )
     assert len(r.warnings) == 0, f"warnings {r.warnings}"
 
     f.scopes_hdr = "users:read,users:read.email,channels:read,groups:read,chat:write,channels:manage,admin.users:read"
     r = c.probe(background())
-    assert (
-        len(r.warnings) == 1 and "chat:write" in r.warnings[0] and "channels:manage" in r.warnings[0] and "admin.users:read" in r.warnings[0]
-    ), f"write scope warnings {r.warnings}"
+    assert len(r.warnings) == 1 and "chat:write" in r.warnings[0] and "channels:manage" in r.warnings[0] and "admin.users:read" in r.warnings[0], (
+        f"write scope warnings {r.warnings}"
+    )
     f.scopes_hdr = "users:read,channels:read"
     r = c.probe(background())
     assert len(r.warnings) == 1 and "users:read.email" in r.warnings[0] and "groups:read" in r.warnings[0], f"missing scope warnings {r.warnings}"

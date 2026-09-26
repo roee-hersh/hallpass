@@ -1,0 +1,203 @@
+# The argocd integration: Argo CD's RBAC evaluated locally from config maps
+# and AppProjects read through a kubernetes connection, against a static
+# fake of the API server. Each kubernetes connection's URL carries its own
+# path prefix so each Argo CD installation gets its own objects:
+#   argo (/main): groups, a deny rule, the email scope, a project role, v3
+#     defaults; argo-email: the same with user_subject email.
+#   argo-legacy (/legacy): fine-grained inheritance and rollback enforcement
+#     switched on in argocd-cm, a default role, policy.*.csv overlays.
+#   argo-users (/users): user-level rules without the email scope.
+#   argo-regex (/regex): policy.matchMode regex.
+#   argo-invalid (/invalid): a policy Argo CD would reject.
+#   argo-empty (/empty): no config maps or projects at all (builtin only).
+#   argo-forbidden, argo-broken: upstream failures.
+# Argo CD has no user directory, so user_not_found cannot occur.
+connections:
+  - {id: k8s-main, integration: kubernetes, url: "{{url}}/main", ca_file: "{{ca_file}}", credential: env:K8S_TOKEN}
+  - {id: k8s-legacy, integration: kubernetes, url: "{{url}}/legacy", ca_file: "{{ca_file}}", credential: env:K8S_TOKEN}
+  - {id: k8s-users, integration: kubernetes, url: "{{url}}/users", ca_file: "{{ca_file}}", credential: env:K8S_TOKEN}
+  - {id: k8s-regex, integration: kubernetes, url: "{{url}}/regex", ca_file: "{{ca_file}}", credential: env:K8S_TOKEN}
+  - {id: k8s-invalid, integration: kubernetes, url: "{{url}}/invalid", ca_file: "{{ca_file}}", credential: env:K8S_TOKEN}
+  - {id: k8s-empty, integration: kubernetes, url: "{{url}}/empty", ca_file: "{{ca_file}}", credential: env:K8S_TOKEN}
+  - {id: k8s-forbidden, integration: kubernetes, url: "{{url}}/forbidden", ca_file: "{{ca_file}}", credential: env:K8S_TOKEN}
+  - {id: k8s-broken, integration: kubernetes, url: "{{url}}/broken", ca_file: "{{ca_file}}", credential: env:K8S_TOKEN}
+  - {id: argo, integration: argocd, kubernetes_connection: k8s-main}
+  - {id: argo-email, integration: argocd, kubernetes_connection: k8s-main, user_subject: email}
+  - {id: argo-legacy, integration: argocd, kubernetes_connection: k8s-legacy, namespace: argocd, rbac_configmap: argocd-rbac-cm}
+  - {id: argo-users, integration: argocd, kubernetes_connection: k8s-users}
+  - {id: argo-users-email, integration: argocd, kubernetes_connection: k8s-users, user_subject: email}
+  - {id: argo-regex, integration: argocd, kubernetes_connection: k8s-regex}
+  - {id: argo-invalid, integration: argocd, kubernetes_connection: k8s-invalid}
+  - {id: argo-empty, integration: argocd, kubernetes_connection: k8s-empty, user_subject: email}
+  - {id: argo-forbidden, integration: argocd, kubernetes_connection: k8s-forbidden}
+  - {id: argo-broken, integration: argocd, kubernetes_connection: k8s-broken}
+env:
+  K8S_TOKEN: parity-sa-token
+upstream:
+  # main
+  - method: GET
+    path: /main/api/v1/namespaces/argocd/configmaps/argocd-rbac-cm
+    json:
+      data:
+        scopes: "[groups, email]"
+        policy.default: ""
+        policy.csv: |
+          p, role:dev, applications, get, dev/*, allow
+          p, role:dev, applications, sync, dev/*, allow
+          p, role:dev, logs, get, dev/*, allow
+          p, role:ops, applications, *, */*, allow
+          p, role:ops, applications, delete, prod/*, deny
+          p, role:ops, clusters, get, *, allow
+          p, role:ops, projects, get, *, allow
+          p, role:ops, applications, action/apps/Deployment/*, */*, allow
+          p, role:ops, applications, update/apps/Deployment/*, */*, allow
+          p, role:ops, repositories, *, "https://github.com/acme/*", allow
+          g, developers, role:dev
+          g, sre, role:ops
+          g, dana@example.com, role:ops
+          g, admins, role:admin
+  - method: GET
+    path: /main/api/v1/namespaces/argocd/configmaps/argocd-cm
+    json: {data: {url: "https://argocd.example.com"}}
+  - method: GET
+    path: /main/apis/argoproj.io/v1alpha1/namespaces/argocd/appprojects
+    json:
+      items:
+        - {metadata: {name: dev}, spec: {}}
+        - {metadata: {name: prod}, spec: {}}
+        - metadata: {name: team-a}
+          spec:
+            roles:
+              - name: deployer
+                policies: ["p, proj:team-a:deployer, applications, sync, team-a/*, allow"]
+                groups: [team-a-devs]
+        - metadata: {name: broken}
+          spec:
+            roles:
+              - {name: r, policies: [garbage], groups: [sre]}
+  # legacy
+  - method: GET
+    path: /legacy/api/v1/namespaces/argocd/configmaps/argocd-rbac-cm
+    json:
+      data:
+        policy.default: role:readonly
+        policy.csv: |
+          p, role:ops, applications, update, */*, allow
+          p, role:ops, applications, delete, */*, allow
+          p, role:ops, applications, delete, prod/*, deny
+        policy.overlay.csv: "g, sre, role:ops"
+        policy.team.csv: |
+          p, role:syncer, applications, sync, */*, allow
+          g, syncers, role:syncer
+  - method: GET
+    path: /legacy/api/v1/namespaces/argocd/configmaps/argocd-cm
+    json: {data: {server.rbac.disableApplicationFineGrainedRBACInheritance: "false", server.rbac.rollback.enforce.enable: "true"}}
+  - method: GET
+    path: /legacy/apis/argoproj.io/v1alpha1/namespaces/argocd/appprojects
+    json: {items: []}
+  # users
+  - method: GET
+    path: /users/api/v1/namespaces/argocd/configmaps/argocd-rbac-cm
+    json:
+      data:
+        scopes: "[groups]"
+        policy.csv: |
+          p, dana@example.com, projects, update, dev, allow
+          p, role:dev, applications, get, dev/*, allow
+          g, developers, role:dev
+  - method: GET
+    path: /users/api/v1/namespaces/argocd/configmaps/argocd-cm
+    json: {data: {}}
+  - method: GET
+    path: /users/apis/argoproj.io/v1alpha1/namespaces/argocd/appprojects
+    json: {items: []}
+  # regex
+  - method: GET
+    path: /regex/api/v1/namespaces/argocd/configmaps/argocd-rbac-cm
+    json:
+      data:
+        policy.matchMode: regex
+        policy.csv: |
+          p, role:dev, applications, "get|sync", "^(dev|staging)/", allow
+          p, role:dev, clusters, get, "https://k8s-[a-z]{2}\.example\.com", allow
+          p, role:bad, applications, get, "dev/(", allow
+          g, developers, role:dev
+          g, bad, role:bad
+  - method: GET
+    path: /regex/api/v1/namespaces/argocd/configmaps/argocd-cm
+    json: {data: {}}
+  - method: GET
+    path: /regex/apis/argoproj.io/v1alpha1/namespaces/argocd/appprojects
+    json: {items: []}
+  # invalid
+  - method: GET
+    path: /invalid/api/v1/namespaces/argocd/configmaps/argocd-rbac-cm
+    json: {data: {policy.csv: "p, role:x, applications, get, \"dev/*\"x, allow"}}
+  - method: GET
+    path: /invalid/api/v1/namespaces/argocd/configmaps/argocd-cm
+    json: {data: {}}
+  - method: GET
+    path: /invalid/apis/argoproj.io/v1alpha1/namespaces/argocd/appprojects
+    json: {items: []}
+  # forbidden
+  - method: GET
+    path: /forbidden/api/v1/namespaces/argocd/configmaps/argocd-rbac-cm
+    status: 403
+    json: {kind: Status, message: forbidden, code: 403}
+  # broken
+  - method: GET
+    path: /broken/api/v1/namespaces/argocd/configmaps/argocd-rbac-cm
+    status: 500
+    json: {kind: Status, message: internal error, code: 500}
+checks:
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:dev/web", connection: argo, want: allowed}
+  - {user: dev@example.com, groups: [developers], action: logs.get, resource: "applications:dev/web", connection: argo, want: allowed}
+  - {user: dev@example.com, groups: [developers], action: app.delete, resource: "applications:dev/web", connection: argo, want: denied}
+  - {user: dev@example.com, groups: [developers], action: app.rollback, resource: "applications:dev/web", connection: argo, want: allowed}
+  - {user: sre@example.com, groups: [sre], action: app.delete, resource: "applications:prod/web", connection: argo, want: denied}
+  - {user: sre@example.com, groups: [sre, developers], action: app.delete, resource: "applications:dev/web", connection: argo, want: allowed}
+  - {user: sre@example.com, groups: [sre], action: cluster.get, resource: "clusters:https://kubernetes.default.svc", connection: argo, want: allowed}
+  - {user: sre@example.com, groups: [sre], action: repo.update, resource: "repositories:https://github.com/acme/api.git", connection: argo, want: allowed}
+  - {user: sre@example.com, groups: [sre], action: repo.update, resource: "repositories:https://gitlab.com/acme/api.git", connection: argo, want: denied}
+  - {user: sre@example.com, groups: [sre], action: "app.update/apps/Deployment/default/web", resource: "applications:dev/web", connection: argo, want: allowed}
+  - {user: sre@example.com, groups: [sre], action: "app.update/apps/StatefulSet/default/db", resource: "applications:dev/web", connection: argo, want: allowed}
+  - {user: sre@example.com, groups: [sre], action: "app.action/apps/Deployment/restart", resource: "applications:dev/web", connection: argo, want: allowed}
+  - {user: sre@example.com, groups: [sre], action: "app.delete//Pod/default/web-0", resource: "applications:prod/web", connection: argo, want: allowed}
+  - {user: dev@example.com, groups: [developers], action: "app.delete//Pod/default/web-0", resource: "applications:dev/web", connection: argo, want: denied}
+  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:broken/x", connection: argo, want: allowed}
+  - {user: dana@example.com, action: app.sync, resource: "applications:prod/web", connection: argo, want: allowed}
+  - {user: dana@example.com, action: app.sync, resource: "applications:prod/web", connection: argo-email, want: allowed}
+  - {user: nobody@example.com, action: app.get, resource: "applications:dev/web", connection: argo, want: denied}
+  - {user: nobody@example.com, action: app.get, resource: "applications:dev/web", connection: argo-email, want: denied}
+  - {user: a@example.com, groups: [team-a-devs], action: app.sync, resource: "applications:team-a/api", connection: argo, want: allowed}
+  - {user: a@example.com, groups: [team-a-devs], action: project.get, resource: "projects:team-a", connection: argo, want: allowed}
+  - {user: a@example.com, groups: [team-a-devs], action: app.sync, resource: "applications:dev/api", connection: argo, want: denied}
+  - {user: x@example.com, groups: [admins], action: exec.create, resource: "exec:prod/web", connection: argo, want: allowed}
+  - {user: x@example.com, groups: [admins], action: extension.invoke, resource: "extensions:metrics", connection: argo, want: denied}
+  - {user: x@example.com, groups: [admins], action: gpgkey.create, resource: "gpgkeys:ABCD", connection: argo, want: allowed}
+  - {user: x@example.com, groups: [admins], action: writerepo.delete, resource: "write_repositories:https://github.com/acme/api", connection: argo, want: allowed}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "projects:dev", connection: argo, want: invalid_request}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:noslash", connection: argo, want: invalid_request}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "things:dev/web", connection: argo, want: invalid_request}
+  - {user: dev@example.com, groups: [developers], action: project.get, resource: "projects:", connection: argo, want: invalid_request}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:dev/we b", connection: argo, want: invalid_request}
+  - {user: dev@example.com, groups: [developers], action: app.frobnicate, resource: "applications:dev/web", connection: argo, want: unknown_action}
+  - {user: dev@example.com, groups: [developers], action: "app.action/apps/Deployment/", resource: "applications:dev/web", connection: argo, want: unknown_action}
+  - {user: sre@example.com, groups: [sre], action: "app.delete/apps/StatefulSet/default/db", resource: "applications:dev/web", connection: argo-legacy, want: allowed}
+  - {user: sre@example.com, groups: [sre], action: "app.delete/apps/StatefulSet/default/db", resource: "applications:prod/web", connection: argo-legacy, want: denied}
+  - {user: sre@example.com, groups: [sre], action: app.rollback, resource: "applications:dev/web", connection: argo-legacy, want: denied}
+  - {user: s@example.com, groups: [syncers], action: app.sync, resource: "applications:prod/web", connection: argo-legacy, want: allowed}
+  - {user: nobody@example.com, action: app.get, resource: "applications:prod/web", connection: argo-legacy, want: allowed}
+  - {user: nobody@example.com, action: app.sync, resource: "applications:prod/web", connection: argo-legacy, want: denied}
+  - {user: dana@example.com, action: project.update, resource: "projects:dev", connection: argo-users, want: unsupported}
+  - {user: dana@example.com, action: project.update, resource: "projects:dev", connection: argo-users-email, want: allowed}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:dev/web", connection: argo-users, want: allowed}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:staging/web", connection: argo-regex, want: allowed}
+  - {user: dev@example.com, groups: [developers], action: app.sync, resource: "applications:prod/web", connection: argo-regex, want: denied}
+  - {user: dev@example.com, groups: [developers], action: cluster.get, resource: "clusters:https://k8s-eu.example.com", connection: argo-regex, want: allowed}
+  - {user: dev@example.com, groups: [developers], action: cluster.get, resource: "clusters:https://k8s-eu-example.com", connection: argo-regex, want: denied}
+  - {user: b@example.com, groups: [bad], action: app.get, resource: "applications:dev/(", connection: argo-regex, want: denied}
+  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:dev/web", connection: argo-invalid, want: unsupported}
+  - {user: admin@example.com, action: app.get, resource: "applications:a/b", connection: argo-empty, want: denied}
+  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:dev/web", connection: argo-forbidden, want: credential_rejected}
+  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:dev/web", connection: argo-broken, want: upstream_error}

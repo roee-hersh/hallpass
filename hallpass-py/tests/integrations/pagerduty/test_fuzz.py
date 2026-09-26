@@ -50,7 +50,7 @@ def test_fuzz_parse_target_seeds(action: str, resource: str) -> None:
 
 
 _ACTIONS = st.one_of(st.sampled_from([a.name for a in ACTION_LIST]), st.text())
-_TYPES = st.sampled_from(sorted({a.resource for a in ACTION_LIST}) + ["other"])
+_TYPES = st.sampled_from([*sorted({a.resource for a in ACTION_LIST}), "other"])
 _RESOURCES = st.one_of(st.text(), st.builds(lambda t, i: t + ":" + i, _TYPES, st.text()), _TYPES)
 
 

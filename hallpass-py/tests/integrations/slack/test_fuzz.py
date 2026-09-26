@@ -61,7 +61,7 @@ def test_fuzz_validate_resource_seeds(action: str, resource: str) -> None:
 
 
 _ACTIONS = st.one_of(st.sampled_from([a.name for a in ACTION_LIST]), st.text())
-_TYPES = st.sampled_from(sorted({a.resource for a in ACTION_LIST}) + ["other"])
+_TYPES = st.sampled_from([*sorted({a.resource for a in ACTION_LIST}), "other"])
 _IDS = st.one_of(st.text(), st.from_regex(r"[CGS][A-Z0-9]{8,12}(\n|\?x=1|&x=1)?", fullmatch=True))
 _RESOURCES = st.one_of(st.text(), st.builds(lambda t, i: t + ":" + i, _TYPES, _IDS), _TYPES)
 

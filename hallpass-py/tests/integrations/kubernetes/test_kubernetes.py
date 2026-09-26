@@ -96,7 +96,12 @@ def setup() -> Iterator[Setup]:
         srv.handle("POST", RULES, rules_handler(None))
         api = FakeAPI(
             {
-                "dana@example.com": ["get pods payments ", "create deployments.apps payments ", "get pods/log payments ", "update deployments.apps/scale payments api"],
+                "dana@example.com": [
+                    "get pods payments ",
+                    "create deployments.apps payments ",
+                    "get pods/log payments ",
+                    "update deployments.apps/scale payments api",
+                ],
                 "bob@example.com": ["get pods payments "],
                 "oidc:dana@example.com": ["get pods payments "],
                 "oidc:platform-team": ["create pods/exec payments "],
@@ -139,7 +144,9 @@ def test_raw_allow_deny_and_body(setup: Setup) -> None:
     assert spec["user"] == "dana@example.com" and spec.get("groups") == ["platform-team", "system:authenticated"], spec
     ra = spec.get("resourceAttributes")
     assert ra is not None, spec
-    assert ra.get("namespace") == "payments" and ra["verb"] == "get" and ra["resource"] == "pods" and ra.get("name") == "api-0" and ra.get("group", "") == "", ra
+    assert ra.get("namespace") == "payments" and ra["verb"] == "get" and ra["resource"] == "pods" and ra.get("name") == "api-0" and ra.get("group", "") == "", (
+        ra
+    )
     itest.expect_code(check(c, dana, "raw:delete:pods", "namespace:payments"), Code.DENIED)
     itest.expect_code(check(c, dana, "raw:get:pods", "namespace:other"), Code.DENIED)
     itest.expect_code(check(c, bob, "raw:get:pods", "namespace:billing"), Code.DENIED)
@@ -297,7 +304,9 @@ def test_bad_resources_match_action_rejects(bad: str) -> None:
     assert Integration().match_action(bad) is None, f"match_action({bad!r}) accepted"
 
 
-@pytest.mark.parametrize("ok", ["raw:get:pods", "raw:create:deployments.apps", "raw:get:pods/log", "raw:impersonate:users", "raw:use:podsecuritypolicies.policy"])
+@pytest.mark.parametrize(
+    "ok", ["raw:get:pods", "raw:create:deployments.apps", "raw:get:pods/log", "raw:impersonate:users", "raw:use:podsecuritypolicies.policy"]
+)
 def test_bad_resources_match_action_accepts(ok: str) -> None:
     # Go: TestBadResources, third loop.
     assert Integration().match_action(ok) is not None, f"match_action({ok!r}) rejected"

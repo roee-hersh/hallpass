@@ -126,9 +126,7 @@ def parse_context_entries(v: str) -> list[ContextEntry]:
         seen.add(key)
         typ, sep, val = rest.partition(":")
         if not sep:
-            raise ValueError(
-                f"context entry {go_quote(part)} must be key=type:value with type one of string, stringList, numeric, boolean, ip, binary, date"
-            )
+            raise ValueError(f"context entry {go_quote(part)} must be key=type:value with type one of string, stringList, numeric, boolean, ip, binary, date")
         canon = _CONTEXT_TYPES.get(go_lower(go_trim_space(typ)))
         if canon is None:
             raise ValueError(f"context type {go_quote(typ)} must be one of string, stringList, numeric, boolean, ip, binary, date")
@@ -669,5 +667,7 @@ class AWSConnection(IdentityResolver, Connection):
                 warnings.append(f"sso:ListInstances did not list sso_instance_arn {self.sso_instance_arn} ({len(pairs)} instances visible)")
             if not roles:
                 warnings.append("no AWSReservedSSO roles in the account; every user will be denied until a permission set is provisioned")
-        warnings.append("iam:SimulatePrincipalPolicy discloses information about the permissions granted to other users; this is inherent to how hallpass checks")
+        warnings.append(
+            "iam:SimulatePrincipalPolicy discloses information about the permissions granted to other users; this is inherent to how hallpass checks"
+        )
         return ProbeResult(summary=summary, warnings=tuple(warnings))

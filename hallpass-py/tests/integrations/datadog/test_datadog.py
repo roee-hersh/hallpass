@@ -606,7 +606,7 @@ def test_new_rejects_bad_settings(srv: itest.Server) -> None:
     cases: list[dict[str, Secret]] = [{}, {"api_key": itest.literal("a")}, {"credential": itest.literal("b")}]
     for secrets in cases:
         s = itest.settings("dd", "datadog", {}, secrets)
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             Datadog().new(background(), s, deps)
     validate_fields(Datadog().fields())
 
@@ -617,6 +617,6 @@ def test_catalog() -> None:
         assert a.name not in seen and a.description != "", f"action {a.name} duplicated or undescribed"
         seen.add(a.name)
     assert find_action(Datadog(), "raw:monitors_write") is not None, "raw:monitors_write not matched"
-    for a in ACTION_LIST:
-        assert a.resource in ASSET_TYPES or a.resource == "org", f"action {a.name} names unknown resource {a.resource}"
-        assert (a.resource == "org") == (a.relation == ""), f"action {a.name}: org actions carry no relation, asset actions do"
+    for da in ACTION_LIST:
+        assert da.resource in ASSET_TYPES or da.resource == "org", f"action {da.name} names unknown resource {da.resource}"
+        assert (da.resource == "org") == (da.relation == ""), f"action {da.name}: org actions carry no relation, asset actions do"

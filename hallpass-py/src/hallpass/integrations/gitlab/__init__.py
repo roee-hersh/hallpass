@@ -19,7 +19,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 from hallpass.core import jsonx
 from hallpass.core.cache import is_panic_type
@@ -72,6 +72,8 @@ from hallpass.integrations.gitlab.actions import (
 from hallpass.net import httpx
 
 __all__ = ["INTEGRATION", "GitLab", "GitLabConnection"]
+
+T = TypeVar("T")
 
 DEFAULT_URL = "https://gitlab.com"
 DEFAULT_TEMPLATE = "{local}"
@@ -400,7 +402,7 @@ class GitLab(Integration):
             logger=d.logger,
             auth=httpx.header_auth("PRIVATE-TOKEN", lambda _ctx: cred.get_string()),
         )
-        return GitLabConnection(client, mode, group, tpl, domains, d.now or time.time)
+        return GitLabConnection(client, mode, group, tpl, domains, d.now)
 
 
 @dataclass
@@ -424,7 +426,7 @@ class GitLabConnection(Connection):
         """The template applied to an email (identity_mode template)."""
         return self.template.render(email)
 
-    def _get(self, ctx: Context, path: str, q: dict[str, str] | None, decode: Callable[[Any], Any]) -> Any:
+    def _get(self, ctx: Context, path: str, q: dict[str, str] | None, decode: Callable[[Any], T]) -> T:
         """GetJSON into a typed value: a decode failure is an error of the
         call, as it is in Go."""
         _, v = self.client.get_json(ctx, path, q)

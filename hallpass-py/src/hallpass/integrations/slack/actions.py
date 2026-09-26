@@ -69,9 +69,8 @@ def validate_resource(action_name: str, res: Resource) -> SlackAction:
     elif a.resource == RES_CHANNEL:
         if not CHANNEL_ID_RE.fullmatch(res.id):
             raise ValueError(f"channel id {go_quote(res.id)} must be a Slack channel id such as C0123456789")
-    elif a.resource == RES_USERGROUP:
-        if not USERGROUP_ID_RE.fullmatch(res.id):
-            raise ValueError(f"usergroup id {go_quote(res.id)} must be a Slack user group id such as S0123456789")
+    elif a.resource == RES_USERGROUP and not USERGROUP_ID_RE.fullmatch(res.id):
+        raise ValueError(f"usergroup id {go_quote(res.id)} must be a Slack user group id such as S0123456789")
     return a
 
 

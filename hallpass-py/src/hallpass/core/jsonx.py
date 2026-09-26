@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["DecodeError", "arr", "b", "f", "i", "o", "obj", "s", "strs"]
+__all__ = ["DecodeError", "arr", "b", "f", "get", "i", "o", "obj", "s", "strs"]
 
 
 class DecodeError(ValueError):
@@ -43,19 +43,27 @@ def obj(v: Any, what: str = "value") -> dict[str, Any]:
     return v
 
 
-def _get(d: dict[str, Any] | None, key: str) -> Any:
-    """The member for key: an exact match, else a case-insensitive one, as
-    Go's decoder matches a struct field (ASCII folding, plus the Kelvin sign
-    and the long s, which fold to ASCII letters)."""
+def _fold(k: str) -> str:
+    """ASCII folding, plus the Kelvin sign and the long s, which fold to
+    ASCII letters: how Go's decoder compares a key with a field name."""
+    return "".join("k" if c == "\u212a" else "s" if c == "\u017f" else c.lower() if c.isascii() else c for c in k)
+
+
+def get(d: dict[str, Any] | None, key: str) -> Any:
+    """The raw member for key, found as Go's decoder finds a struct field:
+    every key equal to it or equal under case folding sets the field, so
+    the last such key in the document wins. None when there is none."""
     if d is None:
         return None
-    if key in d:
-        return d[key]
     lk = key.lower()
+    found: Any = None
     for k, v in d.items():
-        if len(k) == len(key) and "".join("k" if c == "K" else "s" if c == "ſ" else c.lower() if c.isascii() else c for c in k) == lk:
-            return v
-    return None
+        if k == key or (len(k) == len(key) and _fold(k) == lk):
+            found = v
+    return found
+
+
+_get = get
 
 
 def s(d: dict[str, Any] | None, key: str) -> str:

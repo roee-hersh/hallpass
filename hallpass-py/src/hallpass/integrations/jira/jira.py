@@ -256,9 +256,7 @@ class JiraConnection(Connection):
                 users = _decode_users(v)
             except Exception as e:
                 if httpx.status(e) == 403:
-                    raise wrap_error(
-                        Code.CREDENTIAL_REJECTED, e, "hallpass's account may not search users; it needs Browse users and groups (HTTP 403)"
-                    ) from e
+                    raise wrap_error(Code.CREDENTIAL_REJECTED, e, "hallpass's account may not search users; it needs Browse users and groups (HTTP 403)") from e
                 raise _classify(e) from e
             for usr in users:
                 if usr.account_type != "atlassian" or not usr.active:
@@ -309,13 +307,13 @@ class JiraConnection(Connection):
         elif res.kind == ResKind.PROJECT:
             try:
                 id = self._project_id(ctx, res.key)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - raised again unless not visible
                 return _decision_or_raise(e)
             body["projectPermissions"] = [{"permissions": [act.name], "projects": [id]}]
         else:
             try:
                 id = self._issue_id(ctx, res.key)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - raised again unless not visible
                 return _decision_or_raise(e)
             body["projectPermissions"] = [{"permissions": [act.name], "issues": [id]}]
         try:
@@ -405,4 +403,3 @@ class JiraConnection(Connection):
         if missing:
             warnings.append("this site does not list the permission keys " + ", ".join(missing) + "; checks for them will answer unknown or deny")
         return ProbeResult(summary=summary, warnings=tuple(warnings))
-

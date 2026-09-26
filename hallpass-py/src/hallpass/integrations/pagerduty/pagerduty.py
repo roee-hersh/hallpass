@@ -164,7 +164,9 @@ def classify(err: BaseException, what: str) -> HallpassError:
     if st == 401:
         return wrap_error(Code.CREDENTIAL_REJECTED, err, "PagerDuty rejected hallpass's API key")
     if st == 403:
-        return wrap_error(Code.CREDENTIAL_REJECTED, err, f"PagerDuty refused to {what} (error {_code_or(_error_code(err), '2010')}): the API key may not read it")
+        return wrap_error(
+            Code.CREDENTIAL_REJECTED, err, f"PagerDuty refused to {what} (error {_code_or(_error_code(err), '2010')}): the API key may not read it"
+        )
     if st == 402:
         return wrap_error(Code.UNSUPPORTED, err, f"the account lacks the ability to {what} (HTTP 402)")
     if st == 400:
@@ -284,7 +286,7 @@ class PagerDutyConnection(Connection):
         # id is unknown, never an allow.
         try:
             teams = self._object_teams(ctx, t)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - Go: every error is decided on (404) or classified
             return _decision_for(e, t)
         if need == Need.TEAM_MEMBER:
             if t.id in r.identity.groups:
@@ -424,7 +426,8 @@ class PagerDutyConnection(Connection):
         warnings: list[str] = []
         if "teams" not in has:
             warnings.append(
-                "the account lacks the teams ability: objects belong to no team, so observer and restricted_access users are denied everything but their base role allows"
+                "the account lacks the teams ability: objects belong to no team, "
+                "so observer and restricted_access users are denied everything but their base role allows"
             )
         if "advanced_permissions" not in has and "permissions_teams" not in has:
             warnings.append("no advanced permissions ability was reported: team roles may not be in effect on this plan (see docs)")

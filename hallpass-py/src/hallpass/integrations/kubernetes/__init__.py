@@ -17,11 +17,10 @@ from typing import Any, TypeVar
 from hallpass.core import integration as integ
 from hallpass.core import jsonx
 from hallpass.core.cache import is_panic_type
-from hallpass.core.catalog import Action
+from hallpass.core.catalog import Action, go_bytes, go_decode
 from hallpass.core.context import Context
 from hallpass.core.decision import Code, Decision, allowed, denied, errorf, unsupported, wrap_error
 from hallpass.core.errors import go_quote, go_trim_space
-from hallpass.core.catalog import go_bytes, go_decode
 from hallpass.core.template import Template, parse_template, validate_template
 from hallpass.net import httpx
 
@@ -145,7 +144,7 @@ class Connection(integ.Connection):
         raise HallpassError."""
         try:
             _, v = self.client.get_json(ctx, path)
-            return decode(v) if decode is not None else v  # type: ignore[no-any-return]
+            return decode(v) if decode is not None else v
         except Exception as err:
             _fail(err)
             st = httpx.status(err)
@@ -240,7 +239,7 @@ class Connection(integ.Connection):
         try:
             _, out = self.client.post_json(ctx, SELF_RULES_PATH, req, idempotent=True)
             rules = _resource_rules(out)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - _fail re-raises a crash; any failure is a warning
             _fail(err)
             return ["could not list the token's own permissions (SelfSubjectRulesReview failed); check for over-privilege by hand"]
         extra: list[str] = []

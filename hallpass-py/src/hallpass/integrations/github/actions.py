@@ -149,7 +149,9 @@ def parse_target(a: GHAction, org: str, r: Resource) -> Target:
         if not sep or not valid_login(owner) or not valid_repo_name(name):
             raise ValueError(f"repo resource must be repo:<owner>/<name>[@branch], got {go_quote(r.id)}")
         if not equal_fold(owner, org):
-            raise ValueError(f"repository owner {go_quote(owner)} must be the configured organization {go_quote(org)}: the app installation is per organization")
+            raise ValueError(
+                f"repository owner {go_quote(owner)} must be the configured organization {go_quote(org)}: the app installation is per organization"
+            )
         if "@" in r.id and not valid_branch(branch):
             raise ValueError(f"branch {go_quote(branch)} is not a valid branch name")
         return Target(kind="repo", owner=org, repo=name, branch=branch)
@@ -164,7 +166,9 @@ def parse_target(a: GHAction, org: str, r: Resource) -> Target:
         if not sep or not valid_login(owner) or not slug_ok(slug):
             raise ValueError(f"team resource must be team:<org>/<slug>, got {go_quote(r.id)}")
         if not equal_fold(owner, org):
-            raise ValueError(f"team organization {go_quote(owner)} must be the configured organization {go_quote(org)}: the app installation is per organization")
+            raise ValueError(
+                f"team organization {go_quote(owner)} must be the configured organization {go_quote(org)}: the app installation is per organization"
+            )
         return Target(kind="team", owner=org, team=slug)
     raise ValueError(f"unknown resource type {go_quote(r.type)}")
 

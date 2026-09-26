@@ -12,6 +12,7 @@ Nothing is written.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -348,7 +349,7 @@ def _unknown_setting(who: str, what: str, g: _Grants) -> Decision:
 class ZendeskConnection(Connection):
     """One Zendesk account."""
 
-    def __init__(self, api: httpx.Client, now: Any = None) -> None:
+    def __init__(self, api: httpx.Client, now: Callable[[], float] | None = None) -> None:
         self.api = api
         # The account's custom roles under one key for ROLES_TTL.
         self.roles: TTL[str, dict[int, _CustomRole]] = TTL(1)
@@ -604,7 +605,7 @@ class ZendeskConnection(Connection):
     def _check_organization(self, ctx: Context, t: Target, g: _Grants, who: str) -> Decision:
         try:
             self.api.get_json(ctx, "/api/v2/organizations/" + t.id, decode=False)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - Go: every error is decided on (404) or classified
             return _read_error(e, t)
         if g.admin:
             return allowed(f"{who} is an administrator, who may {t.action.desc}")
@@ -622,7 +623,7 @@ class ZendeskConnection(Connection):
         who = ident.display
         try:
             user = _zd_user(jsonx.o(self._get(ctx, "/api/v2/users/" + t.id), "user"))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - Go: every error is decided on (404) or classified
             return _read_error(e, t)
         if g.admin:
             return allowed(f"{who} is an administrator, who may edit any profile")
@@ -653,7 +654,7 @@ class ZendeskConnection(Connection):
         who = ident.display
         try:
             tk = _zd_ticket(jsonx.o(self._get(ctx, "/api/v2/tickets/" + t.id), "ticket"))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - Go: every error is decided on (404) or classified
             return _read_error(e, t)
         name = t.action.name
         # Closed tickets take no updates from anyone: no comment, no merge, no

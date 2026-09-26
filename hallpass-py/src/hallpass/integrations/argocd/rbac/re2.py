@@ -18,14 +18,21 @@ the RE2 reading is translated into Python syntax:
 - lookaround, backreferences, conditionals, atomic groups and possessive
   quantifiers, which RE2 does not have, are rejected.
 
-Not supported (rejected, so such a pattern never matches): Unicode classes
-``\\p{...}``/``\\pL``, ``\\C``, the U (ungreedy) flag, negated POSIX classes
+Unicode general categories (``\\pL``, ``\\p{Lu}``, ``\\PN``, ``\\p{^N}``,
+``\\p{Any}``) are expanded into ranges from Python's Unicode database, whose
+version may trail Go's by a release.
+
+Not supported (rejected, so such a pattern never matches): Unicode scripts
+such as ``\\p{Greek}``, ``\\C``, the U (ungreedy) flag, negated POSIX classes
 inside a larger bracket expression.
 """
 
 from __future__ import annotations
 
 import re
+import sys
+import threading
+import unicodedata
 
 __all__ = ["RE2Error", "compile_re2", "translate"]
 
@@ -71,6 +78,117 @@ _FLAGS = re.compile(r"\(\?([imsU]*(?:-[imsU]*)?)([:)])")
 _NAME = re.compile(r"\(\?P?<([A-Za-z0-9_]+)>")
 
 _MAX_REPEAT = 1000
+
+
+# Go's unicode.Categories: the one-letter classes cover their two-letter
+# ones, and C (Other) does not include unassigned code points.
+_CATEGORIES = frozenset(
+    [
+        "C",
+        "Cc",
+        "Cf",
+        "Co",
+        "Cs",
+        "L",
+        "Ll",
+        "Lm",
+        "Lo",
+        "Lt",
+        "Lu",
+        "M",
+        "Mc",
+        "Me",
+        "Mn",
+        "N",
+        "Nd",
+        "Nl",
+        "No",
+        "P",
+        "Pc",
+        "Pd",
+        "Pe",
+        "Pf",
+        "Pi",
+        "Po",
+        "Ps",
+        "S",
+        "Sc",
+        "Sk",
+        "Sm",
+        "So",
+        "Z",
+        "Zl",
+        "Zp",
+        "Zs",
+    ]
+)
+_cat_lock = threading.Lock()
+_cat_ranges: dict[str, list[tuple[int, int]]] = {}
+
+
+def _ranges_of(name: str) -> list[tuple[int, int]]:
+    """The code point ranges of a general category (or "Any")."""
+    with _cat_lock:
+        r = _cat_ranges.get(name)
+        if r is not None:
+            return r
+        if name == "Any":
+            r = [(0, sys.maxunicode)]
+        else:
+            r = []
+            start = -1
+            for cp in range(sys.maxunicode + 1):
+                cat = unicodedata.category(chr(cp))
+                hit = cat != "Cn" and (cat == name or (len(name) == 1 and cat[0] == name))
+                if hit and start < 0:
+                    start = cp
+                elif not hit and start >= 0:
+                    r.append((start, cp - 1))
+                    start = -1
+            if start >= 0:
+                r.append((start, sys.maxunicode))
+        _cat_ranges[name] = r
+        return r
+
+
+def _class_body(ranges: list[tuple[int, int]], negate: bool) -> str:
+    if negate:
+        comp = []
+        nxt = 0
+        for lo, hi in ranges:
+            if lo > nxt:
+                comp.append((nxt, lo - 1))
+            nxt = hi + 1
+        if nxt <= sys.maxunicode:
+            comp.append((nxt, sys.maxunicode))
+        ranges = comp
+    return "".join(f"\\U{lo:08x}" if lo == hi else f"\\U{lo:08x}-\\U{hi:08x}" for lo, hi in ranges)
+
+
+def _unicode_class(p: str, i: int) -> tuple[str, int]:
+    """The class body for the \\p or \\P escape at p[i]; (body, next index)."""
+    negate = p[i + 1] == "P"
+    j = i + 2
+    if j >= len(p):
+        raise RE2Error("invalid character class range")
+    if p[j] == "{":
+        end = p.find("}", j)
+        if end < 0:
+            raise RE2Error("invalid character class range")
+        name = p[j + 1 : end]
+        j = end + 1
+        if name.startswith("^"):
+            negate = not negate
+            name = name[1:]
+    else:
+        name = p[j]
+        j += 1
+    if name != "Any" and name not in _CATEGORIES:
+        raise RE2Error("invalid or unsupported character class range")
+    body = _class_body(_ranges_of(name), negate)
+    if body == "":
+        raise RE2Error("empty character class")
+    return body, j
 
 
 def _is_punct(c: str) -> bool:
@@ -148,8 +266,12 @@ def _bracket(p: str, i: int) -> tuple[str, int]:
                     raise RE2Error("negated POSIX class not supported")
                 raise RE2Error("invalid character class range")
         if c == "\\":
-            if p.startswith("\\Q", j) or p.startswith("\\p", j) or p.startswith("\\P", j):
+            if p.startswith("\\Q", j):
                 raise RE2Error("unsupported escape in character class")
+            if p.startswith("\\p", j) or p.startswith("\\P", j):
+                t, j = _unicode_class(p, j)
+                out.append(t)
+                continue
             t, j = _escape(p, j, True)
             out.append(t)
             continue
@@ -167,8 +289,8 @@ def translate(p: str) -> str:
     """The Python pattern equivalent to the RE2 pattern p. Raises RE2Error
     for what RE2 would reject or what cannot be translated."""
     multiline = False
-    for m in _FLAGS.finditer(p):
-        on = m.group(1).split("-", 1)[0]
+    for fm in _FLAGS.finditer(p):
+        on = fm.group(1).split("-", 1)[0]
         if "m" in on:
             multiline = True
     out: list[str] = []
@@ -186,7 +308,11 @@ def translate(p: str) -> str:
                 out.append(re.escape(lit))
                 i = n if end < 0 else end + 2
                 continue
-            if i + 1 < n and p[i + 1] in "pPC":
+            if i + 1 < n and p[i + 1] in "pP":
+                t, i = _unicode_class(p, i)
+                out.append("[" + t + "]")
+                continue
+            if i + 1 < n and p[i + 1] == "C":
                 raise RE2Error("unsupported escape")
             t, i = _escape(p, i, False)
             out.append(t)
@@ -197,11 +323,11 @@ def translate(p: str) -> str:
             continue
         if c == "(":
             if p.startswith("(?", i):
-                m = _NAME.match(p, i)
-                if m:
-                    out.append(f"(?P<{m.group(1)}>")
+                mn = _NAME.match(p, i)
+                if mn:
+                    out.append(f"(?P<{mn.group(1)}>")
                     stack.append([])
-                    i = m.end()
+                    i = mn.end()
                     continue
                 if p.startswith("(?:", i):
                     out.append("(?:")

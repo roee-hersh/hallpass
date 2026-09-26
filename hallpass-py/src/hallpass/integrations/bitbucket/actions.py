@@ -255,5 +255,5 @@ def ref_match(pattern: str, branch: str, data_center: bool) -> tuple[bool, bool]
 
 def describe_level(have: Level, needed: Level) -> str:
     if have >= needed:
-        return f"has {have} (needs {needed})"
-    return f"has {have}, needs {needed}"
+        return f"has {have!s} (needs {needed!s})"
+    return f"has {have!s}, needs {needed!s}"
