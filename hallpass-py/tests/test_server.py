@@ -125,6 +125,9 @@ def test_auth(running: list[Running], monkeypatch: pytest.MonkeyPatch) -> None:
         ("{} {}", "", 400, "trailing data"),
         ('{"user":"' + "x" * MAX_REQUEST_BODY + '"}', "", 413, "larger than"),
     ],
+    # Short ids: pytest puts the id in an environment variable, which
+    # Windows limits to 32767 characters.
+    ids=["wrong-type", "unknown-field", "syntax", "empty", "trailing", "too-large"],
 )
 def test_bad_requests(running: list[Running], body: str, ct: str, status: int, reason: str) -> None:
     h = start(running, StubChecker(), secret.literal(KEY))

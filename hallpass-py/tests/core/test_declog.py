@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import io
 import json
+import sys
 from pathlib import Path
 
 from hallpass.core import evidence
@@ -107,4 +108,5 @@ def test_open_appends(tmp_path: Path) -> None:
     assert lines[0] == "previous" and '"decision":"allow"' in lines[1]
     q = tmp_path / "new.log"
     open_log(str(q)).close()
-    assert q.stat().st_mode & 0o777 == 0o600
+    if sys.platform != "win32":  # Windows has no Unix permission bits
+        assert q.stat().st_mode & 0o777 == 0o600

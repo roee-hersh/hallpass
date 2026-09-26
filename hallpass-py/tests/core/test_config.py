@@ -7,6 +7,7 @@ and a test reads the message the way the Go test reads err.Error().
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -343,7 +344,10 @@ def test_ca_file_not_a_directory(tmp_path: Path) -> None:
     err = parse_err(
         f"api_key: env:K\nconnections:\n  - id: a\n    integration: kubernetes\n    url: https://x\n    credential: env:T\n    ca_file: {f}/ca.pem\n"
     )
-    assert str(err) == f'test.yaml:7: connection "a": ca_file: stat {f}/ca.pem: not a directory'
+    prefix = f'test.yaml:7: connection "a": ca_file: stat {f}/ca.pem: '
+    # Windows reports a file used as a directory as a missing path.
+    tail = "no such file or directory" if sys.platform == "win32" else "not a directory"
+    assert str(err) == prefix + tail
 
 
 def test_go_values() -> None:

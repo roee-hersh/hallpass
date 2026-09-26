@@ -1,23 +1,16 @@
-"""Differential tests: the Go implementation and this one, on the same
-scenarios, must reach the same decision with the same reason.
+"""Recorded decision scenarios: each engine decision's code against the
+expected one.
 
 Each file in scenarios/ describes connections, the fake upstream's routes
-and a list of checks with the expected code. Every check runs twice: through
-the Go binary (``hallpass check -json``, from $HALLPASS_GO_BIN) and through
-the Python engine, both against one fake upstream. The expected code guards
-both; the comparison catches any drift between them. Without
-$HALLPASS_GO_BIN only the Python side runs, against the expectations.
-
-The scenario files outlive the Go code: once it is gone they remain as
-regression vectors for this implementation.
+and a list of checks with the expected code; every check runs through the
+engine against that upstream. They were recorded while porting from Go,
+where both implementations had to agree on every one.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +25,6 @@ from hallpass.integrations import registry
 from tests import harness as itest
 
 SCENARIOS = sorted((Path(__file__).parent / "scenarios").glob("*.yaml"))
-GO_BIN = os.environ.get("HALLPASS_GO_BIN", "")
 
 
 def _cases() -> list[Any]:
@@ -77,7 +69,7 @@ def _route(srv: itest.Server, r: dict[str, Any]) -> None:
 
 
 @pytest.mark.parametrize(("path", "index"), _cases())
-def test_parity(path: Path, index: int) -> None:
+def test_scenario(path: Path, index: int) -> None:
     doc = yaml.safe_load(path.read_text())
     check = doc["checks"][index]
     with itest.Server() as srv:
@@ -107,22 +99,3 @@ def test_parity(path: Path, index: int) -> None:
             os.environ.update(old)
         py = {"decision": d.outcome.value, "reason": d.reason()}
         assert py["reason"].split(":", 1)[0] == check["want"], f"python: {py}, want code {check['want']}"
-        if not GO_BIN:
-            return
-        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-            f.write(text)
-            cfg_path = f.name
-        try:
-            args = [GO_BIN, "check", "-config", cfg_path, "-json", "-connection", check.get("connection", doc["connections"][0]["id"])]
-            args += ["-user", check["user"], "-action", check["action"], "-resource", check["resource"]]
-            for g in check.get("groups") or []:
-                args += ["-group", g]
-            out = subprocess.run(args, capture_output=True, text=True, env=env, timeout=60)
-        finally:
-            os.unlink(cfg_path)
-        assert out.stdout.strip(), f"go printed nothing (exit {out.returncode}): {out.stderr}"
-        go = json.loads(out.stdout)
-        if check.get("compare") == "code":
-            assert go["reason"].split(":", 1)[0] == py["reason"].split(":", 1)[0], f"go: {go}\npy: {py}"
-        else:
-            assert go == py, f"go: {go}\npy: {py}"

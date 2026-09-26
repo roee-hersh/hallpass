@@ -561,7 +561,9 @@ class _Proxy:
                 self._saw()
                 host, _, port = self.path.rpartition(":")
                 try:
-                    up = socket.create_connection((host.strip("[]"), int(port)), 2)
+                    # Short, so the 502 beats the client's timeout on
+                    # Windows, which retries a refused connect for ~2s.
+                    up = socket.create_connection((host.strip("[]"), int(port)), 0.5)
                 except OSError:
                     self.send_error(502)
                     return

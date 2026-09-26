@@ -479,6 +479,11 @@ class Transport:
                 if len(out) > max_body:
                     r.close()
                     raise BodyTooLarge()
+            # Python 3.10's read1 leaves the response open after the last
+            # byte of a Content-Length body, and the connection then refuses
+            # the next request (ResponseNotReady). Closing the response
+            # releases it; the socket stays with the connection.
+            r.close()
         except BodyTooLarge:
             raise
         except TimeoutError as e:
@@ -699,6 +704,11 @@ class _BufferedReader:
         return out
 
     def read1(self, n: int = -1) -> bytes:
+        if n == 0:
+            # Python 3.10's HTTPResponse.read1 asks for 0 bytes once the
+            # body is complete; the server sends nothing more, so waiting
+            # for data here would block until the timeout.
+            return b""
         if not self._buf:
             self._fill()
         if n is None or n < 0:

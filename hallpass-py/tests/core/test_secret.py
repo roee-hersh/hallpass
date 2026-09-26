@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import pickle
+import sys
 from pathlib import Path
 
 import pytest
@@ -135,7 +136,11 @@ def test_get_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert is_error(ei.value, FileNotFoundError)
     with pytest.raises(SecretError) as ei:
         secret.parse(f"file:{tmp_path}").get()
-    assert str(ei.value) == f"secret: read {tmp_path}: read {tmp_path}: is a directory"
+    if sys.platform == "win32":
+        # Windows refuses to open a directory as a file.
+        assert str(ei.value) == f"secret: read {tmp_path}: open {tmp_path}: permission denied"
+    else:
+        assert str(ei.value) == f"secret: read {tmp_path}: read {tmp_path}: is a directory"
     blank = tmp_path / "blank"
     blank.write_bytes(b" \t\r\n")
     with pytest.raises(SecretError, match=f"^secret: file {blank} is empty$"):

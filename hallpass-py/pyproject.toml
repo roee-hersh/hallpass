@@ -72,7 +72,6 @@ testpaths = ["tests"]
 timeout = 120
 addopts = "-ra"
 markers = [
-  "parity: compares decisions with the Go implementation (needs go on PATH)",
   "live: calls real third-party systems (needs credentials)",
 ]
 

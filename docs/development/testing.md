@@ -27,7 +27,7 @@ tree instead).
 | `tests/contract` | integrations against Prism, a mock server that answers from the vendor's OpenAPI description and rejects requests that violate it | `HALLPASS_SPECS_DIR` and `npx` on the PATH (Prism is fetched by npx) |
 | `tests/live` | your own cases against real systems ([below](#against-your-own-systems)) | `HALLPASS_LIVE_CASES` naming a cases file, and the credentials |
 | `tests/differential` | the Argo CD RBAC evaluator against `argocd admin settings rbac can` | the `argocd` binary on the PATH |
-| `tests/parity` | recorded scenarios from the port from Go: the Python engine's decisions and reasons against the expected ones, and against the Go build too when `HALLPASS_GO_BIN` names one. Removed with the Go code | nothing |
+| `tests/scenarios` | recorded decision scenarios (connections, a scripted upstream, checks with the expected code), each run through the engine | nothing |
 
 Every integration's tests run against a fake of its API. With the vendors' published API
 descriptions present, every request the fakes receive is also validated against the description:

@@ -2,9 +2,8 @@
 
 The Go fuzz targets are Hypothesis property tests with the same
 invariants. Their seed corpus runs as ordinary cases, as `go test` runs
-it: the f.Add seeds and every file under testdata/fuzz (copied to
-tests/core/testdata/catalog_fuzz, and checked against the Go tree when it
-is present).
+it: the f.Add seeds and every file of the Go corpus (kept in
+tests/core/testdata/catalog_fuzz, in Go's corpus format).
 """
 
 from __future__ import annotations
@@ -106,7 +105,6 @@ PARSE_RESOURCE_SEEDS = [
 ]
 
 CORPUS = Path(__file__).parent / "testdata" / "catalog_fuzz"
-GO_CORPUS = Path(__file__).resolve().parents[3] / "internal" / "catalog" / "testdata" / "fuzz"
 
 
 def _go_string_literal(lit: str) -> str:
@@ -131,16 +129,6 @@ def _corpus(target: str) -> list[tuple[str, str]]:
         assert m, p
         out.append((p.name, _go_string_literal(m.group(1))))
     return out
-
-
-def test_fuzz_corpus_matches_go_tree() -> None:
-    """The copied corpus is the Go corpus, file for file."""
-    if not GO_CORPUS.is_dir():
-        pytest.skip("the Go tree is not next to hallpass-py")
-    for target in GO_CORPUS.iterdir():
-        go_files = {p.name: p.read_bytes() for p in target.iterdir()}
-        py_files = {p.name: p.read_bytes() for p in (CORPUS / target.name).iterdir()}
-        assert py_files == go_files, target.name
 
 
 def check_parse_resource_invariants(raw: str) -> None:

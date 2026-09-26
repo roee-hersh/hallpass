@@ -47,8 +47,10 @@ jobs:
           python -m build -o /tmp/dist .
           python -m venv /tmp/clean
           /tmp/clean/bin/pip install --quiet "$(ls /tmp/dist/hallpass-*.whl)[crypto]" pytest pytest-timeout hypothesis
-          cp -r tests /tmp/wheel-tests
-          (cd /tmp && HALLPASS_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m pytest -q -p no:cacheprovider --rootdir /tmp /tmp/wheel-tests)
+          # The tests import each other as the package "tests", so they
+          # keep that name, in a directory with no copy of the source.
+          mkdir /tmp/wheel && cp -r tests /tmp/wheel/tests
+          (cd /tmp/wheel && HALLPASS_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m pytest -q -p no:cacheprovider --rootdir /tmp/wheel tests)
 
   specs:
     # The integration suites with every fake upstream validating requests
