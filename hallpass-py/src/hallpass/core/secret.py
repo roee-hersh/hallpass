@@ -30,6 +30,8 @@ class Secret:
     """A reference to credential material. ``Secret()`` is empty."""
 
     __slots__ = ("_kind", "_ref")
+    _kind: str
+    _ref: str
 
     def __init__(self, _kind: str = "", _ref: str = "") -> None:
         object.__setattr__(self, "_kind", _kind)
