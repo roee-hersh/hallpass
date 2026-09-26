@@ -460,7 +460,7 @@ class _PathTemplate:
 def _match_segments(tpl: list[str], segs: list[str]) -> bool:
     if len(segs) != len(tpl):
         return False
-    for s, seg in zip(tpl, segs):
+    for s, seg in zip(tpl, segs, strict=True):
         if s == "{}":
             if seg == "":
                 return False
@@ -895,7 +895,7 @@ def go_url_path(raw: str) -> str | None:
             if end < 0:
                 return None
             port = host[end + 1 :]
-            if port and not (port.startswith(":") and port[1:].isdigit() or port == ":"):
+            if port and not ((port.startswith(":") and port[1:].isdigit()) or port == ":"):
                 return None
         else:
             i = host.rfind(":")

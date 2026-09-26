@@ -137,7 +137,7 @@ def test_token_source_singleflight_and_errors() -> None:
             v = src.get(background())
             if v != "t":
                 errors.put(f"got {v!r}")
-        except Exception as e:  # noqa: BLE001 - reported below
+        except Exception as e:
             errors.put(repr(e))
 
     threads = [threading.Thread(target=get) for _ in range(10)]
@@ -180,7 +180,7 @@ def test_token_source_fetch_panic_does_not_wedge() -> None:
         try:
             src.get(background())
             q.put(None)
-        except BaseException as e:  # noqa: BLE001 - the test inspects it
+        except BaseException as e:
             q.put(e)
 
     threading.Thread(target=get_into, args=(leader_err,)).start()
@@ -230,7 +230,7 @@ def test_token_source_leader_cancel_does_not_abort_waiters() -> None:
         try:
             src.get(leader_ctx)
             leader_err.put(None)
-        except BaseException as e:  # noqa: BLE001 - the test inspects it
+        except BaseException as e:
             leader_err.put(e)
 
     threading.Thread(target=leader).start()
@@ -241,7 +241,7 @@ def test_token_source_leader_cancel_does_not_abort_waiters() -> None:
     def waiter() -> None:
         try:
             result["v"] = src.get(background())
-        except BaseException as e:  # noqa: BLE001 - the test inspects it
+        except BaseException as e:
             result["err"] = e
         finally:
             waiter_done.set()

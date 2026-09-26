@@ -98,7 +98,8 @@ def test_yaml_spec() -> None:
 DISC = """{"discoveryVersion": "v1", "servicePath": "drive/v3/", "parameters": {"fields": {"location": "query"}},
  "resources": {"files": {"methods": {"get": {"path": "files/{fileId}", "httpMethod": "GET",
    "parameters": {"fileId": {"location": "path", "required": true}, "supportsAllDrives": {"location": "query"}}}}},
-  "users": {"resources": {"settings": {"methods": {"list": {"path": "admin/directory/v1/users", "httpMethod": "GET", "parameters": {"customer": {"location": "query", "required": true}}}}}}}}}"""
+  "users": {"resources": {"settings": {"methods": {"list": {"path": "admin/directory/v1/users", "httpMethod": "GET",
+   "parameters": {"customer": {"location": "query", "required": true}}}}}}}}}"""
 
 
 def test_discovery() -> None:
@@ -110,10 +111,12 @@ def test_discovery() -> None:
 
 
 BOTO = """{"metadata": {"protocol": "query"}, "operations": {"AssumeRole": {"input": {"shape": "AssumeRoleRequest"}}},
- "shapes": {"AssumeRoleRequest": {"type": "structure", "required": ["RoleArn", "RoleSessionName"], "members": {"RoleArn": {}, "RoleSessionName": {}, "ExternalId": {}, "PolicyArns": {}}}}}"""
+ "shapes": {"AssumeRoleRequest": {"type": "structure", "required": ["RoleArn", "RoleSessionName"],
+   "members": {"RoleArn": {}, "RoleSessionName": {}, "ExternalId": {}, "PolicyArns": {}}}}}"""
 
 BOTO_JSON = """{"metadata": {"protocol": "json", "targetPrefix": "AWSIdentityStore"}, "operations": {"GetUserId": {"input": {"shape": "In"}}},
- "shapes": {"In": {"type": "structure", "required": ["IdentityStoreId", "AlternateIdentifier"], "members": {"IdentityStoreId": {}, "AlternateIdentifier": {}}}}}"""
+ "shapes": {"In": {"type": "structure", "required": ["IdentityStoreId", "AlternateIdentifier"],
+   "members": {"IdentityStoreId": {}, "AlternateIdentifier": {}}}}}"""
 
 
 def test_botocore() -> None:
@@ -197,7 +200,7 @@ def test_server_path_with_variables() -> None:
     """A server URL whose host carries a template variable still yields its
     path prefix, so paths relative to it validate."""
     doc = """{"openapi":"3.0.1","servers":[{"url":"https://{your-domain}.atlassian.net/wiki/api/v2","variables":{"your-domain":{"default":"your-domain"}}}],
-	"paths":{"/spaces":{"get":{"responses":{"200":{"description":"ok"}}}}}}"""
+ "paths":{"/spaces":{"get":{"responses":{"200":{"description":"ok"}}}}}}"""
     s = load_spec("c", doc.encode())
     err = validate(s, req("GET", "https://x/wiki/api/v2/spaces", ""), None)
     assert err is None, f"prefixed path rejected: {err}"
@@ -216,10 +219,10 @@ def test_server_path_with_variables() -> None:
 
 def test_leading_variable_spans_segments() -> None:
     arm = """{"swagger": "2.0", "paths": {
-	 "/{scope}/providers/Microsoft.Authorization/roleAssignments": {"get": {"parameters": [{"name": "$filter", "in": "query", "type": "string"}]}},
-	 "/{roleId}": {"get": {}},
-	 "/subscriptions/{subscriptionId}/providers/Microsoft.Authorization/roleAssignments": {"get": {}}
-	}}"""
+  "/{scope}/providers/Microsoft.Authorization/roleAssignments": {"get": {"parameters": [{"name": "$filter", "in": "query", "type": "string"}]}},
+  "/{roleId}": {"get": {}},
+  "/subscriptions/{subscriptionId}/providers/Microsoft.Authorization/roleAssignments": {"get": {}}
+ }}"""
     s = load_spec("arm", arm.encode())
     for u in [
         "https://x/subscriptions/1/resourceGroups/rg/providers/Microsoft.Authorization/roleAssignments?$filter=atScope()",

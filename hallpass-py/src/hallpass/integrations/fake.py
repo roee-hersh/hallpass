@@ -98,3 +98,6 @@ class FakeConnection(Connection):
         if not self.users and not self.admins:
             warnings = ("no users or admins configured; every check will answer user_not_found",)
         return ProbeResult(summary="fake integration ready", warnings=warnings)
+
+
+INTEGRATION = Fake()

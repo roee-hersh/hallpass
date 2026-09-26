@@ -448,6 +448,12 @@ class Server:
         A None spec (none found in $HALLPASS_SPECS_DIR) is a no-op."""
         if spec is None:
             return
+        # Compile the patterns now, as Go's UseSpec does, so a bad one fails
+        # here rather than inside a request handler.
+        import re
+
+        for p in (*getattr(opts, "strip_prefix", ()), *getattr(opts, "ignore_paths", ())):
+            re.compile(p)
         with self._lock:
             self.spec, self.spec_opts = spec, opts
 

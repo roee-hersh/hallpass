@@ -100,21 +100,32 @@ def _is_name_char(c: str) -> bool:
     return c == "_" or "a" <= c <= "z" or "A" <= c <= "Z" or "0" <= c <= "9"
 
 
+_GO_ESCAPES = {"\a": "\\a", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\v": "\\v", "'": "\\'", "\\": "\\\\"}
+
+
 def _go_char(c: str) -> str:
-    """Go's %q for a byte."""
-    if c == "'":
-        return "'\\''"
-    if c == "\\":
-        return "'\\\\'"
-    if " " <= c <= "~":
+    """Go's %q for a byte (c is one char of the latin-1 view)."""
+    if c in _GO_ESCAPES:
+        return "'" + _GO_ESCAPES[c] + "'"
+    if c.isprintable():
         return f"'{c}'"
-    return f"'\\x{ord(c) & 0xFF:02x}'" if ord(c) < 0x100 else f"'{c}'"
+    if ord(c) < 0x80:
+        return f"'\\x{ord(c):02x}'"
+    return f"'\\u{ord(c):04x}'"
 
 
-def _lex(src: str) -> list[_Tok]:
+def _utf8(latin: str) -> str:
+    return latin.encode("latin-1").decode("utf-8", errors="replace")
+
+
+def _lex(text: str | bytes) -> list[_Tok]:
+    """Tokens of a GraphQL document. Like Go's lexer it works on bytes:
+    positions are byte offsets (string values are decoded back)."""
     toks: list[_Tok] = []
-    if src.startswith("﻿"):
-        src = src[1:]
+    raw = text if isinstance(text, bytes) else text.encode("utf-8", errors="surrogatepass")
+    src = raw.decode("latin-1")
+    if src.startswith("\xef\xbb\xbf"):
+        src = src[3:]
     i = 0
     n = len(src)
     while i < n:
@@ -137,7 +148,7 @@ def _lex(src: str) -> list[_Tok]:
                     end += 3 + (nxt - (i + 3 + end + 3))
                 if end < 0:
                     raise _GQLError(f"unterminated block string at {start}")
-                toks.append(_Tok("s", src[i + 3 : i + 3 + end], start))
+                toks.append(_Tok("s", _utf8(src[i + 3 : i + 3 + end]), start))
                 i += 3 + end + 3
                 continue
             i += 1
@@ -152,7 +163,7 @@ def _lex(src: str) -> list[_Tok]:
             if i >= n:
                 raise _GQLError(f"unterminated string at {start}")
             i += 1
-            toks.append(_Tok("s", "".join(b), start))
+            toks.append(_Tok("s", _utf8("".join(b)), start))
         elif c == "$":
             start = i
             i += 1
@@ -465,10 +476,8 @@ class _Parser:
 
 def new_graphql(name: str, raw: bytes | str) -> GraphQL:
     """Parse an SDL schema. Raises SpecError."""
-    if isinstance(raw, (bytes, bytearray)):
-        raw = bytes(raw).decode("utf-8", errors="replace")
     try:
-        toks = _lex(raw)
+        toks = _lex(bytes(raw) if isinstance(raw, bytearray) else raw)
     except _GQLError as e:
         raise SpecError(f"{name}: {e}") from None
     g = GraphQL(name)

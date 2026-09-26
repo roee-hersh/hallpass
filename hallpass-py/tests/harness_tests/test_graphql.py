@@ -60,7 +60,8 @@ def validate(s: object, r: SpecRequest, body: bytes | str | None) -> SpecError |
 
 OK = [
     r'{"query":"{ viewer { id email } }"}',
-    r'{"query":"query($e:String!){ users(filter:{email:{eqIgnoreCase:$e}}, includeDisabled:true){ id teams(first:10){ nodes { key visibility } pageInfo { hasNextPage endCursor } } } }","variables":{"e":"a@b.c"}}',
+    r'{"query":"query($e:String!){ users(filter:{email:{eqIgnoreCase:$e}}, includeDisabled:true){ id teams(first:10){ nodes { key visibility } '
+    r'pageInfo { hasNextPage endCursor } } } }","variables":{"e":"a@b.c"}}',
     r'{"query":"query($f:UserFilter){ users(filter:$f){ id } }","variables":{"f":{"email":{"in":["a"]},"and":[{"admin":true}]}}}',
     r'{"query":"query { entity(id:\"1\") { __typename ... on User { email } ...T } } fragment T on Team { key }"}',
     r'{"query":"query A { now } query B { viewer { id } }","operationName":"B"}',
@@ -131,7 +132,10 @@ def test_graph_ql_real_schema() -> None:
     except OSError as e:
         pytest.skip(str(e))
     s = load_spec("linear", raw)
-    b = r'{"query":"query($e:String!){ users(filter:{email:{eqIgnoreCase:$e}}, includeDisabled:true, first:50){ nodes { id email active admin owner guest app disableReason } } }","variables":{"e":"a@b.c"}}'
+    b = (
+        r'{"query":"query($e:String!){ users(filter:{email:{eqIgnoreCase:$e}}, includeDisabled:true, first:50)'
+        r'{ nodes { id email active admin owner guest app disableReason } } }","variables":{"e":"a@b.c"}}'
+    )
     err = validate(s, gql(b), b)
     assert err is None, err
     b = r'{"query":"{ viewer { id emial } }"}'
