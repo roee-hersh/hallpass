@@ -82,7 +82,7 @@ class STSClient:
         try:
             root = xmlutil.parse(resp.body)
         except xmlutil.XMLError as e:
-            raise ValueError(f"decode xml: {e}") from None
+            raise ValueError(f"decode xml: {e}") from e
         return _creds_from(root, "AssumeRoleWithWebIdentityResult")
 
 

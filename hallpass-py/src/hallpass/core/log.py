@@ -12,11 +12,12 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import re
 import sys
 import threading
 from typing import IO, Any
 
-__all__ = ["DEBUG", "ERROR", "INFO", "WARN", "JSONHandler", "Logger", "StdlibHandler", "TextHandler", "discard", "parse_level"]
+__all__ = ["DEBUG", "ERROR", "INFO", "WARN", "JSONHandler", "Logger", "StdlibHandler", "TextHandler", "discard", "go_json", "parse_level"]
 
 DEBUG, INFO, WARN, ERROR = -4, 0, 4, 8
 _NAMES = {DEBUG: "DEBUG", INFO: "INFO", WARN: "WARN", ERROR: "ERROR"}
@@ -29,6 +30,21 @@ def parse_level(s: str) -> int:
     if v not in table:
         raise ValueError(f'slog: level string "{s}": unknown name')
     return table[v]
+
+
+_GO_JSON_ESCAPES = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026", "\u2028": "\\u2028", "\u2029": "\\u2029"}
+_GO_JSON_RE = re.compile("[<>&\u2028\u2029\ud800-\udfff]")
+
+
+def go_json(v: Any) -> str:
+    """json.dumps as Go's encoding/json.Marshal writes it: compact UTF-8,
+    with <, >, &, U+2028 and U+2029 escaped as \\u003c and so on, and
+    invalid UTF-8 (a lone surrogate here) as \\ufffd. Both write \\", \\\\,
+    \\b, \\f, \\n, \\r, \\t and \\u00XX for the other C0 controls the same.
+    The characters replaced can only occur inside strings, so a plain
+    substitution over the whole text is exact."""
+    text = json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+    return _GO_JSON_RE.sub(lambda m: _GO_JSON_ESCAPES.get(m.group(0), "\\ufffd"), text)
 
 
 def rfc3339nano(ts: float | datetime.datetime) -> str:

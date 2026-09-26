@@ -123,7 +123,7 @@ def _container_relative_endpoint(rel: str) -> str:
         url_parse_check(endpoint)
         u = urllib.parse.urlsplit(endpoint)
     except ValueError as e:
-        raise ValueError(f"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: {e}") from None
+        raise ValueError(f"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: {e}") from e
     host = u.netloc.rpartition("@")[2]
     # The netloc carries any userinfo, so comparing it checks u.User too.
     if u.scheme != "http" or u.netloc != _CONTAINER_HOST:
@@ -136,7 +136,7 @@ def _validate_container_uri(full: str) -> None:
         url_parse_check(full)
         u = urllib.parse.urlsplit(full)
     except ValueError as e:
-        raise ValueError(f"AWS_CONTAINER_CREDENTIALS_FULL_URI: {e}") from None
+        raise ValueError(f"AWS_CONTAINER_CREDENTIALS_FULL_URI: {e}") from e
     if u.scheme == "https":
         return
     if u.scheme != "http":

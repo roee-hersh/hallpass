@@ -59,7 +59,8 @@ def test_query_params_form() -> None:
 def test_error_decoding() -> None:
     e = decode_xml_error(
         403,
-        b"<ErrorResponse><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>User is not authorized</Message></Error><RequestId>x</RequestId></ErrorResponse>",
+        b"<ErrorResponse><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>User is not authorized</Message></Error>"
+        b"<RequestId>x</RequestId></ErrorResponse>",
     )
     assert e.code == "AccessDenied" and e.access_denied() and not e.throttled(), vars(e)
     e = decode_xml_error(400, b"<ErrorResponse><Error><Code>Throttling</Code><Message>Rate exceeded</Message></Error></ErrorResponse>")
@@ -130,7 +131,8 @@ def test_sts_assume_role_and_query_client(srv: itest.Server) -> None:
                 + itest.CANARY
                 + "tok</SessionToken><Expiration>"
                 + _rfc3339_in_an_hour()
-                + "</Expiration></Credentials><AssumedRoleUser><Arn>arn:aws:sts::123456789012:assumed-role/hallpass/s</Arn></AssumedRoleUser></AssumeRoleResult></AssumeRoleResponse>"
+                + "</Expiration></Credentials><AssumedRoleUser><Arn>arn:aws:sts::123456789012:assumed-role/hallpass/s</Arn></AssumedRoleUser>"
+                + "</AssumeRoleResult></AssumeRoleResponse>"
             )
         elif action == "AssumeRoleWithWebIdentity":
             if auth != "" or g("WebIdentityToken") != "oidc-" + itest.CANARY:

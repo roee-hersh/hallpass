@@ -177,7 +177,7 @@ class AWSClient:
         try:
             return xmlutil.parse(resp.body)
         except xmlutil.XMLError as e:
-            raise ValueError(f"decode {action} response: {e}") from None
+            raise ValueError(f"decode {action} response: {e}") from e
 
     def json11(self, ctx: Context, target: str, body_in: Any) -> Any:
         """A JSON-1.1 request with X-Amz-Target; returns the decoded reply
@@ -192,7 +192,7 @@ class AWSClient:
         try:
             return go_json_loads(resp.body)
         except ValueError as e:
-            raise ValueError(f"decode {target} response: {e}") from None
+            raise ValueError(f"decode {target} response: {e}") from e
 
     def _send(self, ctx: Context, body: bytes, hdr: Mapping[str, str]) -> httpx.Response:
         creds = self.creds.credentials(ctx)

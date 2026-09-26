@@ -137,5 +137,8 @@ def parse_raw_request(raw: bytes) -> tuple[PreparedRequest, bytes]:
 
 def parse_target(target: str) -> str:
     """The raw request-target as a URL whose path and query keep the
-    original bytes, so the signer's normalisation is what gets tested."""
+    original bytes, so the signer's normalisation is what gets tested.
+    (Go builds a url.URL with RawPath set; the signer here reads the raw
+    path from the URL string, and emulates Go's EscapedPath itself. No
+    suite target carries a "#", which urlsplit would cut off.)"""
     return "https://example.amazonaws.com" + target

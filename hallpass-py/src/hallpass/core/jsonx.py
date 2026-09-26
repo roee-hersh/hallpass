@@ -44,9 +44,18 @@ def obj(v: Any, what: str = "value") -> dict[str, Any]:
 
 
 def _get(d: dict[str, Any] | None, key: str) -> Any:
+    """The member for key: an exact match, else a case-insensitive one, as
+    Go's decoder matches a struct field (ASCII folding, plus the Kelvin sign
+    and the long s, which fold to ASCII letters)."""
     if d is None:
         return None
-    return d.get(key)
+    if key in d:
+        return d[key]
+    lk = key.lower()
+    for k, v in d.items():
+        if len(k) == len(key) and "".join("k" if c == "K" else "s" if c == "ſ" else c.lower() if c.isascii() else c for c in k) == lk:
+            return v
+    return None
 
 
 def s(d: dict[str, Any] | None, key: str) -> str:

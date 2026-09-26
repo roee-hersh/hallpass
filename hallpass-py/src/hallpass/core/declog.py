@@ -3,33 +3,34 @@ It is the audit trail."""
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import IO, Any
 
 from hallpass.core.evidence import Evidence
-from hallpass.core.log import rfc3339nano
+from hallpass.core.log import go_json, rfc3339nano
 
 __all__ = ["DecisionLog", "Entry", "open_log"]
 
 
 @dataclass
 class Entry:
-    connection: str
-    user: str
-    action: str
-    resource: str
-    decision: str
-    code: str
-    reason: str
-    cached: bool
-    duration_ms: int
-    status: int
+    """One logged decision. Every field has Go's zero value by default."""
+
+    connection: str = ""
+    user: str = ""
+    action: str = ""
+    resource: str = ""
+    decision: str = ""
+    code: str = ""
+    reason: str = ""
+    cached: bool = False
+    duration_ms: int = 0
+    status: int = 0
     groups: list[str] | tuple[str, ...] | None = None
     # Set when the caller asked for an answer straight from the upstream.
     fresh: bool = False
@@ -75,13 +76,17 @@ class DecisionLog:
         self.now = now
 
     def log(self, e: Entry) -> None:
+        """Write one entry; its time is filled in when unset. The caller's
+        Entry is not changed (Go passes it by value)."""
         if self._w is None:
             return
         if e.time is None:
-            e.time = self.now()
+            e = replace(e, time=self.now())
         try:
-            line = json.dumps(e.to_json(), ensure_ascii=False, separators=(",", ":")) + "\n"
-        except (TypeError, ValueError):
+            line = go_json(e.to_json()) + "\n"
+        except (TypeError, ValueError, OverflowError, OSError):
+            # Go's json.Marshal fails only on a time outside years 0-9999;
+            # the entry is dropped then, as here.
             return
         with self._lock:
             try:

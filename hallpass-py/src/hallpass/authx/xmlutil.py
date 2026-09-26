@@ -6,6 +6,7 @@ elements empty. Documents with a DTD are refused, so no entity can expand.
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from typing import Any
 
 __all__ = ["XMLError", "child", "children", "parse", "text"]
 
@@ -33,7 +34,7 @@ def parse(body: bytes, partial: bool = False) -> ET.Element:
     lt = body.find(b"<")
     if lt > 0 and b"&" not in body[:lt]:
         body = body[lt:]
-    parser = ET.XMLPullParser(events=("start", "end"))
+    parser: ET.XMLPullParser[ET.Element] = ET.XMLPullParser(events=("start", "end"))
     root: ET.Element | None = None
     try:
         parser.feed(body)
@@ -41,10 +42,11 @@ def parse(body: bytes, partial: bool = False) -> ET.Element:
     except ET.ParseError:
         pass  # the error is also queued after the events that preceded it
     try:
-        for ev, el in parser.read_events():
+        events: Any = parser.read_events()
+        for ev, el in events:
             if ev == "start" and root is None:
                 root = el
-            elif ev == "end" and el is root:
+            elif ev == "end" and root is not None and id(el) == id(root):
                 return root
     except ET.ParseError as e:
         if partial and root is not None:
