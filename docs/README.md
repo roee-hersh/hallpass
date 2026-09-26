@@ -34,9 +34,8 @@ agents in any language call.
   and the same connections given in code.
 - [Command line](reference/cli.md): `serve`, `validate`, `probe`, `check` and `catalog`.
 - [Integrations](integrations/README.md): the twenty-one systems, their status, and one page each.
-- [Packages and releases](../hallpass-py/RELEASING.md): `hallpass`, the
-  [`hallpass-client` compatibility package](../hallpass-py/compat/README.md), the Node client, the
-  image and the chart, and how they are released.
+- [Packages and releases](../hallpass-py/RELEASING.md): `hallpass`, the Node client, the image and
+  the chart, and how they are released.
 - [Helm chart values](../deploy/helm/hallpass/README.md).
 
 ## Development

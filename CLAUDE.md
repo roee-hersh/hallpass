@@ -16,9 +16,8 @@ release (03:00 UTC), so merge only complete, working changes.
    - when a framework adapter (`src/hallpass/<framework>.py`) changed: install its extra
      (`pip install -e ".[<extra>]"`) and run `python -m pytest tests/frameworks/test_<framework>.py`
    - when the vault integration changed: `HALLPASS_REAL=1 python -m pytest tests/real` (needs docker)
-   - when `hallpass-py/compat` changed: build both wheels (`python -m build -o /tmp/dist .` and
-     `python -m build -o /tmp/dist compat/hallpass-client`), install them into a fresh venv, then run
-     `compat/hallpass-client/tests` with that venv's Python from outside the repository
+   - when packaging (`pyproject.toml`) changed: build the wheel (`python -m build -o /tmp/dist .`),
+     install it into a fresh venv, then run `tests` with that venv's Python from outside the repository
    - when `hallpass-ts` changed: `cd hallpass-ts && npm ci && npm test`, and run the `examples/agent-ts`
      tests, which exercise it
    - when `examples/agent-ts` changed: `cd examples/agent-ts && npm ci && npm test`

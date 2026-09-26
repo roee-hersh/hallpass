@@ -5,15 +5,13 @@ One release version covers everything the repository ships:
 | Package | Source | Where users get it |
 |---|---|---|
 | `hallpass` (Python: the engine, the client, the `hallpass` command) | [`hallpass-py`](.) | [PyPI](https://pypi.org/project/hallpass/) |
-| `hallpass-client` (Python compatibility package) | [`compat/hallpass-client`](compat/hallpass-client) | [PyPI](https://pypi.org/project/hallpass-client/) |
 | `hallpass-client` (Node and TypeScript client) | [`hallpass-ts`](../hallpass-ts) | [npm](https://www.npmjs.com/package/hallpass-client) |
 | The server image | [`Dockerfile`](../Dockerfile), which installs `hallpass[crypto]` | `ghcr.io/roee-hersh/hallpass` |
 | The Helm chart | [`deploy/helm/hallpass`](../deploy/helm/hallpass) | `oci://ghcr.io/roee-hersh/charts/hallpass` |
 
 Each version in the repository is `0.0.0`. The `release` workflow (`.github/workflows/release.yaml`,
 started by hand or by `daily-release`) tags `main` and sets the version from the tag everywhere:
-`.github/scripts/build-python.sh` writes it into `src/hallpass/_version.py` and into the
-compatibility package, whose dependency it pins to `hallpass==<version>`; the image, the chart
+`.github/scripts/build-python.sh` writes it into `src/hallpass/_version.py`; the image, the chart
 (version and appVersion) and the npm package get it too. The release skill
 (`.claude/skills/release/SKILL.md`) lists what to check afterwards.
 
@@ -26,24 +24,22 @@ names so `releases/latest/download/...` works:
 |---|---|
 | `hallpass-python.tar.gz` | The `hallpass` source distribution |
 | `hallpass-<version>-py3-none-any.whl` | The `hallpass` wheel |
-| `hallpass-client-python.tar.gz` | The `hallpass-client` compatibility source distribution |
-| `hallpass_client-<version>-py3-none-any.whl` | Its wheel |
 | `hallpass-client-node.tgz` | The npm package, as `npm pack` makes it |
 | `checksums.txt` | SHA-256 of each of the above |
 
 ## Publishing to PyPI and npm
 
-The `pypi` job publishes `hallpass` and `hallpass-client`, and the `npm` job publishes
+The `pypi` job publishes `hallpass`, and the `npm` job publishes
 `hallpass-ts` as `hallpass-client`, with trusted publishing (OpenID Connect), so no long-lived
 token is stored. The jobs run only while the Actions variables `PUBLISH_PYPI` and `PUBLISH_NPM` are
 `true`; unset, they are skipped and the release still succeeds, so the release skill checks the
 registries after every release.
 
-**PyPI.** The `pypi` job uploads both projects from one environment, so each needs a trusted
-publisher: on pypi.org, under Your projects → Publishing (or, for a project that does not exist
-yet, a pending publisher), owner `roee-hersh`, repository `hallpass`, workflow `release.yaml`,
-environment `pypi`. `hallpass-client` already has one; `hallpass` needs one before the
-first release that publishes it. Then set the Actions variable `PUBLISH_PYPI` to `true`.
+**PyPI.** `hallpass` needs a trusted publisher: on pypi.org, under Your projects → Publishing (or,
+for a project that does not exist yet, a pending publisher), owner `roee-hersh`, repository
+`hallpass`, workflow `release.yaml`, environment `pypi`. Then set the Actions variable
+`PUBLISH_PYPI` to `true`. `hallpass-client` on PyPI, the old Python client, is no longer
+published; `hallpass` replaces it.
 
 **npm** (done).
 

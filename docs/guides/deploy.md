@@ -174,8 +174,8 @@ they need Administer Jira, so the agent should not be able to read them
 
 ## Upgrading
 
-Releases follow semantic versioning. The `hallpass` package, the Docker image, the Helm chart,
-`hallpass-client` on PyPI and on npm all carry the same version. With a server, upgrade it before
+Releases follow semantic versioning. The `hallpass` package, the Docker image, the Helm chart and
+`hallpass-client` on npm all carry the same version. With a server, upgrade it before
 the agents when a release adds a request field (such as `fresh`): an older hallpass rejects fields
 it does not know, and the clients report that as `unknown`, so nothing fails open.
 

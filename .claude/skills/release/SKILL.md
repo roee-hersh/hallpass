@@ -33,9 +33,7 @@ Actions → release → Run workflow). For a minor or major bump you can also ru
 ## 4. Verify
 
 The release workflow builds everything from the tag: `tag`, then `image`, `chart`, `assets`,
-`pypi` and `npm`. `.github/scripts/build-python.sh` sets the version of `hallpass` (hallpass-py) and
-of the `hallpass-client` compatibility package (hallpass-py/compat/hallpass-client), pinned to
-`hallpass` at the same version.
+`pypi` and `npm`. `.github/scripts/build-python.sh` sets the version of `hallpass` (hallpass-py).
 
 - The run's `tag`, `image`, `chart`, `assets`, `pypi` and `npm` jobs all succeed; if one fails,
   read its log and fix.
@@ -45,12 +43,9 @@ of the `hallpass-client` compatibility package (hallpass-py/compat/hallpass-clie
   logging in.
 - The `pypi` and `npm` jobs succeeded, not skipped (skipped means the `PUBLISH_PYPI` or
   `PUBLISH_NPM` variable is unset), and the registries serve the new version:
-  `https://pypi.org/pypi/hallpass/json`, `https://pypi.org/pypi/hallpass-client/json` and
-  `https://registry.npmjs.org/hallpass-client`. The docs tell users to install from them, so a
+  `https://pypi.org/pypi/hallpass/json` and `https://registry.npmjs.org/hallpass-client`. The docs tell users to install from them, so a
   missing version is a failed release.
 - The `assets` job succeeded and the release lists `hallpass-python.tar.gz`,
-  `hallpass-client-python.tar.gz`, `hallpass-client-node.tgz`, the two wheels
-  (`hallpass-<version>-py3-none-any.whl`, `hallpass_client-<version>-py3-none-any.whl`) and
-  `checksums.txt`.
+  `hallpass-client-node.tgz`, the wheel `hallpass-<version>-py3-none-any.whl` and `checksums.txt`.
 
 Reply with the release link, the version, and a short list of what it contains (PR titles).

@@ -150,13 +150,12 @@ needs a conditional write in the upstream system, such as `If-Match` with an ETa
 server older than the `fresh` field rejects it, which `remote` reports as `unknown`, so upgrade the
 server before turning `fresh` on. The [API reference](api.md#fresh-checks) has the details.
 
-## hallpass-client (Python)
+## Moving from hallpass-client (Python)
 
-`hallpass-client` on PyPI is now a compatibility package that depends on `hallpass` at the same
-version and re-exports it. Existing code keeps working: `hallpass_client.Hallpass()` is
-`Hallpass.remote()`, reading `HALLPASS_URL` and `HALLPASS_API_KEY`, and `guarded`, `current`,
-`Decision` and `PermissionDenied` are hallpass's own. `hallpass_client.strands` is
-`hallpass.strands` (`pip install "hallpass-client[strands]"`). New code should depend on `hallpass`.
+`hallpass-client` on PyPI, the old Python client, is replaced by this package and gets no new
+releases; installed versions keep working. To move, depend on `hallpass` and change
+`from hallpass_client import Hallpass` / `Hallpass()` to `from hallpass import Hallpass` /
+`Hallpass.remote()` (and `hallpass_client.strands` to `hallpass.strands`).
 
 ## hallpass-client (Node)
 

@@ -40,18 +40,15 @@ jobs:
         if: runner.os == 'Linux'
         run: mypy --strict src/hallpass
       - run: python -m pytest -q
-      - name: the installed wheels
+      - name: the installed wheel
         if: runner.os == 'Linux'
         run: |
           set -eu
           python -m build -o /tmp/dist .
-          python -m build -o /tmp/dist compat/hallpass-client
           python -m venv /tmp/clean
           /tmp/clean/bin/pip install --quiet "$(ls /tmp/dist/hallpass-*.whl)[crypto]" pytest pytest-timeout hypothesis
           cp -r tests /tmp/wheel-tests
           (cd /tmp && HALLPASS_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m pytest -q -p no:cacheprovider --rootdir /tmp /tmp/wheel-tests)
-          /tmp/clean/bin/pip install --quiet --no-deps /tmp/dist/hallpass_client-*.whl
-          (cd /tmp && HALLPASS_SDK_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m unittest discover -s "$GITHUB_WORKSPACE/hallpass-py/compat/hallpass-client/tests" -v)
 
   specs:
     # The integration suites with every fake upstream validating requests

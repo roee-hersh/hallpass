@@ -218,7 +218,9 @@ hallpass serve    -config hallpass.yaml      # POST /check and GET /healthz on :
 - [Documentation](https://github.com/roee-hersh/hallpass/tree/main/docs), including one page per
   integration with the credential to create.
 - [Architecture and trust boundaries](https://github.com/roee-hersh/hallpass/blob/main/docs/concepts/architecture.md).
-- `hallpass-client` on PyPI is now a compatibility package that re-exports this one; new code
-  should depend on `hallpass`.
+- `hallpass-client` on PyPI, the old Python client, is replaced by this package and gets no new
+  releases; installed versions keep working. To move, depend on `hallpass` and change
+  `from hallpass_client import Hallpass` / `Hallpass()` to `from hallpass import Hallpass` /
+  `Hallpass.remote()` (and `hallpass_client.strands` to `hallpass.strands`).
 
 Apache-2.0.

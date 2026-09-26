@@ -105,9 +105,8 @@ jobs:
   assets:
     # Attaches the packages to the GitHub release as a registry-free copy
     # (pip install <url>, npm install <url>), under fixed names so
-    # releases/latest/download/... works: hallpass-python.tar.gz,
-    # hallpass-client-python.tar.gz, hallpass-client-node.tgz, plus the
-    # versioned wheels and checksums.txt. The docs install from PyPI and npm,
+    # releases/latest/download/... works: hallpass-python.tar.gz and
+    # hallpass-client-node.tgz, plus the versioned wheel and checksums.txt. The docs install from PyPI and npm,
     # which the pypi and npm jobs below publish to.
     needs: tag
     runs-on: ubuntu-latest
@@ -128,7 +127,6 @@ jobs:
           .github/scripts/build-python.sh "${VERSION#v}" pydist
           cp pydist/*.whl out/
           cp pydist/hallpass-[0-9]*.tar.gz out/hallpass-python.tar.gz
-          cp pydist/hallpass_client-*.tar.gz out/hallpass-client-python.tar.gz
           cd hallpass-ts
           npm ci
           npm version --no-git-tag-version "${VERSION#v}"
@@ -144,10 +142,10 @@ jobs:
         run: gh release upload "$VERSION" out/* --clobber
 
   pypi:
-    # Publishes hallpass (hallpass-py) and the hallpass-client compatibility
-    # package with PyPI trusted publishing (no stored token). Runs once the
-    # repository variable PUBLISH_PYPI is "true", after the publisher is
-    # registered on PyPI for both projects; see hallpass-py/RELEASING.md.
+    # Publishes hallpass (hallpass-py) with PyPI trusted publishing (no
+    # stored token). Runs once the repository variable PUBLISH_PYPI is
+    # "true", after the publisher is registered on PyPI; see
+    # hallpass-py/RELEASING.md.
     needs: tag
     if: vars.PUBLISH_PYPI == 'true'
     runs-on: ubuntu-latest
