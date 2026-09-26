@@ -76,6 +76,10 @@ covers the many that do not, and the agents that cannot ask every user to connec
 - **Fails closed.** `deny`, `unknown` and an unreachable hallpass all mean the tool does not run.
 - **Read-only, per resource, from the source of truth.** Each check is answered live by the system
   that owns the resource, with a read-only credential.
+- **The lookup credentials stay out of the agent.** The agent keeps its own credential to act.
+  Asking what *another* user may do often takes more access than acting does (Administer Jira,
+  Kubernetes `SubjectAccessReview`, IAM policy simulation). Running hallpass as its own service
+  means the agent never holds those credentials.
 - **Every decision is logged** as a JSON line, with the upstream calls it was based on.
 
 Not goals: approving changes, making check and action atomic, or proving who the user is.

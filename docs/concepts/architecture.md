@@ -135,6 +135,12 @@ decides anything.
 - **hallpass's own credentials are read-only** wherever the product allows it. Each
   [integration page](../integrations/README.md) says exactly what to grant, and where a product forces
   a broader grant.
+- **The lookup credentials stay out of the agent.** The agent needs its own credential to act, and
+  hallpass changes neither that nor agent code that skips the check: the check guards against the
+  model choosing to act, not against a compromised agent. What a separate hallpass keeps out of the
+  agent is the credential that answers for other users, which often needs more access than acting
+  does: Administer Jira, creating `SubjectAccessReview`s, simulating anyone's IAM policies. Run it
+  as its own service, not on the agent's machine, wherever real credentials are involved.
 - **Secrets never sit in the config.** Every credential is an `env:NAME` or `file:/path` reference,
   and files are re-read on every use, so a rotated token keeps working. Secrets are redacted in
   logs. Request and response bodies of upstream calls are never logged.
