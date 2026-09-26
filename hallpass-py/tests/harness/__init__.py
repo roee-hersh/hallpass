@@ -602,3 +602,9 @@ def failure_cases(srv: Server, check_fn: Callable[[], Decision]) -> None:
             srv.fail(Failure.NONE)
         assert d.outcome.value == "unknown", f"failure {f}: outcome {d.outcome}, want unknown ({d.code}: {d.text})"
         assert d.code == code, f"failure {f}: code {d.code}, want {code} ({d.text})"
+
+
+def examples(n: int) -> int:
+    """Hypothesis examples for a property test: n, times HALLPASS_FUZZ_SCALE
+    (the nightly job sets it for long runs of the ported fuzz targets)."""
+    return n * max(1, int(os.environ.get("HALLPASS_FUZZ_SCALE", "1") or "1"))

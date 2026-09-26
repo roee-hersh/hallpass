@@ -11,6 +11,7 @@ from hypothesis import strategies as st
 from hallpass.core.catalog import ResourceError, go_bytes, parse_resource
 from hallpass.integrations.aws.actions import ALIASES, ARN_RE, MAX_ARN_RESOURCE, RAW_ACTION_RE, arn_field, resolve_action
 from hallpass.integrations.aws.actions import parse_resource as aws_parse_resource
+from tests.harness import examples as _examples
 
 SEEDS = [
     ("raw:s3:GetObject", "arn:aws:s3:::bucket/key"),
@@ -69,7 +70,7 @@ _RESOURCES = st.one_of(
 )
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_ACTIONS, _RESOURCES)
 def test_fuzz_parse_resource(action: str, resource: str) -> None:
     parse_resource_invariants(action, resource)

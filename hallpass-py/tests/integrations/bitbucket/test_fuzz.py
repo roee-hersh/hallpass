@@ -11,6 +11,7 @@ from hypothesis import strategies as st
 from hallpass.core.catalog import ResourceError, parse_resource
 from hallpass.core.decision import HallpassError
 from hallpass.integrations.bitbucket.actions import ACTIONS, parse_target, valid_branch, valid_slug
+from tests.harness import examples as _examples
 
 SEEDS = [
     ("repo.read", "repo:api"),
@@ -65,7 +66,7 @@ _RESOURCE = st.one_of(
 _ACTION = st.one_of(st.sampled_from(sorted(ACTIONS)), st.text(max_size=20))
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_ACTION, _RESOURCE)
 def test_fuzz_parse_target(action: str, resource: str) -> None:
     fuzz_parse_target(action, resource)

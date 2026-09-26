@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 
 from hallpass.core.catalog import ResourceError, parse_resource
 from hallpass.integrations.gitlab.actions import ACTIONS, BRANCH_RE, NUMERIC_RE, PATH_RE, SCOPE_PROJECT, parse_target
+from tests.harness import examples as _examples
 
 SEEDS = [
     ("project.read", "project:acme/webapp"),
@@ -63,7 +64,7 @@ _RESOURCE = st.one_of(
 _ACTION = st.one_of(st.sampled_from(sorted(ACTIONS)), st.text(max_size=20))
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_ACTION, _RESOURCE)
 def test_fuzz_parse_target(action: str, resource: str) -> None:
     fuzz_parse_target(action, resource)

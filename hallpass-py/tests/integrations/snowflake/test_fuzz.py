@@ -15,6 +15,7 @@ from hallpass.core.catalog import ResourceError, parse_resource
 from hallpass.core.decision import HallpassError
 from hallpass.integrations.snowflake.actions import ACTION_LIST, KINDS, parse_target
 from hallpass.integrations.snowflake.sql import parse_identifier, quote, split_name
+from tests.harness import examples as _examples
 
 PARSE_TARGET_SEEDS = [
     ("table.select", "table:prod.sales.orders"),
@@ -77,7 +78,7 @@ _NAME = st.builds(lambda ps: ".".join(ps), st.lists(_PART, min_size=0, max_size=
 _RESOURCES = st.one_of(st.text(), st.builds(lambda t, n: t + ":" + n, _TYPES, _NAME), _TYPES)
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_ACTIONS, _RESOURCES)
 def test_fuzz_parse_target(action: str, resource: str) -> None:
     fuzz_parse_target(action, resource)
@@ -104,7 +105,7 @@ def test_fuzz_identifier_seeds(s: str) -> None:
     fuzz_identifier(s)
 
 
-@settings(max_examples=1000, deadline=None)
+@settings(max_examples=_examples(1000), deadline=None)
 @given(st.one_of(st.text(), st.from_regex(r'"[^"]*("")?[^"]*"', fullmatch=True), st.from_regex(r"[A-Za-z_][A-Za-z0-9_$]{0,20}", fullmatch=True)))
 def test_fuzz_identifier(s: str) -> None:
     fuzz_identifier(s)

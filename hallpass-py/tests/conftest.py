@@ -9,7 +9,8 @@ import pytest
 # Tests import the harness as tests.harness; make the project root importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests import harness  # noqa: E402
+from tests import harness
+from tests.harness import examples as _examples
 
 if os.environ.get("HALLPASS_REQUIRE_INSTALLED"):
     # CI tests the built wheel from outside the checkout: the package under
@@ -36,3 +37,15 @@ def srv() -> Iterator[harness.Server]:
     yield s
     s.close()
     assert not s.spec_errors, "requests did not match the API description:\n" + "\n".join(s.spec_errors)
+
+
+# Property tests stand in for the original Go fuzz targets. CI runs them at
+# Hypothesis's default size; the nightly job selects HYPOTHESIS_PROFILE=nightly
+# for long runs.
+try:
+    from hypothesis import HealthCheck, settings
+
+    settings.register_profile("nightly", max_examples=_examples(20_000), deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
+except ImportError:  # pragma: no cover - hypothesis is a test dependency
+    pass

@@ -11,6 +11,7 @@ from hypothesis import strategies as st
 from hallpass.core.catalog import ResourceError, parse_resource
 from hallpass.core.decision import HallpassError
 from hallpass.integrations.azure.actions import ACTIONS, parse_target
+from tests.harness import examples as _examples
 
 SEEDS = [
     ("vm.read", "subscription:33333333-3333-3333-3333-333333333333"),
@@ -103,7 +104,7 @@ _RESOURCES = st.one_of(
 )
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_ACTIONS, _RESOURCES)
 def test_fuzz_parse_target(action: str, resource: str) -> None:
     parse_target_invariants(action, resource)

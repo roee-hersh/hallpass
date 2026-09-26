@@ -13,6 +13,7 @@ from hypothesis import strategies as st
 from hallpass.core.catalog import ResourceError, parse_resource
 from hallpass.integrations.argocd.actions import ACTIONS, OBJ_RE, build_request
 from hallpass.integrations.argocd.rbac.glob import GlobError, glob_match, parse_glob
+from tests.harness import examples as _examples
 
 BUILD_REQUEST_SEEDS = [
     ("app.get", "applications:dev/web"),
@@ -77,7 +78,7 @@ _RESOURCES = st.one_of(
 )
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_ACTIONS, _RESOURCES)
 def test_fuzz_build_request(action: str, resource: str) -> None:
     build_request_invariants(action, resource)
@@ -86,7 +87,7 @@ def test_fuzz_build_request(action: str, resource: str) -> None:
 _GLOB_CHARS = "ab/*?[]!-{},\\日"
 
 
-@settings(max_examples=1000, deadline=None)
+@settings(max_examples=_examples(1000), deadline=None)
 @given(st.text(alphabet=_GLOB_CHARS, max_size=20), st.text(alphabet=_GLOB_CHARS, max_size=20))
 def test_fuzz_glob(pattern: str, text: str) -> None:
     glob_invariants(pattern, text)

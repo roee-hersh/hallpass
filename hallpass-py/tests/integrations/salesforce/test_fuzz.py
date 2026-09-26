@@ -14,6 +14,7 @@ from hypothesis import strategies as st
 from hallpass.core.catalog import ResourceError, parse_resource
 from hallpass.integrations.salesforce.actions import ACTION_LIST, ACTIONS, parse_target
 from hallpass.integrations.salesforce.soql import API_NAME_RE, ID_RE, PERM_NAME_RE, soql_string, validate_email
+from tests.harness import examples as _examples
 
 PARSE_TARGET_SEEDS = [
     ("record.read", "record:001000000000001AAA"),
@@ -75,7 +76,7 @@ _ID_TEXT = st.one_of(
 _RESOURCES = st.one_of(st.text(), st.builds(lambda t, i: t + ":" + i, _TYPES, _ID_TEXT))
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_ACTIONS, _RESOURCES)
 def test_fuzz_parse_target(action: str, resource: str) -> None:
     fuzz_parse_target(action, resource)
@@ -104,7 +105,7 @@ def test_fuzz_soql_string_seeds(s: str) -> None:
     fuzz_soql_string(s)
 
 
-@settings(max_examples=1000, deadline=None)
+@settings(max_examples=_examples(1000), deadline=None)
 @given(st.one_of(st.text(), st.from_regex(r"[\\'\"\n\r\ta-z]*", fullmatch=True)))
 def test_fuzz_soql_string(s: str) -> None:
     fuzz_soql_string(s)

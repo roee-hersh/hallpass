@@ -17,6 +17,7 @@ from hallpass.core.catalog import ResourceError, parse_resource
 from hallpass.core.decision import HallpassError
 from hallpass.integrations.vault.actions import ACTION_LIST, parse_target
 from hallpass.integrations.vault.policy import CAPABILITIES, PolicyError, TemplateContext, evaluate, parse_policy
+from tests.harness import examples as _examples
 from tests.integrations.vault.test_vault import DEFAULT_POLICY, DEV_POLICY, OPS_POLICY, TEAM_POLICY
 
 TESTDATA = Path(__file__).parent / "testdata" / "fuzz"
@@ -145,7 +146,7 @@ _RESOURCES = st.one_of(
 )
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_ACTIONS, _RESOURCES)
 def test_fuzz_parse_target(action: str, resource: str) -> None:
     fuzz_parse_target(action, resource)
@@ -264,7 +265,7 @@ _POLICIES = st.one_of(
 )
 
 
-@settings(max_examples=1000, deadline=None)
+@settings(max_examples=_examples(1000), deadline=None)
 @given(_POLICIES)
 def test_fuzz_policy(src: str) -> None:
     fuzz_policy(src)

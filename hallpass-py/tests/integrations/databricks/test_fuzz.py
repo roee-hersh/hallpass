@@ -25,6 +25,7 @@ from hallpass.integrations.databricks.actions import (
     levels_of,
     parse_ref,
 )
+from tests.harness import examples as _examples
 
 SEEDS = [
     ("table.read", "table:main.sales.orders"),
@@ -92,7 +93,7 @@ _RESOURCES = st.one_of(
 )
 
 
-@settings(max_examples=1000, deadline=None)
+@settings(max_examples=_examples(1000), deadline=None)
 @given(_ACTIONS, _RESOURCES)
 def test_fuzz_parse_ref(action: str, resource: str) -> None:
     fuzz_parse_ref(action, resource)

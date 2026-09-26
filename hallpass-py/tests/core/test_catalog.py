@@ -28,6 +28,7 @@ from hallpass.core.catalog import (
     split_branch,
     validate_action_name,
 )
+from tests.harness import examples as _examples
 
 # typeRe, anchored at both ends as Go's regexp is (no newline before $).
 TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
@@ -188,7 +189,7 @@ _RESOURCE_ALPHABET = st.sampled_from([*"az09_:?&=%/@.-+;#A ", "%zz", "%0A", "%C2
 _resource_text = st.one_of(st.text(), st.lists(_RESOURCE_ALPHABET, max_size=30).map("".join))
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_resource_text)
 @example("a" * (MAX_RESOURCE_LENGTH + 1))
 @example("a:" + "é" * 512)
@@ -218,7 +219,7 @@ def test_fuzz_validate_action_name_seeds(name: str) -> None:
     check_validate_action_invariants(name)
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(st.one_of(st.text(), st.from_regex(r"[A-Za-z0-9][A-Za-z0-9_.:/*\- \n\x7f]*", fullmatch=True)))
 @example("a" * (MAX_ACTION_LENGTH + 1))
 @example("a\n")

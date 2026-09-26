@@ -19,6 +19,7 @@ from hallpass.integrations.kubernetes.actions import (
     VERB_RE,
     build_attributes,
 )
+from tests.harness import examples as _examples
 
 SEEDS = [
     ("raw:get:pods", "namespace:payments?name=api-0"),
@@ -77,7 +78,7 @@ _RESOURCES = st.one_of(
 )
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=_examples(500), deadline=None)
 @given(_ACTIONS, _RESOURCES)
 def test_fuzz_build_attributes(action: str, resource: str) -> None:
     build_attributes_invariants(action, resource)
