@@ -82,6 +82,27 @@ What it guarantees:
 `current(source)` resolves a user or groups source the same way, for code outside a guarded
 function. A `ContextVar` or `AsyncLocalStorage` with nothing set gives a clear error.
 
+## HallpassAuthorization (Python, Strands Agents)
+
+A Strands intervention handler, in `hallpass_client.strands` (`pip install "hallpass-client[strands]"`,
+Python 3.10 or later, `strands-agents` 1.57.1 or later).
+
+```python
+HallpassAuthorization(hp, rules, *, user_key="user_id", groups_key=None, strict=False)
+```
+
+| Parameter | Meaning |
+|---|---|
+| `rules` | Tool name to `Rule(connection, action, resource, fresh=False)` or a `(connection, action, resource)` tuple. `resource` is a template over the tool's input; each field must be one input name |
+| `user_key` | The `invocation_state` key the user is read from |
+| `groups_key` | Optional. The `invocation_state` key the user's groups are read from, a list of strings |
+| `strict` | Deny tools with no rule. A rule of `None` lets a tool run unchecked |
+
+Each of these denies the call, with the reason as the tool result: no user (or no groups when
+`groups_key` is set), an input value the resource needs that is missing or is not a string or
+number, any answer but `allow`, and an exception in the handler (`on_error` is `deny`). The check
+runs in a worker thread, and a checked tool logs the write line below after it runs.
+
 ## The write log line (Python)
 
 hallpass never sees the write itself, so after a guarded body runs, the Python client logs one line
@@ -95,6 +116,8 @@ so check and write were not atomic
 ```
 
 A refused call logs nothing. A body that raises still logs, since the write may have happened.
+`HallpassAuthorization` logs the same line after a checked Strands tool runs, with `raised <error>
+from` or `got an error result from` in place of `ran` when the tool failed.
 
 ## Fresh checks and atomicity
 
