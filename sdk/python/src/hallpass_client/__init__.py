@@ -244,6 +244,20 @@ def _parse(status: int, raw: bytes) -> Decision:
     return Decision(decision, reason, status)
 
 
+def _log_write(
+    who: str, outcome: str, connection: str, action: str, resource: str,
+    d: Decision, checked_at: datetime.datetime, fresh: bool,
+) -> None:
+    """The line logged after a checked write ran, from ``guarded`` and the Strands handler."""
+    log.info(
+        "unconditional write: %s %s %s on %s in %s; hallpass said %s (%s) at %s, fresh=%s; "
+        "the write was not conditioned on the state hallpass saw (no If-Match), "
+        "so check and write were not atomic",
+        who, outcome, action, resource, connection, d.decision, d.reason,
+        checked_at.isoformat(timespec="milliseconds"), fresh,
+    )
+
+
 F = TypeVar("F", bound=Callable)
 
 # Where the acting user (or their groups) comes from: a fixed value, a
@@ -363,13 +377,7 @@ def guarded(
             return deny(e)
 
         def ran(who: str, res: str, d: Decision, checked_at: datetime.datetime, outcome: str) -> None:
-            log.info(
-                "unconditional write: %s %s %s on %s in %s; hallpass said %s (%s) at %s, fresh=%s; "
-                "the write was not conditioned on the state hallpass saw (no If-Match), "
-                "so check and write were not atomic",
-                who, outcome, action, res, connection, d.decision, d.reason,
-                checked_at.isoformat(timespec="milliseconds"), fresh,
-            )
+            _log_write(who, outcome, connection, action, res, d, checked_at, fresh)
 
         if inspect.iscoroutinefunction(fn):
 

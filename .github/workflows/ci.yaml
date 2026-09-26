@@ -70,6 +70,13 @@ jobs:
           python -m venv /tmp/clean
           /tmp/clean/bin/pip install --quiet dist/*.whl
           cd /tmp && HALLPASS_SDK_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m unittest discover -s "$GITHUB_WORKSPACE/sdk/python/tests" -v
+      - name: test the installed wheel with the strands extra
+        # strands-agents needs Python 3.10 or later.
+        if: matrix.python != '3.9'
+        run: |
+          python -m venv /tmp/strands
+          /tmp/strands/bin/pip install --quiet "$(ls dist/*.whl)[strands]"
+          cd /tmp && HALLPASS_SDK_REQUIRE_INSTALLED=1 HALLPASS_SDK_REQUIRE_STRANDS=1 /tmp/strands/bin/python -m unittest discover -s "$GITHUB_WORKSPACE/sdk/python/tests" -v
 
   sdk-node:
     # Builds the npm package, installs the packed tarball into an empty

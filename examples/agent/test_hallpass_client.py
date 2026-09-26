@@ -592,6 +592,230 @@ class StrandsTest(unittest.TestCase):
             self.assertIn("may not thing.write on thing:" + thing, res["content"][0]["text"])
 
 
+@optional("strands.interventions", "strands-agents package with interventions")
+class StrandsInterventionTest(unittest.TestCase):
+    """HallpassAuthorization through a real Strands Agent, with a scripted model."""
+
+    @classmethod
+    def setUpClass(cls):
+        from strands import Agent
+        from strands.models import Model
+
+        import strands_intervention
+        from hallpass_client.strands import HallpassAuthorization, Rule
+
+        cls.mod, cls.Agent, cls.Handler, cls.Rule = strands_intervention, Agent, HallpassAuthorization, Rule
+
+        class Scripted(Model):
+            """Asks for the given tool calls, then ends the turn."""
+
+            def __init__(self, calls):
+                self.turns = [calls, None]
+
+            def update_config(self, **kw):
+                pass
+
+            def get_config(self):
+                return {}
+
+            async def structured_output(self, *a, **kw):
+                raise NotImplementedError
+                yield
+
+            async def stream(self, messages, tool_specs=None, system_prompt=None, **kw):
+                calls = self.turns.pop(0)
+                yield {"messageStart": {"role": "assistant"}}
+                if calls is None:
+                    yield {"contentBlockStart": {"start": {}}}
+                    yield {"contentBlockDelta": {"delta": {"text": "done"}}}
+                    yield {"contentBlockStop": {}}
+                    yield {"messageStop": {"stopReason": "end_turn"}}
+                    return
+                for i, (name, args) in enumerate(calls):
+                    yield {"contentBlockStart": {"start": {"toolUse": {"toolUseId": "t%d" % i, "name": name}}}}
+                    yield {"contentBlockDelta": {"delta": {"toolUse": {"input": json.dumps(args)}}}}
+                    yield {"contentBlockStop": {}}
+                yield {"messageStop": {"stopReason": "tool_use"}}
+
+        cls.Scripted = Scripted
+
+    def setUp(self):
+        FakeHallpass.seen.clear()
+
+    def run_agent(self, calls, state, interventions=None, tools=None) -> list[dict]:
+        """Run the calls through an Agent and return the tool results, in call order."""
+        agent = self.Agent(
+            model=self.Scripted(calls),
+            tools=tools or self.mod.tools,
+            interventions=interventions if interventions is not None else [self.mod.hallpass],
+            callback_handler=None,
+        )
+        agent("go", invocation_state=state)
+        results = {b["toolResult"]["toolUseId"]: b["toolResult"]
+                   for m in agent.messages for b in m["content"] if "toolResult" in b}
+        return [results["t%d" % i] for i in range(len(calls))]
+
+    @staticmethod
+    def text(result: dict) -> str:
+        return result["content"][0]["text"]
+
+    def test_allow_runs_the_tool(self):
+        [res] = self.run_agent([("write_thing", {"thing_id": "allowed", "content": "hi"})], {"user_id": DANA})
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(self.text(res), "wrote 2 bytes to thing:allowed as " + DANA)
+        self.assertEqual(last_request(), {"user": DANA, "connection": "demo", "action": "thing.write",
+                                          "resource": "thing:allowed"})
+
+    def test_deny_and_unknown_do_not_run(self):
+        for thing in ("denied", "timeout", "garbage"):
+            [res] = self.run_agent([("write_thing", {"thing_id": thing, "content": "hi"})], {"user_id": DANA})
+            self.assertEqual(res["status"], "error", thing)
+            self.assertTrue(self.text(res).startswith(
+                "DENIED: dana@example.com may not thing.write on thing:%s in demo: " % thing), self.text(res))
+            self.assertNotIn("wrote", self.text(res))
+        self.assertIn("(upstream_timeout: jira took too long)", self.text(
+            self.run_agent([("write_thing", {"thing_id": "timeout", "content": "hi"})], {"user_id": DANA})[0]))
+
+    def test_unreachable_denies(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        handler = self.Handler(Hallpass("http://127.0.0.1:%d" % port, API_KEY, timeout=1),
+                               {"write_thing": ("demo", "thing.write", "thing:{thing_id}")})
+        [res] = self.run_agent([("write_thing", {"thing_id": "allowed", "content": "hi"})], {"user_id": DANA},
+                               interventions=[handler])
+        self.assertEqual(res["status"], "error")
+        self.assertIn("unknown (client_error: hallpass unreachable", self.text(res))
+
+    def test_missing_user_denies(self):
+        for state in ({}, {"user_id": ""}, {"user_id": ["admin@example.com"]}, {"user": DANA}):
+            [res] = self.run_agent([("write_thing", {"thing_id": "allowed", "content": "hi"})], state)
+            self.assertEqual(res["status"], "error", state)
+            self.assertIn("no user for this request", self.text(res))
+        self.assertEqual(FakeHallpass.seen, [])
+
+    def test_model_cannot_choose_the_user(self):
+        props = self.mod.write_thing.tool_spec["inputSchema"]["json"]["properties"]
+        self.assertEqual(set(props), {"thing_id", "content"}, "user must not be in the tool schema")
+        [res] = self.run_agent([("write_thing", {"thing_id": "allowed", "content": "hi",
+                                                  "user": "admin@example.com", "user_id": "admin@example.com"})],
+                               {"user_id": DANA})
+        self.assertEqual(last_request()["user"], DANA)
+        self.assertTrue(self.text(res).endswith("as " + DANA), self.text(res))
+
+    def test_unfillable_resource_denies(self):
+        for args in ({"content": "hi"}, {"thing_id": {"nested": "allowed"}, "content": "hi"},
+                     {"thing_id": ["allowed"], "content": "hi"}, {"thing_id": None, "content": "hi"}):
+            [res] = self.run_agent([("write_thing", args)], {"user_id": DANA})
+            self.assertEqual(res["status"], "error", args)
+            self.assertIn("DENIED: cannot build the resource 'thing:{thing_id}' for write_thing", self.text(res))
+        self.assertEqual(FakeHallpass.seen, [])
+
+    def test_tools_without_a_rule(self):
+        call = ("check_permission", {"connection": "demo", "action": "thing.write", "resource": "thing:denied"})
+        [res] = self.run_agent([call], {"user_id": DANA})
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(self.text(res), "deny: denied: not an admin")
+        self.assertEqual(len(FakeHallpass.seen), 1, "an unruled tool is not checked before it runs")
+        strict = self.Handler(self.mod.hp, {"write_thing": ("demo", "thing.write", "thing:{thing_id}")}, strict=True)
+        [res] = self.run_agent([call], {"user_id": DANA}, interventions=[strict])
+        self.assertEqual(self.text(res), "DENIED: no hallpass rule for tool 'check_permission'")
+        allowed = self.Handler(self.mod.hp, {"check_permission": None}, strict=True)
+        [res] = self.run_agent([call], {"user_id": DANA}, interventions=[allowed])
+        self.assertEqual(res["status"], "success")
+
+    def test_groups_and_fresh(self):
+        handler = self.Handler(self.mod.hp, {"write_thing": self.Rule("demo", "thing.write", "thing:{thing_id}",
+                                                                      fresh=True)}, groups_key="groups")
+        call = [("write_thing", {"thing_id": "allowed", "content": "hi"})]
+        [res] = self.run_agent(call, {"user_id": DANA, "groups": ["platform-team"]}, interventions=[handler])
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(last_request(), {"user": DANA, "groups": ["platform-team"], "connection": "demo",
+                                          "action": "thing.write", "resource": "thing:allowed", "fresh": True})
+        FakeHallpass.seen.clear()
+        for state in ({"user_id": DANA}, {"user_id": DANA, "groups": "platform-team"}):
+            [res] = self.run_agent(call, state, interventions=[handler])
+            self.assertEqual(res["status"], "error", state)
+            self.assertIn("no groups for this request", self.text(res))
+        self.assertEqual(FakeHallpass.seen, [])
+
+    def test_several_calls_at_once(self):
+        res = self.run_agent([("write_thing", {"thing_id": "denied", "content": "a"}),
+                              ("write_thing", {"thing_id": "allowed", "content": "bb"})], {"user_id": DANA})
+        self.assertEqual([r["status"] for r in res], ["error", "success"])
+        self.assertEqual(self.text(res[1]), "wrote 2 bytes to thing:allowed as " + DANA)
+
+    def test_logs_unconditional_write(self):
+        from strands import tool
+
+        @tool
+        def broken_thing(thing_id: str) -> str:
+            """Fail after starting a write.
+
+            Args:
+                thing_id: the thing
+            """
+            raise ValueError("boom")
+
+        handler = self.Handler(self.mod.hp, {"write_thing": ("demo", "thing.write", "thing:{thing_id}"),
+                                             "broken_thing": ("demo", "thing.write", "thing:{thing_id}")})
+        tools = [self.mod.write_thing, broken_thing]
+        with self.assertLogs("hallpass", level="INFO") as logs:
+            self.run_agent([("write_thing", {"thing_id": "allowed", "content": "hi"})], {"user_id": DANA},
+                           interventions=[handler], tools=tools)
+        [line] = logs.output
+        for part in ("unconditional write", DANA, "ran thing.write on thing:allowed in demo",
+                     "hallpass said allow (allowed: admin)", "fresh=False", "not atomic"):
+            self.assertIn(part, line)
+        with self.assertLogs("hallpass", level="INFO") as logs:
+            self.run_agent([("broken_thing", {"thing_id": "allowed"})], {"user_id": DANA},
+                           interventions=[handler], tools=tools)
+        [line] = logs.output
+        self.assertIn("raised ValueError from thing.write on thing:allowed", line)
+        with self.assertNoLogs("hallpass", level="INFO"):
+            self.run_agent([("write_thing", {"thing_id": "denied", "content": "hi"})], {"user_id": DANA},
+                           interventions=[handler], tools=tools)
+
+    def test_composes_with_other_interventions(self):
+        from strands.interventions import Deny, InterventionHandler
+
+        class Later(InterventionHandler):
+            name = "later"
+
+            def before_tool_call(self, event, **kw):
+                return Deny(reason="blocked by a later handler")
+
+        state = {"user_id": DANA}
+        with self.assertNoLogs("hallpass", level="INFO"):
+            [res] = self.run_agent([("write_thing", {"thing_id": "allowed", "content": "hi"})], state,
+                                   interventions=[self.mod.hallpass, Later()])
+        self.assertEqual(self.text(res), "DENIED: blocked by a later handler")
+        self.assertEqual(len(FakeHallpass.seen), 1)
+        self.assertEqual(state.get("hallpass_checks"), {}, "a cancelled call leaves no pending check")
+
+    def test_handler_error_denies(self):
+        class Broken:
+            def check(self, *a, **kw):
+                raise RuntimeError("client blew up")
+
+        handler = self.Handler(Broken(), {"write_thing": ("demo", "thing.write", "thing:{thing_id}")})
+        [res] = self.run_agent([("write_thing", {"thing_id": "allowed", "content": "hi"})], {"user_id": DANA},
+                               interventions=[handler])
+        self.assertEqual(res["status"], "error")
+        self.assertIn("client blew up", self.text(res))
+        self.assertNotIn("wrote", self.text(res))
+
+    def test_bad_rules(self):
+        hp = self.mod.hp
+        for rules in ({"t": ("demo", "thing.write")}, {"t": ("demo", "", "thing:{x}")}, {"t": "demo"},
+                      {"t": ["demo", "thing.write", "thing:{x}"]}):
+            with self.assertRaises(TypeError, msg=rules):
+                self.Handler(hp, rules)
+        for template in ("thing:{x.y}", "thing:{x[0]}", "thing:{}", "thing:{0}"):
+            with self.assertRaises(ValueError, msg=template):
+                self.Handler(hp, {"t": ("demo", "thing.write", template)})
+
+
 @optional("claude_agent_sdk", "claude-agent-sdk package")
 class ClaudeAgentSDKTest(unittest.TestCase):
     @classmethod
