@@ -268,6 +268,14 @@ def resolve_err(c: Connection, u: User) -> Decision:
     raise AssertionError(f"resolve_identity({u.email}) succeeded")
 
 
+def probe_err(c: Connection) -> Decision:
+    try:
+        c.probe(background())
+    except Exception as e:
+        return to_decision(e)
+    raise AssertionError("probe succeeded")
+
+
 def test_fields_valid() -> None:
     validate_fields(Jira().fields())
     for a in Jira().actions():
@@ -285,9 +293,11 @@ def test_new_validation(servers: _Servers) -> None:
     ]
     for name, values, sec in cases:
         s = itest.settings("j", "jira", values, {"credential": sec})
-        with pytest.raises(Exception):  # noqa: B017 - Go: err == nil means accepted
+        try:
             Jira().new(background(), s, deps)
-            pytest.fail(f"{name}: new accepted")
+        except Exception:  # noqa: BLE001 - Go: any error rejects
+            continue
+        pytest.fail(f"{name}: new accepted")
     assert len(srv.calls()) == 0, "new touched the network"
 
 
@@ -613,15 +623,8 @@ def test_probe(setup: Setup) -> None:
     assert len(r.warnings) == 2, r
     assert "Administer Jira" in r.warnings[0] and "BULK_CHANGE" in r.warnings[1], r.warnings
     srv.fail(itest.Failure.UNAUTHORIZED)
-    try:
-        c.probe(background())
-        raise AssertionError("probe succeeded")
-    except AssertionError:
-        raise
-    except Exception as e:
-        d = to_decision(e)
-    finally:
-        srv.fail(itest.Failure.NONE)
+    d = probe_err(c)
+    srv.fail(itest.Failure.NONE)
     itest.expect_code(d, Code.CREDENTIAL_REJECTED)
 
 

@@ -45,6 +45,7 @@ from hallpass.integrations.aws.identity import (
     aws_code,
     classified,
     xml_bools,
+    xml_elements,
     xml_texts,
 )
 from hallpass.net import httpx
@@ -388,14 +389,14 @@ def _decode_simulate(root: Any) -> tuple[list[_EvalResult], bool, str]:
     and Marker, decoded the way encoding/xml fills simulateResponse."""
     res = "SimulatePrincipalPolicyResult"
     results = []
-    for m in xml_texts_elements(root, res, "EvaluationResults", "member"):
+    for m in xml_elements(root, res, "EvaluationResults", "member"):
         resources = [
             _EvalResource(
                 name=xmlutil.text(rr, "EvalResourceName"),
                 decision=xmlutil.text(rr, "EvalResourceDecision"),
                 missing=xml_texts(rr, "MissingContextValues", "member"),
             )
-            for rr in xml_texts_elements(m, "ResourceSpecificResults", "member")
+            for rr in xml_elements(m, "ResourceSpecificResults", "member")
         ]
         results.append(
             _EvalResult(
@@ -410,13 +411,6 @@ def _decode_simulate(root: Any) -> tuple[list[_EvalResult], bool, str]:
         )
     truncated = bool(xml_bools(root, res, "IsTruncated"))
     return results, truncated, xmlutil.text(root, res, "Marker")
-
-
-def xml_texts_elements(e: Any, *path: str) -> list[Any]:
-    frontier = [e] if e is not None else []
-    for p in path:
-        frontier = [c for x in frontier for c in xmlutil.children(x, p)]
-    return frontier
 
 
 def decision_rank(d: str) -> int:

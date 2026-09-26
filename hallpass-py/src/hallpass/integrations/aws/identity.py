@@ -36,6 +36,7 @@ __all__ = [
     "classify",
     "match_sso_role",
     "xml_bools",
+    "xml_elements",
     "xml_texts",
 ]
 
@@ -86,7 +87,7 @@ class SSORole:
 # -- XML the way encoding/xml decodes it into struct fields -------------------
 
 
-def _frontier(e: ET.Element | None, *path: str) -> list[ET.Element]:
+def xml_elements(e: ET.Element | None, *path: str) -> list[ET.Element]:
     """Every element at path under e, in document order (Go merges repeated
     elements of a non-slice field and appends those of a slice field)."""
     frontier = [e] if e is not None else []
@@ -102,7 +103,7 @@ def _own_text(e: ET.Element) -> str:
 
 def xml_texts(e: ET.Element | None, *path: str) -> list[str]:
     """A []string field: one entry per element at path."""
-    return [_own_text(x) for x in _frontier(e, *path)]
+    return [_own_text(x) for x in xml_elements(e, *path)]
 
 
 def _parse_bool(src: str) -> bool:
@@ -123,7 +124,7 @@ def xml_bools(e: ET.Element | None, *path: str) -> bool | None:
     value. Every occurrence is decoded, so a malformed one is an error even
     when a later one would win."""
     out: bool | None = None
-    for x in _frontier(e, *path):
+    for x in xml_elements(e, *path):
         out = _parse_bool(_own_text(x))
     return out
 
@@ -448,7 +449,7 @@ class IdentityResolver:
                 root = self.iam.query(ctx, "ListRoles", IAM_VERSION, params)
                 page_roles = [
                     SSORole(name=xmlutil.text(m, "RoleName"), arn=xmlutil.text(m, "Arn"), path=xmlutil.text(m, "Path"))
-                    for m in _frontier(root, "ListRolesResult", "Roles", "member")
+                    for m in xml_elements(root, "ListRolesResult", "Roles", "member")
                 ]
                 truncated = bool(xml_bools(root, "ListRolesResult", "IsTruncated"))
                 next_marker = xmlutil.text(root, "ListRolesResult", "Marker")
