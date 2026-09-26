@@ -397,7 +397,7 @@ class SnowflakeConnection(Connection):
         body["timeout"] = STATEMENT_TIMEOUT
         try:
             resp = self.api.do(ctx, httpx.Request(method="POST", path="/api/v2/statements", json=body, idempotent=True, accept_4xx=True))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise _classify(e)
         attempt = 0
         while resp.status == 202:
@@ -413,7 +413,7 @@ class SnowflakeConnection(Connection):
             self._sleep(ctx, 0.2 * (attempt + 1))
             try:
                 resp = self.api.do(ctx, httpx.Request(path="/api/v2/statements/" + handle, accept_4xx=True))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - classified and re-raised
                 raise _classify(e)
             attempt += 1
         if resp.status == 401:
@@ -453,7 +453,7 @@ class SnowflakeConnection(Connection):
             try:
                 _, v = self.api.get_json(ctx, "/api/v2/statements/" + rs.statement_handle, {"partition": str(part)})
                 more = _decode_result_set(v)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - classified and re-raised
                 raise _classify(e)
             more.row_type = rs.row_type
             rows.extend(more.rows())
@@ -480,7 +480,7 @@ class SnowflakeConnection(Connection):
 
         try:
             rows = self.run(ctx, "SHOW USERS LIKE " + like_literal(email))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise self._identity_err(e, "list users")
         found = [r for r in rows if match(r)]
         if not found:
@@ -492,7 +492,7 @@ class SnowflakeConnection(Connection):
                     stmt += " FROM " + string_literal(after)
                 try:
                     rows = self.run(ctx, stmt)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - classified and re-raised
                     raise self._identity_err(e, "list users")
                 found.extend(r for r in rows if match(r))
                 if len(rows) < USER_PAGE:
@@ -637,7 +637,7 @@ class SnowflakeConnection(Connection):
             return unsupported(f"SHOW USERS did not report whether {quote(ident.id)} is disabled")
         try:
             holdings, reach = self.walk(ctx, ident.groups)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             return to_decision(e)
         if t.action.name == "role.use":
             chain = reach.get(quote_name(t.name))
@@ -648,9 +648,7 @@ class SnowflakeConnection(Connection):
         # The privilege on the object itself.
         found = find(holdings, kind.granted_on, t.name, t.action.privileges)
         if found is None:
-            return denied(
-                f"none of the {len(reach)} role(s) {who} holds carries {' or '.join(t.action.privileges)} on {t} (or the object does not exist)"
-            )
+            return denied(f"none of the {len(reach)} role(s) {who} holds carries {' or '.join(t.action.privileges)} on {t} (or the object does not exist)")
         # USAGE on the parents: the database, and the schema for objects in
         # one. UNVERIFIED: standard Snowflake behaviour, not quoted from the
         # docs.
@@ -671,6 +669,8 @@ class SnowflakeConnection(Connection):
         holdings, _ = self.walk(ctx, roles)
         warnings = []
         if find(holdings, ("ACCOUNT",), (), ("MANAGE GRANTS",)) is None:
-            warnings.append("none of hallpass's roles holds MANAGE GRANTS: SHOW GRANTS on other users and roles answers only for objects hallpass's role can see")
+            warnings.append(
+                "none of hallpass's roles holds MANAGE GRANTS: SHOW GRANTS on other users and roles answers only for objects hallpass's role can see"
+            )
         warnings.append("the answer is the union of every role granted to the user; a session activates one primary role plus secondary roles")
         return ProbeResult(summary=summary, warnings=tuple(warnings))

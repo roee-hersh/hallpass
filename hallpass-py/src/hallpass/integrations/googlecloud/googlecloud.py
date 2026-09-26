@@ -222,15 +222,15 @@ def _google_error(body: bytes) -> tuple[str, list[str]]:
         return "", []
     if not isinstance(v, dict):
         return "", []
-    e = jsonx._get(v, "error")
+    e = jsonx.get(v, "error")
     if not isinstance(e, dict):
         return "", []
-    status = jsonx._get(e, "status")
-    details = jsonx._get(e, "details")
+    status = jsonx.get(e, "status")
+    details = jsonx.get(e, "details")
     reasons: list[str] = []
     if isinstance(details, list):
         for d in details:
-            r = jsonx._get(d, "reason") if isinstance(d, dict) else None
+            r = jsonx.get(d, "reason") if isinstance(d, dict) else None
             reasons.append(r if isinstance(r, str) else "")
     return status if isinstance(status, str) else "", reasons
 

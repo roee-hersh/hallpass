@@ -58,7 +58,7 @@ try:
 except ImportError as e:  # pragma: no cover - depends on the environment
     raise ImportError('hallpass.claude_agent_sdk needs claude-agent-sdk 0.2.160 or later: pip install "hallpass[claude-agent-sdk]"') from e
 
-from hallpass._api import log
+from hallpass._api import Hallpass, log
 from hallpass._rules import Checked, Outcome, Rule, RuleLike, Rules, refusal
 
 __all__ = ["HallpassHooks", "Rule"]
@@ -89,7 +89,7 @@ class HallpassHooks:
 
     def __init__(
         self,
-        hp: Any,
+        hp: Hallpass,
         rules: Mapping[str, RuleLike],
         *,
         user: Any,
@@ -143,11 +143,7 @@ class HallpassHooks:
             data = input_data if isinstance(input_data, Mapping) else {}
             outcome = await self._decide(data.get("tool_name"), data.get("tool_input"))
             if outcome.allowed:
-                key = tool_use_id or data.get("tool_use_id")
-                if outcome.checked is not None and isinstance(key, str):
-                    self._pending[key] = outcome.checked
-                    while len(self._pending) > _PENDING_MAX:
-                        self._pending.popitem(last=False)
+                self._remember(tool_use_id or data.get("tool_use_id"), outcome.checked)
                 return {}
             reason = refusal(outcome)
         except Exception as e:  # noqa: BLE001 - fail closed: Claude Code runs the tool when a hook raises
@@ -159,6 +155,12 @@ class HallpassHooks:
                 "permissionDecisionReason": reason,
             }
         }
+
+    def _remember(self, key: Any, checked: Checked | None) -> None:
+        if checked is not None and isinstance(key, str):
+            self._pending[key] = checked
+            while len(self._pending) > _PENDING_MAX:
+                self._pending.popitem(last=False)
 
     def _log(self, input_data: Any, tool_use_id: str | None, outcome: str) -> None:
         key = tool_use_id or (input_data.get("tool_use_id") if isinstance(input_data, Mapping) else None)
@@ -180,7 +182,6 @@ class HallpassHooks:
         """The same check as a ``can_use_tool`` callback."""
         outcome = await self._decide(tool_name, tool_input)
         if outcome.allowed:
-            if outcome.checked is not None and context.tool_use_id:
-                self._pending[context.tool_use_id] = outcome.checked
+            self._remember(context.tool_use_id, outcome.checked)
             return PermissionResultAllow()
         return PermissionResultDeny(message=refusal(outcome))

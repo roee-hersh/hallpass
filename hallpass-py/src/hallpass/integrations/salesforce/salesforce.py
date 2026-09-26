@@ -374,7 +374,7 @@ _NUMBER_RE = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 def _number(d: dict[str, Any], key: str) -> Any:
     """A json.Number field: a JSON number, or a string that is a valid
     number literal; null is empty."""
-    v = jsonx._get(d, key)
+    v = jsonx.get(d, key)
     if v is None:
         return ""
     if isinstance(v, bool):
@@ -883,7 +883,7 @@ class SalesforceConnection(Connection):
             # app permission, named PermissionsXxx.
             try:
                 names = self._get(ctx, "/services/data/" + self.version + "/sobjects/PermissionSet/describe", None, _decode_describe)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - classified and re-raised
                 raise classify(e, "the PermissionSet describe")
             fields = frozenset(n for n in names or [] if PERM_NAME_RE.fullmatch(n))
             if len(fields) == 0:
@@ -933,7 +933,7 @@ class SalesforceConnection(Connection):
         )
         try:
             return self.query_into(ctx, soql, _decode_user_row)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise classify(e, "User")
 
     def _lookup_user(self, ctx: Context, value: str) -> UserRow:
@@ -965,7 +965,7 @@ class SalesforceConnection(Connection):
         # modelled.
         try:
             rows = self.query_into(ctx, "SELECT IsFrozen FROM UserLogin WHERE UserId = '" + user_id + "'", _decode_frozen)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             if is_query_shape_error(e):
                 self.logger.debug("salesforce: " + FROZEN_NOT_DETECTED)
                 return FROZEN_UNKNOWN
@@ -1020,7 +1020,7 @@ class SalesforceConnection(Connection):
         )
         try:
             rows = self.query_into(ctx, soql, _decode_record_access)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise classify(e, "UserRecordAccess for record " + t.record_id)
         if len(rows) == 0:
             # UNVERIFIED: UserRecordAccess reportedly returns no row for a
@@ -1059,7 +1059,7 @@ class SalesforceConnection(Connection):
             # that the integration user cannot see at all, is a 404 NOT_FOUND.
             try:
                 self._get(ctx, "/services/data/" + self.version + "/sobjects/" + httpx.path_escape(name) + "/describe", None, None)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - classified and re-raised
                 if api_status(e) == 404:
                     return False, DESCRIBE_TTL
                 raise classify(e, "the describe of " + name)
@@ -1092,7 +1092,7 @@ class SalesforceConnection(Connection):
 
         try:
             rows, loose = self._query_assigned(ctx, uid, build, _decode_object_perm)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise classify(e, "ObjectPermissions for " + t.object)
         for row in rows:
             if row.column(act.column):
@@ -1127,7 +1127,7 @@ class SalesforceConnection(Connection):
 
         try:
             rows, loose = self._query_assigned(ctx, uid, build, _decode_field_perm)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise classify(e, "FieldPermissions for " + full)
         for row in rows:
             granted = row.column("PermissionsEdit") if act.column == "PermissionsEdit" else row.column("PermissionsRead")
@@ -1157,7 +1157,7 @@ class SalesforceConnection(Connection):
 
         try:
             rows, loose = self._query_assigned(ctx, uid, build, _decode_perm_set)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise classify(e, "PermissionSet." + t.perm)
         if rows:
             p = rows[0]
@@ -1179,7 +1179,7 @@ class SalesforceConnection(Connection):
         soql = "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '" + uid + "' AND PermissionSet.Name = '" + t.perm_set + "' AND " + ns
         try:
             rows = self.query(ctx, soql)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise classify(e, "PermissionSetAssignment for " + t.perm_set_full())
         if rows:
             return allowed(f"{who} is assigned permission set {t.perm_set_full()}")
@@ -1210,7 +1210,7 @@ class SalesforceConnection(Connection):
                 "SELECT PermissionSetGroupId FROM PermissionSetAssignment WHERE AssigneeId = '" + uid + "' AND PermissionSetGroupId != null",
                 _decode_group_assignment,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             if is_query_shape_error(e):
                 self.logger.debug("salesforce: PermissionSetGroup not queryable; group status is not checked")
                 return None
@@ -1230,7 +1230,7 @@ class SalesforceConnection(Connection):
             return None
         try:
             groups = self.query_into(ctx, "SELECT Id, DeveloperName, Status FROM PermissionSetGroup WHERE Id IN (" + soql_id_list(ids) + ")", _decode_group)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise classify(e, "PermissionSetGroup")
         stale = [dev or gid for gid, dev, status in groups if status != "Updated"]
         if stale:
@@ -1250,7 +1250,7 @@ class SalesforceConnection(Connection):
         # UNVERIFIED: /limits reports DailyApiRequests with Max and Remaining.
         try:
             limits = self._get(ctx, "/services/data/" + self.version + "/limits", None, _decode_limits)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - classified and re-raised
             raise classify(e, "/limits")
         assert limits is not None
         summary = "authenticated against " + self.api_base() + " with API " + self.version
@@ -1266,7 +1266,7 @@ class SalesforceConnection(Connection):
         if self.username != "":
             try:
                 rows = self.query_into(ctx, "SELECT Id, Username, IsActive FROM User WHERE Username = '" + soql_string(self.username) + "'", _decode_user_row)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - classified and re-raised
                 raise classify(e, "User")
             if len(rows) == 0:
                 warnings.append("no User row has Username " + self.username + "; the integration user cannot be confirmed")
@@ -1291,7 +1291,7 @@ class SalesforceConnection(Connection):
             # integration user not found) UserLogin is probed unfiltered.
             try:
                 self.query(ctx, "SELECT IsFrozen FROM UserLogin LIMIT 1")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - classified and re-raised
                 if not is_query_shape_error(e):
                     raise classify(e, "UserLogin")
                 warnings.append(FROZEN_NOT_DETECTED)

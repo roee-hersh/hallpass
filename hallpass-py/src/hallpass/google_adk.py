@@ -50,12 +50,12 @@ try:
     from google.adk.agents import BaseAgent, LlmAgent
     from google.adk.plugins import BasePlugin
     from google.adk.tools.base_tool import BaseTool
-    from google.adk.tools.tool_context import ToolContext
     from google.adk.tools.base_toolset import BaseToolset
+    from google.adk.tools.tool_context import ToolContext
 except ImportError as e:  # pragma: no cover - depends on the environment
     raise ImportError('hallpass.google_adk needs google-adk 2.10 or later: pip install "hallpass[google-adk]"') from e
 
-from hallpass._api import log
+from hallpass._api import Hallpass, log
 from hallpass._rules import Checked, Outcome, Rule, RuleLike, Rules, refusal
 
 __all__ = ["HallpassCallbacks", "HallpassPlugin", "Rule"]
@@ -93,6 +93,8 @@ class HallpassCallbacks:
     ``rules`` maps a tool name to a ``Rule``, a ``(connection, action,
     resource)`` tuple, or ``None``. A tool without a rule runs unchecked,
     unless ``strict=True``; ``None`` lets a tool run unchecked even then.
+    Under ``strict`` that includes ADK's own tools, such as
+    ``transfer_to_agent`` for an agent with sub-agents.
 
     Any answer other than ``allow`` refuses; so does a missing user and any
     error inside the check. The run goes on and the model reads the reason.
@@ -100,7 +102,7 @@ class HallpassCallbacks:
 
     def __init__(
         self,
-        hp: Any,
+        hp: Hallpass,
         rules: Mapping[str, RuleLike],
         *,
         user: Any = _SESSION_USER,
@@ -120,9 +122,10 @@ class HallpassCallbacks:
         names: set[str] = set()
         toolsets = False
         for a in self._llm_agents(agent):
-            a.before_tool_callback = [*_as_list(a.before_tool_callback), self.before_tool]
-            a.after_tool_callback = [self.after_tool, *_as_list(a.after_tool_callback)]
-            a.on_tool_error_callback = [self.on_tool_error, *_as_list(a.on_tool_error_callback)]
+            if self.before_tool not in _as_list(a.before_tool_callback):  # not applied already
+                a.before_tool_callback = [*_as_list(a.before_tool_callback), self.before_tool]
+                a.after_tool_callback = [self.after_tool, *_as_list(a.after_tool_callback)]
+                a.on_tool_error_callback = [self.on_tool_error, *_as_list(a.on_tool_error_callback)]
             for t in a.tools:
                 if isinstance(t, BaseToolset):
                     toolsets = True

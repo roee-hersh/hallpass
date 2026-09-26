@@ -20,7 +20,6 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
 
 pytest.importorskip("llama_index.core")
 
@@ -29,6 +28,7 @@ from llama_index.core.base.llms.types import ChatMessage, MessageRole, ToolCallB
 from llama_index.core.llms.mock import MockFunctionCallingLLM, MockLLM
 from llama_index.core.tools import BaseTool, FunctionTool, ToolMetadata, ToolOutput
 from llama_index.core.workflow import Context
+from pydantic import BaseModel
 
 from hallpass import Hallpass, literal
 from hallpass.llamaindex import HallpassAuthorization, HallpassTool, Rule

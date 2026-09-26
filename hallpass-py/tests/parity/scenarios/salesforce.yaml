@@ -1,0 +1,227 @@
+# The salesforce integration against a static fake of the token endpoint and
+# the REST API. Every SOQL query goes to the one /query route, so each
+# connection's URL carries its own path prefix and its query route answers
+# every query with the same records: the fields of the User row, the
+# UserLogin row, the UserRecordAccess row and the permission rows side by
+# side in one record (unknown fields are ignored on both sides). The token
+# response carries no instance_url, so the API base is the configured url.
+# sf: client_credentials, a user with read-only access everywhere. sf-jwt:
+# jwt_bearer with a throwaway test key (the same one github.yaml uses).
+# sf-empty, sf-amb, sf-inactive, sf-frozen: no user, two users, an inactive
+# and a frozen user. sf-forbidden, sf-limit, sf-shape, sf-broken: the query
+# endpoint answers 403, 403 REQUEST_LIMIT_EXCEEDED, 400 INVALID_TYPE and
+# 500. sf-badtoken: the token endpoint rejects the credential.
+connections:
+  - id: sf
+    integration: salesforce
+    url: "{{url}}/sf"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+  - id: sf-jwt
+    integration: salesforce
+    url: "{{url}}/sf"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    username: hallpass@acme.example
+    credential: env:SF_KEY
+    api_version: v66.0
+  - id: sf-byname
+    integration: salesforce
+    url: "{{url}}/empty"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+    match_field: Username
+  - id: sf-empty
+    integration: salesforce
+    url: "{{url}}/empty"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+  - id: sf-amb
+    integration: salesforce
+    url: "{{url}}/amb"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+  - id: sf-inactive
+    integration: salesforce
+    url: "{{url}}/inactive"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+  - id: sf-frozen
+    integration: salesforce
+    url: "{{url}}/frozen"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+  - id: sf-forbidden
+    integration: salesforce
+    url: "{{url}}/forbidden"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+  - id: sf-limit
+    integration: salesforce
+    url: "{{url}}/limit"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+  - id: sf-shape
+    integration: salesforce
+    url: "{{url}}/shape"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+  - id: sf-broken
+    integration: salesforce
+    url: "{{url}}/broken"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+  - id: sf-badtoken
+    integration: salesforce
+    url: "{{url}}/badtoken"
+    ca_file: "{{ca_file}}"
+    client_id: 3MVG9parity
+    auth_flow: client_credentials
+    credential: env:SF_SECRET
+    api_version: v66.0
+env:
+  SF_SECRET: parity-salesforce-secret
+  SF_KEY: |
+    -----BEGIN RSA PRIVATE KEY-----
+    MIIEowIBAAKCAQEA1joN364lRx96bSE5Qegd07OecfGZTnFpMhzXOYT+iWmjOe1Z
+    oArkrP+nS9YF86++a6SmywE0jZjD/hZojgrc66wL7+83p3GQ6E7fGoabYybyDTAU
+    zMPUfqkkSALM4U28tN9v5+nor2Hc04fgvYLsle39WewzQnpmaqNHYceZrYtKZhN9
+    wKgCl6WUkRRiryc0tUzlqzoLxRlbIAx6R3V5yoEcBRFIrWH4s968TJVV0gVZfBTO
+    Jsz5+HwLVa1SZf7IzW89sQ4LIcYPIQMMwH91X7FebZvAt6cVD35cdhgh1wC8/GYt
+    i4B3XzEptQns2d+RQ4whzW6UIqHALvFbT0UhXQIDAQABAoIBAA1BoB/evSWDQ2+V
+    WHGzC/MsAtX/65QdXQ7PqO1BIG8fP3sTUOkN1cwqMTQIudj9X6F2LALwdnChPR+U
+    lIu6MYBhnat8+F0/Dc/tuqiSHzyXe8r61iDzX5SUobz54au66OMPRRhYxSAsDYx0
+    2TLOqhZavXooLVPapNzuujk2wVROncM1oqZbM1GrPkWx/ZLNeKdSRc1c0qhNMRn1
+    3Y/ePBbXePVOA86w3Y9hJhGuQSCglEOMaINsKMgUThMow3VYkQrk+OuecgaO5uOb
+    olMEvZHKWlXa8TjpkSCAd9IXIRNvxxTmbCg4kXE6mtKT5sCX43HN3lZc4wSbuyWJ
+    2R8kshECgYEA/cczeOSsB2YVtYbM5aJlyxdZlRptuGm231pv1DpcwP2xMCTfjY3l
+    IOF6VK5HRwUGxZSk+wfIyWmrH3G0ny8G9uNbXxtGigLQsCdoAM8FD9vibLg90EVf
+    nJNzOgy6O2d6Znf9vztX4x1Lv3t6G2m5hX4jkbxZeGqpFWzUqrzqyBMCgYEA2Bo0
+    q3l21+7P5uqp+Vanguze5j/nfHrQBDZK545RW2D8X8v8orGt666L4kN0zUHUra/q
+    kocTlFEZ5w3+/duiG3+TSTYfFy//c6p8VgLZ/DTaQ0DPqLWOlVHGbwvmRGultJ8K
+    wigudkbVwbIoUSLlnqftXo/Z0+C9M1E3pcu8fs8CgYAkcC/B0gOpZE0FrX9KEZFQ
+    IeAo+ox6iCNL2q5n6KFczJBee0zmBFO77uQjuIpfdidMw1UU/j8kPFnnv+nRWW1E
+    kcyS0VXFhzXztRTH2PG/HzFZrvKhLvTVhI5s7VroIKmAgQYcKScrYw93RQF5YirT
+    MhNlX4fxNE9m1iOLCGklpQKBgGeNRyfT8GrQeLdCQ2jDaUmHj9ftT1OK1hrumT4U
+    KFANTWHqMYkUcy64WTd284VXwj3oShMkvvEXW74oKsQidq+OlllCoetOiK44R5Q/
+    kY0VFnGboOZK+aP7p4aWwSSQILtIarNW5cyvbMaARGl8u2MnPMtPSyYITyFEDdJY
+    ql5pAoGBANswgI78X0v5DSxeXfgiBHjomPyctDfTNlk1Dm6ehUjAqyiHsKHGW5JM
+    qApMsZp2avo2yJziKLz69htsBroin+tZhR7tivXTCIDCvXtHSEPdGZr4ZDPE7LJa
+    ZDwyP8IpQXEdgkCCczco+sOhCE83qm4R5WZLJGxsUD5SSCfLnB6J
+    -----END RSA PRIVATE KEY-----
+upstream:
+  # Token endpoints.
+  - {method: POST, path: /sf/services/oauth2/token, json: {access_token: parity-token, token_type: Bearer, scope: api}}
+  - {method: POST, path: /empty/services/oauth2/token, json: {access_token: parity-token, token_type: Bearer}}
+  - {method: POST, path: /amb/services/oauth2/token, json: {access_token: parity-token, token_type: Bearer}}
+  - {method: POST, path: /inactive/services/oauth2/token, json: {access_token: parity-token, token_type: Bearer}}
+  - {method: POST, path: /frozen/services/oauth2/token, json: {access_token: parity-token, token_type: Bearer}}
+  - {method: POST, path: /forbidden/services/oauth2/token, json: {access_token: parity-token, token_type: Bearer}}
+  - {method: POST, path: /limit/services/oauth2/token, json: {access_token: parity-token, token_type: Bearer}}
+  - {method: POST, path: /shape/services/oauth2/token, json: {access_token: parity-token, token_type: Bearer}}
+  - {method: POST, path: /broken/services/oauth2/token, json: {access_token: parity-token, token_type: Bearer}}
+  - {method: POST, path: /badtoken/services/oauth2/token, status: 400, json: {error: invalid_grant, error_description: parity}}
+  # sf: one record answers every query.
+  - method: GET
+    path: /sf/services/data/v66.0/query
+    json:
+      totalSize: 1
+      done: true
+      records:
+        - Id: 005000000000001AAA
+          IsActive: true
+          Username: dana@example.com
+          Email: dana@example.com
+          UserType: Standard
+          IsFrozen: false
+          RecordId: 001000000000001AAA
+          HasReadAccess: true
+          HasEditAccess: false
+          MaxAccessLevel: Read
+          PermissionsRead: true
+          PermissionsEdit: false
+          Parent: {IsOwnedByProfile: true, Name: Sales}
+          Name: Sales
+          IsOwnedByProfile: true
+  - method: GET
+    path: /sf/services/data/v66.0/sobjects/PermissionSet/describe
+    json: {name: PermissionSet, fields: [{name: Id}, {name: PermissionsApiEnabled}]}
+  - {method: GET, path: /empty/services/data/v66.0/query, json: {totalSize: 0, done: true, records: []}}
+  - method: GET
+    path: /amb/services/data/v66.0/query
+    json:
+      totalSize: 2
+      done: true
+      records:
+        - {Id: 005000000000002AAA, IsActive: true, Username: amb@example.com, UserType: Standard}
+        - {Id: 005000000000003AAA, IsActive: true, Username: amb@example.com, UserType: Standard}
+  - method: GET
+    path: /inactive/services/data/v66.0/query
+    json: {totalSize: 1, done: true, records: [{Id: 005000000000004AAA, IsActive: false, Username: ian@example.com, UserType: Standard}]}
+  - method: GET
+    path: /frozen/services/data/v66.0/query
+    json: {totalSize: 1, done: true, records: [{Id: 005000000000005AAA, IsActive: true, Username: fred@example.com, UserType: Standard, IsFrozen: true}]}
+  - {method: GET, path: /forbidden/services/data/v66.0/query, status: 403, json: [{message: no, errorCode: INSUFFICIENT_ACCESS}]}
+  - {method: GET, path: /limit/services/data/v66.0/query, status: 403, json: [{message: no, errorCode: REQUEST_LIMIT_EXCEEDED}]}
+  - {method: GET, path: /shape/services/data/v66.0/query, status: 400, json: [{message: no, errorCode: INVALID_TYPE}]}
+  - {method: GET, path: /broken/services/data/v66.0/query, status: 500, body: oops}
+checks:
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", want: allowed}
+  - {user: dana@example.com, action: record.edit, resource: "record:001000000000001AAA", want: denied}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-jwt, want: allowed}
+  - {user: dana@example.com, action: object.read, resource: "object:Account", want: allowed}
+  - {user: dana@example.com, action: object.edit, resource: "object:Account", want: denied}
+  - {user: dana@example.com, action: field.read, resource: "field:Account.Rating", want: allowed}
+  - {user: dana@example.com, action: field.edit, resource: "field:Account.Rating", want: denied}
+  - {user: dana@example.com, action: system.permission, resource: "permission:PermissionsApiEnabled", want: allowed}
+  - {user: dana@example.com, action: system.permission, resource: "permission:PermissionsViewSetup", want: invalid_request}
+  - {user: dana@example.com, action: permset.assigned, resource: "permset:acme__Sales_Ops", want: allowed}
+  - {user: dana@example.com, action: user.active, resource: "user:Dana@Example.com", want: allowed}
+  - {user: dana@example.com, action: user.active, resource: "record:005000000000001AAA", want: allowed}
+  - {user: dana@example.com, action: user.active, resource: "user:bob@example.com", want: invalid_request}
+  - {user: dana@example.com, action: record.read, resource: "record:001", want: invalid_request}
+  - {user: dana@example.com, action: object.read, resource: "object:Account' OR 1=1", want: invalid_request}
+  - {user: dana@example.com, action: field.read, resource: "field:Account", want: invalid_request}
+  - {user: dana@example.com, action: permset.assigned, resource: "permset:a__b__c", want: invalid_request}
+  - {user: dana@example.com, action: record.create, resource: "record:001000000000001AAA", want: unknown_action}
+  - {user: "o'neil@example.com", action: record.read, resource: "record:001000000000001AAA", connection: sf-empty, want: user_not_found}
+  - {user: nobody@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-empty, want: user_not_found}
+  - {user: nobody@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-byname, want: user_not_found}
+  - {user: amb@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-amb, want: user_ambiguous}
+  - {user: ian@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-inactive, want: denied}
+  - {user: fred@example.com, action: object.read, resource: "object:Account", connection: sf-frozen, want: denied}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-forbidden, want: credential_rejected}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-limit, want: upstream_rate_limited}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-shape, want: unsupported}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-broken, want: upstream_error}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-badtoken, want: credential_rejected}

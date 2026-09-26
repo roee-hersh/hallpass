@@ -39,7 +39,7 @@ try:
     from crewai.hooks.tool_hooks import ToolCallHookContext
     from crewai.utilities.string_utils import sanitize_tool_name
 except ImportError as e:  # pragma: no cover - exercised only without the extra
-    raise ImportError('hallpass.crewai needs crewai 1.10 or later: pip install "hallpass[crewai]"') from e
+    raise ImportError('hallpass.crewai needs crewai 1.15 or later: pip install "hallpass[crewai]"') from e
 
 from hallpass._api import GroupsSource, Hallpass, UserSource
 from hallpass._rules import Outcome, Rule, RuleLike, Rules, refusal
@@ -107,7 +107,8 @@ class HallpassHooks:
         # Calls between the before and the after hook, keyed by the identity
         # of the tool_input dict CrewAI hands to both (kept alive here).
         self._pending: dict[int, tuple[dict[str, Any], Outcome]] = {}
-        # CrewAI hands the after hook a fresh {} for a call without input.
+        # CrewAI may hand the after hook a fresh {} for a call without input;
+        # the id of the one the before hook saw waits here, per thread.
         self._pending_empty = threading.local()
         self._registered = False
 
@@ -147,21 +148,22 @@ class HallpassHooks:
         with self._lock:
             self._pending[id(tool_input)] = (tool_input, outcome)
         if not tool_input:
-            self._pending_empty.entry = (context.tool_name, outcome)
+            self._pending_empty.entry = (context.tool_name, id(tool_input))
         return None if outcome.allowed else False
 
     def after_tool_call(self, context: ToolCallHookContext) -> str | None:
         """Give the model the reason for a refusal; log a checked call that ran."""
-        with self._lock:
-            entry = self._pending.pop(id(context.tool_input), None)
-        outcome = entry[1] if entry is not None and entry[0] is context.tool_input else None
-        if outcome is None and not context.tool_input:
+        key = id(context.tool_input)
+        if not context.tool_input:
             empty = getattr(self._pending_empty, "entry", None)
             self._pending_empty.entry = None
             if empty is not None and empty[0] == context.tool_name:
-                outcome = empty[1]
-        if outcome is None:
+                key = empty[1]  # the {} the before hook saw, in this thread
+        with self._lock:
+            entry = self._pending.pop(key, None)
+        if entry is None:
             return None
+        outcome = entry[1]
         result = context.tool_result if isinstance(context.tool_result, str) else ""
         if not outcome.allowed:
             return refusal(outcome) if result.startswith(_BLOCKED) else None

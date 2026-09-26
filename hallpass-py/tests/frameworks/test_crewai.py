@@ -303,6 +303,21 @@ def test_tool_error_is_logged(hp: Hallpass, audit: pytest.LogCaptureFixture) -> 
     assert len(lines) == 1 and "raised an error from thing.read" in lines[0], lines
 
 
+@pytest.mark.parametrize("native", [True, False], ids=["native", "react"])
+def test_tool_without_input(hp: Hallpass, native: bool) -> None:
+    """A checked tool the model calls with no arguments still gets its reason back."""
+    rules = {**RULES, "list_things": ("things", "thing.write", "thing:all")}
+    hooks = HallpassHooks(hp, rules)
+    with hooks:
+        c, llm = crew(("list_things", {}), native=native)
+        c.kickoff(inputs={"user_id": USER})
+        assert RAN == [] and "may not thing.write on thing:all" in llm.result(), llm.result()
+        c, llm = crew(("list_things", {}), native=native)
+        c.kickoff(inputs={"user_id": ADMIN})
+        assert RAN == [("list_things", None)], f"ran: {RAN}"
+    assert hooks._pending == {}, f"calls left pending: {hooks._pending}"
+
+
 def test_unregister_and_names(hp: Hallpass) -> None:
     h = HallpassHooks(hp, RULES).register().register()
     h.unregister()

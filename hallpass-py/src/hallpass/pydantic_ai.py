@@ -51,7 +51,7 @@ try:
     from pydantic_ai.toolsets import AbstractToolset, WrapperToolset
     from pydantic_ai.toolsets.abstract import ToolsetTool
 except ImportError as e:  # pragma: no cover - exercised only without the extra
-    raise ImportError('hallpass.pydantic_ai needs pydantic-ai-slim 2.0 or later: pip install "hallpass[pydantic-ai]"') from e
+    raise ImportError('hallpass.pydantic_ai needs pydantic-ai-slim 2.51 or later: pip install "hallpass[pydantic-ai]"') from e
 
 from hallpass._api import GroupsSource, Hallpass, UserSource, log
 from hallpass._rules import Outcome, Rule, RuleLike, Rules, refusal

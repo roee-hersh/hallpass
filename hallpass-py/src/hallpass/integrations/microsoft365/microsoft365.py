@@ -124,7 +124,7 @@ def odata_string(s: str) -> str:
 
 def _opt(d: dict[str, Any], key: str) -> Any:
     """The member for key as Go's decoder finds it, or None."""
-    return jsonx._get(d, key)
+    return jsonx.get(d, key)
 
 
 def _opt_bool(d: dict[str, Any], key: str) -> bool | None:

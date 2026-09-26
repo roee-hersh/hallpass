@@ -10,7 +10,19 @@ from hallpass.core.decision import Code, HallpassError, errorf
 from hallpass.core.errors import go_quote, go_trim_space
 from hallpass.integrations.snowflake.sql import parse_name, quote_name
 
-__all__ = ["ACTIONS", "ACTION_LIST", "KINDS", "RAW_PATTERN", "ObjectKind", "SnowflakeAction", "Target", "catalog_actions", "match_action", "parse_raw", "parse_target"]
+__all__ = [
+    "ACTIONS",
+    "ACTION_LIST",
+    "KINDS",
+    "RAW_PATTERN",
+    "ObjectKind",
+    "SnowflakeAction",
+    "Target",
+    "catalog_actions",
+    "match_action",
+    "parse_raw",
+    "parse_target",
+]
 
 
 @dataclass(frozen=True)

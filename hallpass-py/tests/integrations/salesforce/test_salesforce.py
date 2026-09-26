@@ -356,7 +356,13 @@ class FakeSF:
         tok = itest.CANARY + "tok" + str(n)
         with self.mu:
             self.valid_tokens.add(tok)
-        body: dict[str, Any] = {"access_token": tok, "id": "https://login.salesforce.com/id/00D/005", "token_type": "Bearer", "issued_at": "1700000000000", "scope": "api"}
+        body: dict[str, Any] = {
+            "access_token": tok,
+            "id": "https://login.salesforce.com/id/00D/005",
+            "token_type": "Bearer",
+            "issued_at": "1700000000000",
+            "scope": "api",
+        }
         if inst != "":
             body["instance_url"] = inst
         w.header().set("Content-Type", "application/json")
@@ -883,7 +889,9 @@ def test_perm_set_namespace(env: Env) -> None:
     expect(check(c, dana, "permset.assigned", "permset:acme__Billing"), Code.ALLOWED, "acme__Billing")
     qs = f.queries_from("PermissionSetAssignment")
     assert qs == [
-        "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '" + DANA_ID + "' AND PermissionSet.Name = 'Billing' AND PermissionSet.NamespacePrefix = 'acme'"
+        "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '"
+        + DANA_ID
+        + "' AND PermissionSet.Name = 'Billing' AND PermissionSet.NamespacePrefix = 'acme'"
     ], f"query {qs!r}"
     # The unprefixed name matches only sets without a namespace, and the
     # prefixed one only the package's set.
@@ -1149,7 +1157,7 @@ def test_probe(env: Env) -> None:
     f4 = env.new_fake()
     f4.describe_fields = ["Id", "Name"]
     c4 = env.new_conn(f4)
-    with pytest.raises(Exception):
+    with pytest.raises(HallpassError):
         c4.probe(background())
 
 
@@ -1402,7 +1410,9 @@ def test_action_permset_assigned_allow(env: Env) -> None:
     expect(check(c, dana, "permset.assigned", "permset:Sales_Ops"), Code.ALLOWED, "Sales_Ops")
     qs = f.queries_from("PermissionSetAssignment")
     assert qs == [
-        "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '" + DANA_ID + "' AND PermissionSet.Name = 'Sales_Ops' AND PermissionSet.NamespacePrefix = null"
+        "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '"
+        + DANA_ID
+        + "' AND PermissionSet.Name = 'Sales_Ops' AND PermissionSet.NamespacePrefix = null"
     ], f"query {qs!r}"
 
 

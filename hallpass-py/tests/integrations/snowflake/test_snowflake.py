@@ -131,7 +131,14 @@ def table(cols: list[str], rows: list[list[str]] | None) -> dict[str, Any]:
 
 
 def empty_result() -> dict[str, Any]:
-    return {"code": "", "sqlState": "", "message": "", "statementHandle": "", "data": None, "resultSetMetaData": {"numRows": 0, "rowType": None, "partitionInfo": None}}
+    return {
+        "code": "",
+        "sqlState": "",
+        "message": "",
+        "statementHandle": "",
+        "data": None,
+        "resultSetMetaData": {"numRows": 0, "rowType": None, "partitionInfo": None},
+    }
 
 
 def write(w: itest.ResponseWriter, status: int, v: Any) -> None:
@@ -734,9 +741,9 @@ def test_identity_lookup_statements(env: Env) -> None:
 def test_identity_attrs(env: Env) -> None:
     _, _, c = env.setup()
     id = c.resolve_identity(background(), dana)
-    assert (
-        id.id == "DANA" and id.attr("disabled") == "false" and id.attr("default_role") == "ANALYST" and len(id.groups) == 1 and id.groups[0] == "ANALYST"
-    ), f"identity {id}"
+    assert id.id == "DANA" and id.attr("disabled") == "false" and id.attr("default_role") == "ANALYST" and len(id.groups) == 1 and id.groups[0] == "ANALYST", (
+        f"identity {id}"
+    )
     for k, v in id.attrs.items():
         itest.assert_no_canary(k + "=" + v)
 
@@ -772,7 +779,9 @@ def test_hidden_role(env: Env) -> None:
     _, f, c = env.setup()
     with f.mu:
         f.hidden["READER"] = True
-    expect(check(c, bob, "table.select", "table:dev.play.t"), Code.RESOURCE_NOT_VISIBLE, "role \"READER\" is granted but hallpass's role may not read its grants")
+    expect(
+        check(c, bob, "table.select", "table:dev.play.t"), Code.RESOURCE_NOT_VISIBLE, 'role "READER" is granted but hallpass\'s role may not read its grants'
+    )
 
 
 def test_insufficient_privileges(env: Env) -> None:
@@ -901,7 +910,9 @@ def test_new_validation(env: Env) -> None:
         with pytest.raises(ValueError):
             Snowflake().new(background(), itest.settings("sf", "snowflake", values, secrets), deps)
     # The default URL follows the account.
-    Snowflake().new(background(), itest.settings("sf", "snowflake", {"account": "xy12345.us-east-1", "user": "hallpass"}, {"credential": secret_literal("x")}), deps)
+    Snowflake().new(
+        background(), itest.settings("sf", "snowflake", {"account": "xy12345.us-east-1", "user": "hallpass"}, {"credential": secret_literal("x")}), deps
+    )
 
 
 def test_probe(env: Env) -> None:

@@ -20,7 +20,6 @@ import shutil
 import subprocess
 import time
 import urllib.request
-import warnings
 from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -43,7 +42,7 @@ from hallpass import Hallpass, literal
 from hallpass.google_adk import HallpassCallbacks, Rule
 from tests import harness as itest
 
-warnings.filterwarnings("ignore", message=r"\[EXPERIMENTAL\]")
+pytestmark = pytest.mark.filterwarnings(r"ignore:\[EXPERIMENTAL\]:UserWarning")
 
 ALICE = "alice@example.com"  # a known user: may read
 ADMIN = "admin@example.com"  # an admin: may write

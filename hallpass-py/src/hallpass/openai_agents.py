@@ -60,7 +60,7 @@ try:
 except ImportError as e:  # pragma: no cover - depends on the environment
     raise ImportError('hallpass.openai_agents needs openai-agents 0.22 or later: pip install "hallpass[openai-agents]"') from e
 
-from hallpass._api import log
+from hallpass._api import Hallpass, log
 from hallpass._rules import Checked, Outcome, Rule, RuleLike, Rules, refusal
 
 __all__ = ["HallpassGuardrails", "Rule"]
@@ -93,7 +93,7 @@ class HallpassGuardrails:
 
     def __init__(
         self,
-        hp: Any,
+        hp: Hallpass,
         rules: Mapping[str, RuleLike],
         *,
         user_key: str = "user_id",

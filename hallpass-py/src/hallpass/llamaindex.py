@@ -37,7 +37,7 @@ try:
     from llama_index.core.tools import BaseTool, FunctionTool, ToolOutput
     from llama_index.core.tools.types import AsyncBaseTool
 except ImportError as e:  # pragma: no cover - exercised only without the extra
-    raise ImportError('hallpass.llamaindex needs llama-index-core 0.12 or later: pip install "hallpass[llamaindex]"') from e
+    raise ImportError('hallpass.llamaindex needs llama-index-core 0.14 or later: pip install "hallpass[llamaindex]"') from e
 
 from hallpass._api import GroupsSource, Hallpass, UserSource, log
 from hallpass._rules import Checked, Outcome, Rule, RuleLike, Rules, refusal

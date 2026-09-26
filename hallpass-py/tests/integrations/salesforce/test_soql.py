@@ -65,7 +65,15 @@ def test_validators() -> None:
         assert not _ok(validate_api_name, bad), f"api name {bad!r} accepted"
     for ok in ("PermissionsApiEnabled", "PermissionsViewSetup", "PermissionsModifyAllData"):
         assert _ok(validate_permission_name, ok), f"perm {ok!r}"
-    for bad in ("", "Permissions", "ApiEnabled", "PermissionsApi_Enabled", "PermissionsApiEnabled = true OR Id != null", "permissionsApiEnabled", "PermissionsApiEnabled'"):
+    for bad in (
+        "",
+        "Permissions",
+        "ApiEnabled",
+        "PermissionsApi_Enabled",
+        "PermissionsApiEnabled = true OR Id != null",
+        "permissionsApiEnabled",
+        "PermissionsApiEnabled'",
+    ):
         assert not _ok(validate_permission_name, bad), f"perm {bad!r} accepted"
     for ok in ("dana@example.com", "o'neil@example.com", "first.last+tag@sub.example.co"):
         assert _ok(validate_email, ok), f"email {ok!r}"
@@ -100,7 +108,7 @@ def test_validators() -> None:
         (" dana@example.com", '" dana@example.com" is not a bare email address'),
         ("dana@example.com (x)", '"dana@example.com (x)" is not a bare email address'),
         ("dana", '"dana" is not an email address'),
-        ("a@b.c' OR 1=1--", "\"a@b.c' OR 1=1--\" is not an email address"),
+        ("a@b.c' OR 1=1--", '"a@b.c\' OR 1=1--" is not an email address'),
         ("=?x-unknown?q?a?= <a@b.c>", '"=?x-unknown?q?a?= <a@b.c>" is not an email address'),
         ("=?utf-8?q?a?= <a@b.c>", '"=?utf-8?q?a?= <a@b.c>" is not a bare email address'),
         ("g: a@b.c;", '"g: a@b.c;" is not a bare email address'),

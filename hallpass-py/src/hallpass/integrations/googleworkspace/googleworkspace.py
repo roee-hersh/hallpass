@@ -137,7 +137,7 @@ def equal_fold(a: str, b: str) -> bool:
 
 def _opt_bool(d: dict[str, Any], key: str) -> bool | None:
     """A *bool field: None when absent or null."""
-    if jsonx._get(d, key) is None:
+    if jsonx.get(d, key) is None:
         return None
     return jsonx.b(d, key)
 

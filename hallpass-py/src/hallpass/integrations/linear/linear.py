@@ -156,14 +156,14 @@ class NotFoundError(Exception):
 
 def _opt_str(d: dict[str, Any], key: str) -> str | None:
     """A *string field: None for a missing key or null."""
-    if jsonx._get(d, key) is None:
+    if jsonx.get(d, key) is None:
         return None
     return jsonx.s(d, key)
 
 
 def _opt_bool(d: dict[str, Any], key: str) -> bool | None:
     """A *bool field: None for a missing key or null."""
-    if jsonx._get(d, key) is None:
+    if jsonx.get(d, key) is None:
         return None
     return jsonx.b(d, key)
 
@@ -383,7 +383,7 @@ class LinearConnection(Connection):
             raise errorf(Code.UPSTREAM_ERROR, f"Linear's GraphQL query failed ({t})")
         if resp.status != 200:
             raise errorf(Code.UPSTREAM_ERROR, f"Linear answered HTTP {resp.status} without errors")
-        data = jsonx._get(env, "data")  # the case-insensitive member lookup
+        data = jsonx.get(env, "data")  # the case-insensitive member lookup
         if data is None:
             raise errorf(Code.UPSTREAM_ERROR, "Linear's response carried no data")
         try:
