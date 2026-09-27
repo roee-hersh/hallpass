@@ -18,10 +18,14 @@ do something she isn't allowed to do, the agent can, because its token can. Dana
 the agent knows who she is; the problem is that the bot's permissions get checked instead of hers.
 This is the [confused deputy problem](https://en.wikipedia.org/wiki/Confused_deputy_problem).
 
-hallpass fixes it for every tool you guard. Before the agent acts, it asks hallpass, and hallpass
-asks the system itself, live, with its own read-only credential, whether this user may do this. The
-answer is `allow`, `deny` or `unknown`, and the agent acts only on `allow`. hallpass only checks and
-never performs the action. A tool you don't guard still runs with the agent's full permissions.
+The structural fix is to have the agent act with the user's own credentials
+([capability-based security](https://en.wikipedia.org/wiki/Capability-based_security)); use it when
+every system you touch supports it. When it doesn't, hallpass guards against the problem for every
+tool you guard. Before the agent acts, it asks hallpass, and hallpass asks the system itself, live,
+with its own read-only credential, whether this user may do this. The answer is `allow`, `deny` or
+`unknown`, and the agent acts only on `allow`. hallpass only checks and never performs the action.
+A tool you don't guard still runs with the agent's full permissions. See
+[hallpass and the structural fix](docs/concepts/architecture.md#hallpass-and-the-structural-fix).
 
 ## Why
 
