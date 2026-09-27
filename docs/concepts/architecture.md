@@ -184,6 +184,29 @@ decides anything.
 - **Hold a policy language.** It stores no rules. It passes the system's own answer through. Use
   OPA or Cedar for the rules of your own product, next to it.
 
+## hallpass and the structural fix
+
+What hallpass guards against is the [confused deputy](https://en.wikipedia.org/wiki/Confused_deputy_problem):
+the agent acts for Dana with a credential that can do more than Dana can. The textbook fix is
+[capability-based security](https://en.wikipedia.org/wiki/Capability-based_security): the request
+carries its own authority, so the agent acts with Dana's credential and can never do more than she
+can. Per-user OAuth and GitHub App user-to-server tokens are that fix in practice. When every system
+your agent touches supports it and your users will connect their accounts, use it. You don't need
+hallpass.
+
+hallpass is for when you can't:
+
+- **Shared bots.** A Slack or Teams bot that many people talk to rarely holds a token for each of them.
+- **Systems without a per-user token.** Kubernetes RBAC, AWS IAM, Argo CD and most internal tools
+  have no simple "act as this user" flow for a bot.
+- **Several systems at once.** Asking every user to connect GitHub, Jira, Kubernetes and AWS before
+  the agent is useful is a project of its own, and the agent then stores everyone's tokens.
+
+What that costs: hallpass is a guard, not the structural fix. The agent's own credential keeps its
+full power, so a tool you forget to guard, or a guard with the wrong action or resource, still acts
+with the bot's permissions. Keep the agent's credential as narrow as its job allows anyway, guard
+every tool that changes something, and review the list of guarded tools as you add new ones.
+
 ## Code map
 
 Under `hallpass-py/src/hallpass/`:
