@@ -10,7 +10,6 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests import harness
-from tests.harness import examples as _examples
 
 if os.environ.get("HALLPASS_REQUIRE_INSTALLED"):
     # CI tests the built wheel from outside the checkout: the package under
@@ -41,11 +40,14 @@ def srv() -> Iterator[harness.Server]:
 
 # Property tests stand in for the original Go fuzz targets. CI runs them at
 # Hypothesis's default size; the nightly job selects HYPOTHESIS_PROFILE=nightly
-# for long runs.
+# for long runs. The profile's 20,000 examples are not multiplied by
+# HALLPASS_FUZZ_SCALE: that scale is for tests that set their own smaller count
+# with harness.examples(n), and multiplying both would put the slowest parser
+# tests at close to an hour each.
 try:
     from hypothesis import HealthCheck, settings
 
-    settings.register_profile("nightly", max_examples=_examples(20_000), deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    settings.register_profile("nightly", max_examples=20_000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 except ImportError:  # pragma: no cover - hypothesis is a test dependency
     pass

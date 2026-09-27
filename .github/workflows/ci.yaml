@@ -218,9 +218,16 @@ jobs:
 
   fuzz:
     # Long property-based runs of every parser, on the nightly schedule only.
+    # Tests without their own count run the nightly profile's 20,000 examples
+    # (the slowest takes under 2 minutes); tests that set one with
+    # harness.examples(n) get n times HALLPASS_FUZZ_SCALE. Each test gets 15
+    # minutes instead of the default 2 so the run is never cut off mid-example
+    # (an interrupted Hypothesis run reports misleading "flaky" errors); the
+    # job as a whole is capped at 2 hours.
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     needs: hallpass-py
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -228,7 +235,7 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install --quiet -e "./hallpass-py[crypto]" pytest pytest-timeout hypothesis
       - working-directory: hallpass-py
-        run: HYPOTHESIS_PROFILE=nightly HALLPASS_FUZZ_SCALE=40 python -m pytest -q -p no:cacheprovider tests/core/test_catalog.py tests/integrations -k "fuzz or property or hypothesis"
+        run: HYPOTHESIS_PROFILE=nightly HALLPASS_FUZZ_SCALE=40 python -m pytest -q -p no:cacheprovider -o timeout=900 tests/core/test_catalog.py tests/integrations -k "fuzz or property or hypothesis"
 
   differential:
     # Compares the Argo CD RBAC evaluator with the real argocd CLI.
