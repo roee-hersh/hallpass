@@ -12,10 +12,16 @@ self-hosted service:
 
 > May user X do action Y on resource Z in system C?
 
-Other apps and AI agents act in third-party systems (Jira, GitHub, Kubernetes, ...) with their own
-bot credentials, which can usually do more than the person who asked. Before acting, the app asks
-hallpass. hallpass asks the third-party system live, with its own read-only credential, and answers
-`allow`, `deny` or `unknown`. It only checks. It never performs the action.
+Your AI agent acts with its own permissions, not the user's. It calls Jira, GitHub or Kubernetes
+with its own bot credential, which can usually do more than the person asking. When Dana asks it to
+do something she isn't allowed to do, the agent can, because its token can. Dana is logged in and
+the agent knows who she is; the problem is that the bot's permissions get checked instead of hers.
+This is the [confused deputy problem](https://en.wikipedia.org/wiki/Confused_deputy_problem).
+
+hallpass fixes it for every tool you guard. Before the agent acts, it asks hallpass, and hallpass
+asks the system itself, live, with its own read-only credential, whether this user may do this. The
+answer is `allow`, `deny` or `unknown`, and the agent acts only on `allow`. hallpass only checks and
+never performs the action. A tool you don't guard still runs with the agent's full permissions.
 
 ## Why
 
