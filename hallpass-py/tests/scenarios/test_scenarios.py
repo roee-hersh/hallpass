@@ -31,7 +31,7 @@ SCENARIOS = sorted((Path(__file__).parent / "scenarios").glob("*.yaml"))
 def _cases() -> list[Any]:
     out = []
     for f in SCENARIOS:
-        doc = yaml.safe_load(f.read_text())
+        doc = yaml.safe_load(f.read_text(encoding="utf-8"))
         for i, c in enumerate(doc["checks"]):
             out.append(pytest.param(f, i, id=f"{f.stem}-{i}-{c['user']}-{c['action']}-{c['resource']}"))
     return out
@@ -71,7 +71,7 @@ def _route(srv: itest.Server, r: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize(("path", "index"), _cases())
 def test_scenario(path: Path, index: int) -> None:
-    doc = yaml.safe_load(path.read_text())
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     check = doc["checks"][index]
     with itest.Server() as srv:
         for r in doc.get("upstream") or []:

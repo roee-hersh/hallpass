@@ -65,7 +65,7 @@ def go_unquote(lit: str) -> str:
 def read_corpus_file(path: Path) -> list[str]:
     """The values of one corpus file: a header line, then one string(...)
     or []byte(...) literal per line."""
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     assert lines and lines[0] == "go test fuzz v1", f"{path}: not a go test fuzz v1 file"
     out = []
     for line in lines[1:]:

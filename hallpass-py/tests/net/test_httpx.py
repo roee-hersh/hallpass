@@ -12,6 +12,7 @@ import os
 import select
 import socket
 import ssl
+import sys
 import threading
 import time
 import urllib.parse
@@ -773,6 +774,7 @@ def test_no_proxy_entries_as_go_reads_them(monkeypatch: pytest.MonkeyPatch, no_p
     assert (t._proxy_for("https", host, port) is not None) == proxied
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows environment variables are case-insensitive: one variable")
 def test_uppercase_proxy_variable_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     for k in ("HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"):
         monkeypatch.delenv(k, raising=False)

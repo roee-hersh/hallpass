@@ -123,7 +123,7 @@ def _corpus(target: str) -> list[tuple[str, str]]:
     """(file name, input) for each `go test fuzz v1` file of a target."""
     out = []
     for p in sorted((CORPUS / target).iterdir()):
-        lines = p.read_text().splitlines()
+        lines = p.read_text(encoding="utf-8").splitlines()
         assert lines[0] == "go test fuzz v1", p
         m = re.fullmatch(r"string\((\".*\")\)", lines[1])
         assert m, p
