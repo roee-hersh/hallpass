@@ -513,8 +513,11 @@ class VaultConnection(Connection):
         groups: list[str] = []
         seen: set[str] = set()
         for gid in [*ent.group_ids, *ent.inherited_group_ids]:
-            if gid == "" or gid in seen or not ID_RE.fullmatch(gid):
+            if gid == "" or gid in seen:
                 continue
+            if not ID_RE.fullmatch(gid):
+                # Skipping it would skip the group's policies, denies included.
+                raise errorf(Code.UPSTREAM_ERROR, f"entity {found_id} lists group id {go_quote(gid)}, which has an unexpected shape")
             seen.add(gid)
             g = self._group(ctx, gid)
             groups.append(gid)
@@ -574,6 +577,15 @@ class VaultConnection(Connection):
         try:
             src = self.policies.do(ctx, name, fill)
         except _MissingPolicy:
+            if self.namespace != "" and name != "default" and name not in self.token_policies:
+                # Under a namespace, Vault also answers 404 for a policy of a
+                # parent namespace (a group's, say), which applies to the
+                # entity but which hallpass cannot read; skipping it could
+                # skip a deny.
+                raise errorf(
+                    Code.UNSUPPORTED,
+                    f"policy {name} is not readable in namespace {self.namespace} (it may belong to a parent namespace)",
+                ) from None
             return [], False
         try:
             rules = parse_policy(name, src, tc)
@@ -618,6 +630,8 @@ class VaultConnection(Connection):
         who = ident.display
         if ident.attr("disabled") == "true":
             return denied(f"entity {ident.attr('entity_name')} ({who}) is disabled")
+        if ident.attr("disabled") != "false":
+            return unsupported(f"Vault did not say whether entity {ident.attr('entity_name')} ({who}) is disabled")
         # The API path the request goes to.
         api_path = t.path
         if t.kind == "kv":

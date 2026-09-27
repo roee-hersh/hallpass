@@ -1,4 +1,4 @@
-"""Port of internal/integrations/snowflake/fuzz_test.go.
+"""Port of v0.5.0:internal/integrations/snowflake/fuzz_test.go.
 
 FuzzParseTarget and FuzzIdentifier become Hypothesis properties with the
 same invariants; their seed corpora (the f.Add seeds; the Go package has no

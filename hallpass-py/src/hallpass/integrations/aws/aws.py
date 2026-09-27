@@ -614,8 +614,10 @@ class AWSConnection(IdentityResolver, Connection):
         for r in results:
             if r.action_name != "" and r.action_name != action:
                 continue
+            # Several results for the action (not expected for one resource):
+            # the most restrictive one stands, never simply the last.
+            out.decision = more_restrictive(out.decision, r.decision) if found else r.decision
             found = True
-            out.decision = r.decision
             out.missing.extend(r.missing)
             if r.org_allowed is not None and not r.org_allowed:
                 out.scp_denied = True

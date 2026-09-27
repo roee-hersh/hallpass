@@ -143,62 +143,62 @@ upstream:
         users: {nodes: [{<<: *bob, active: "yes"}]}
   - {method: POST, path: /garbage/graphql, body: "<html>not json</html>"}
 checks:
-  - {user: bob@example.com, action: workspace.member, resource: workspace, want: allowed}
-  - {user: bob@example.com, action: workspace.admin, resource: workspace, want: denied}
-  - {user: bob@example.com, action: workspace.owner, resource: workspace, want: denied}
-  - {user: bob@example.com, action: team.view, resource: "team:ENG", want: allowed}
-  - {user: bob@example.com, action: team.view, resource: "team:10000000-0000-4000-8000-000000000001", want: allowed}
-  - {user: bob@example.com, action: team.member, resource: "team:eng", want: denied}
-  - {user: bob@example.com, action: team.admin, resource: "team:ENG", want: denied}
-  - {user: bob@example.com, action: issue.view, resource: "issue:ENG-1", want: allowed}
-  - {user: bob@example.com, action: issue.edit, resource: "issue:eng-1", want: allowed}
-  - {user: bob@example.com, action: project.view, resource: "project:sec-proj", want: denied}
-  - {user: BOB@Example.com, action: workspace.member, resource: workspace, want: allowed}
-  - {user: nobody@example.com, action: workspace.member, resource: workspace, want: user_not_found}
-  - {user: bob@example.com, action: team.view, resource: "team:eng team", want: invalid_request}
-  - {user: bob@example.com, action: team.view, resource: "team:TOOLONGTEAMKEY", want: invalid_request}
-  - {user: bob@example.com, action: issue.view, resource: "issue:ENG-0", want: invalid_request}
-  - {user: bob@example.com, action: project.view, resource: "project:a/b", want: invalid_request}
-  - {user: bob@example.com, action: workspace.admin, resource: "workspace:1", want: invalid_request}
-  - {user: bob@example.com, action: team.view, resource: "issue:ENG-1", want: invalid_request}
-  - {user: bob@example.com, action: team.view, resource: "team:ENG?x=1", want: invalid_request}
-  - {user: dana@example.com, connection: linear-dana, action: team.view, resource: "team:SEC", want: allowed}
-  - {user: dana@example.com, connection: linear-dana, action: team.member, resource: "team:SEC", want: allowed}
-  - {user: dana@example.com, connection: linear-dana, action: team.admin, resource: "team:SEC", want: unsupported}
-  - {user: dana@example.com, connection: linear-dana, action: issue.view, resource: "issue:SEC-1", want: allowed}
-  - {user: dana@example.com, connection: linear-dana, action: project.view, resource: "project:both-proj", want: allowed}
-  - {user: gus@example.com, connection: linear-guest, action: workspace.member, resource: workspace, want: denied}
-  - {user: gus@example.com, connection: linear-guest, action: team.view, resource: "team:ENG", want: denied}
-  - {user: gus@example.com, connection: linear-guest, action: project.view, resource: "project:eng-proj", want: denied}
-  - {user: admin@example.com, connection: linear-admin, action: workspace.admin, resource: workspace, want: allowed}
-  - {user: admin@example.com, connection: linear-admin, action: team.view, resource: "team:SEC", want: unsupported}
-  - {user: admin@example.com, connection: linear-admin, action: team.admin, resource: "team:SEC", want: allowed}
-  - {user: admin@example.com, connection: linear-admin, action: issue.view, resource: "issue:SEC-1", want: unsupported}
-  - {user: susp@example.com, connection: linear-susp, action: workspace.member, resource: workspace, want: denied}
-  - {user: app@example.com, connection: linear-app, action: workspace.member, resource: workspace, want: denied}
-  - {user: app@example.com, connection: linear-app, action: team.view, resource: "team:ENG", want: unsupported}
-  - {user: bob@example.com, connection: linear-restricted, action: team.view, resource: "team:RST", want: unsupported}
-  - {user: bob@example.com, connection: linear-restricted, action: issue.view, resource: "issue:RST-1", want: unsupported}
-  - {user: bob@example.com, connection: linear-restricted, action: project.view, resource: "project:x", want: unsupported}
-  - {user: bob@example.com, connection: linear-archived, action: team.member, resource: "team:OLD", want: unsupported}
-  - {user: bob@example.com, connection: linear-archived, action: project.view, resource: "project:x", want: unsupported}
-  - {user: bob@example.com, connection: linear-trashed, action: team.view, resource: "team:ENG", want: upstream_error}
-  - {user: bob@example.com, connection: linear-trashed, action: issue.view, resource: "issue:ENG-2", want: unsupported}
-  - {user: bob@example.com, connection: linear-trashed, action: project.view, resource: "project:x", want: unsupported}
-  - {user: bob@example.com, connection: linear-empty, action: team.view, resource: "team:NOPE", want: resource_not_visible}
-  - {user: bob@example.com, connection: linear-empty, action: issue.view, resource: "issue:ENG-9", want: resource_not_visible}
-  - {user: bob@example.com, connection: linear-empty, action: project.view, resource: "project:missing", want: resource_not_visible}
-  - {user: bob@example.com, connection: linear-vanished, action: workspace.member, resource: workspace, want: upstream_error}
-  - {user: bob@example.com, connection: linear-dup, action: workspace.member, resource: workspace, want: user_ambiguous}
-  - {user: bob@example.com, connection: linear-badid, action: workspace.member, resource: workspace, want: upstream_error}
-  - {user: bob@example.com, connection: linear-ratelimited, action: workspace.member, resource: workspace, want: upstream_rate_limited}
-  - {user: bob@example.com, connection: linear-ratelimited-text, action: workspace.member, resource: workspace, want: upstream_rate_limited}
-  - {user: bob@example.com, connection: linear-forbidden, action: workspace.member, resource: workspace, want: credential_rejected}
-  - {user: bob@example.com, connection: linear-gqlerror, action: workspace.member, resource: workspace, want: upstream_error}
-  - {user: bob@example.com, connection: linear-401, action: workspace.member, resource: workspace, want: credential_rejected}
-  - {user: bob@example.com, connection: linear-403, action: workspace.member, resource: workspace, want: credential_rejected}
-  - {user: bob@example.com, connection: linear-418, action: workspace.member, resource: workspace, want: upstream_error}
-  - {user: bob@example.com, connection: linear-500, action: workspace.member, resource: workspace, want: upstream_error}
-  - {user: bob@example.com, connection: linear-nodata, action: workspace.member, resource: workspace, want: upstream_error}
-  - {user: bob@example.com, connection: linear-baddata, action: workspace.member, resource: workspace, want: upstream_error}
-  - {user: bob@example.com, connection: linear-garbage, action: workspace.member, resource: workspace, want: upstream_error}
+  - {user: bob@example.com, action: workspace.member, resource: workspace, want: allowed, reason: "allowed: bob@example.com is a full member of the workspace"}
+  - {user: bob@example.com, action: workspace.admin, resource: workspace, want: denied, reason: "denied: bob@example.com is neither a workspace administrator nor an owner"}
+  - {user: bob@example.com, action: workspace.owner, resource: workspace, want: denied, reason: "denied: bob@example.com is not a workspace owner"}
+  - {user: bob@example.com, action: team.view, resource: "team:ENG", want: allowed, reason: "allowed: team ENG is public and bob@example.com is a workspace member"}
+  - {user: bob@example.com, action: team.view, resource: "team:10000000-0000-4000-8000-000000000001", want: allowed, reason: "allowed: team ENG is public and bob@example.com is a workspace member"}
+  - {user: bob@example.com, action: team.member, resource: "team:eng", want: denied, reason: "denied: bob@example.com is not a member of team ENG"}
+  - {user: bob@example.com, action: team.admin, resource: "team:ENG", want: denied, reason: "denied: bob@example.com is not a member of team ENG"}
+  - {user: bob@example.com, action: issue.view, resource: "issue:ENG-1", want: allowed, reason: "allowed: bob@example.com may see the issue: team ENG is public and bob@example.com is a workspace member"}
+  - {user: bob@example.com, action: issue.edit, resource: "issue:eng-1", want: allowed, reason: "allowed: bob@example.com may edit and comment on the issue: team ENG is public and bob@example.com is a workspace member"}
+  - {user: bob@example.com, action: project.view, resource: "project:sec-proj", want: denied, reason: "denied: bob@example.com cannot see any of the 1 team(s) of project sec-proj"}
+  - {user: BOB@Example.com, action: workspace.member, resource: workspace, want: allowed, reason: "allowed: bob@example.com is a full member of the workspace"}
+  - {user: nobody@example.com, action: workspace.member, resource: workspace, want: user_not_found, reason: "user_not_found: no Linear user has email nobody@example.com"}
+  - {user: bob@example.com, action: team.view, resource: "team:eng team", want: invalid_request, reason: "invalid_request: team: takes a team key such as ENG or a Linear id"}
+  - {user: bob@example.com, action: team.view, resource: "team:TOOLONGTEAMKEY", want: invalid_request, reason: "invalid_request: team: takes a team key such as ENG or a Linear id"}
+  - {user: bob@example.com, action: issue.view, resource: "issue:ENG-0", want: invalid_request, reason: "invalid_request: issue: takes an identifier such as ENG-123 or a Linear id"}
+  - {user: bob@example.com, action: project.view, resource: "project:a/b", want: invalid_request, reason: "invalid_request: project: takes a slug id or a Linear id"}
+  - {user: bob@example.com, action: workspace.admin, resource: "workspace:1", want: invalid_request, reason: "invalid_request: workspace takes no id"}
+  - {user: bob@example.com, action: team.view, resource: "issue:ENG-1", want: invalid_request, reason: "invalid_request: action team.view takes a team: resource, not issue:"}
+  - {user: bob@example.com, action: team.view, resource: "team:ENG?x=1", want: invalid_request, reason: "invalid_request: resource \"team:ENG?x=1\" must not carry a query"}
+  - {user: dana@example.com, connection: linear-dana, action: team.view, resource: "team:SEC", want: allowed, reason: "allowed: dana@example.com is a member of private team SEC"}
+  - {user: dana@example.com, connection: linear-dana, action: team.member, resource: "team:SEC", want: allowed, reason: "allowed: dana@example.com is a member of team SEC"}
+  - {user: dana@example.com, connection: linear-dana, action: team.admin, resource: "team:SEC", want: unsupported, reason: "unsupported: dana@example.com is a member but not an owner of team SEC; whether members may manage its settings is a team setting hallpass cannot read"}
+  - {user: dana@example.com, connection: linear-dana, action: issue.view, resource: "issue:SEC-1", want: allowed, reason: "allowed: dana@example.com may see the issue: dana@example.com is a member of private team SEC"}
+  - {user: dana@example.com, connection: linear-dana, action: project.view, resource: "project:both-proj", want: allowed, reason: "allowed: dana@example.com may see project both-proj: dana@example.com is a member of private team SEC"}
+  - {user: gus@example.com, connection: linear-guest, action: workspace.member, resource: workspace, want: denied, reason: "denied: gus@example.com is a guest, limited to the teams they joined"}
+  - {user: gus@example.com, connection: linear-guest, action: team.view, resource: "team:ENG", want: denied, reason: "denied: gus@example.com is a guest and not a member of team ENG"}
+  - {user: gus@example.com, connection: linear-guest, action: project.view, resource: "project:eng-proj", want: denied, reason: "denied: gus@example.com cannot see any of the 1 team(s) of project eng-proj"}
+  - {user: admin@example.com, connection: linear-admin, action: workspace.admin, resource: workspace, want: allowed, reason: "allowed: admin@example.com is a workspace administrator"}
+  - {user: admin@example.com, connection: linear-admin, action: team.view, resource: "team:SEC", want: unsupported, reason: "unsupported: team SEC is private and admin@example.com is a workspace administrator but not a member; whether administrators see private team content is not something hallpass can read"}
+  - {user: admin@example.com, connection: linear-admin, action: team.admin, resource: "team:SEC", want: allowed, reason: "allowed: admin@example.com is a workspace administrator, who may manage any team"}
+  - {user: admin@example.com, connection: linear-admin, action: issue.view, resource: "issue:SEC-1", want: unsupported, reason: "unsupported: team SEC is private and admin@example.com is a workspace administrator but not a member; whether administrators see private team content is not something hallpass can read"}
+  - {user: susp@example.com, connection: linear-susp, action: workspace.member, resource: workspace, want: denied, reason: "denied: susp@example.com is not an active Linear user (admin suspension)"}
+  - {user: app@example.com, connection: linear-app, action: workspace.member, resource: workspace, want: denied, reason: "denied: app@example.com is an app user, not a member"}
+  - {user: app@example.com, connection: linear-app, action: team.view, resource: "team:ENG", want: unsupported, reason: "unsupported: app@example.com is an app user, whose team access hallpass does not model"}
+  - {user: bob@example.com, connection: linear-restricted, action: team.view, resource: "team:RST", want: unsupported, reason: "unsupported: team RST is restricted (inside a private team) and bob@example.com is not a member; hallpass does not read the private boundary"}
+  - {user: bob@example.com, connection: linear-restricted, action: issue.view, resource: "issue:RST-1", want: unsupported, reason: "unsupported: team RST is restricted (inside a private team) and bob@example.com is not a member; hallpass does not read the private boundary"}
+  - {user: bob@example.com, connection: linear-restricted, action: project.view, resource: "project:x", want: unsupported, reason: "unsupported: team RST is restricted (inside a private team) and bob@example.com is not a member; hallpass does not read the private boundary"}
+  - {user: bob@example.com, connection: linear-archived, action: team.member, resource: "team:OLD", want: unsupported, reason: "unsupported: team OLD is archived; hallpass does not model access to archived teams"}
+  - {user: bob@example.com, connection: linear-archived, action: project.view, resource: "project:x", want: unsupported, reason: "unsupported: project x belongs to no team; hallpass cannot tell who sees it"}
+  - {user: bob@example.com, connection: linear-trashed, action: team.view, resource: "team:ENG", want: upstream_error, reason: "upstream_error: Linear returned 2 teams for team ENG"}
+  - {user: bob@example.com, connection: linear-trashed, action: issue.view, resource: "issue:ENG-2", want: unsupported, reason: "unsupported: issue ENG-2 is in the trash; hallpass does not model access to trashed issues"}
+  - {user: bob@example.com, connection: linear-trashed, action: project.view, resource: "project:x", want: unsupported, reason: "unsupported: project x is in the trash; hallpass does not model access to trashed projects"}
+  - {user: bob@example.com, connection: linear-empty, action: team.view, resource: "team:NOPE", want: resource_not_visible, reason: "resource_not_visible: team NOPE does not exist or hallpass cannot see it"}
+  - {user: bob@example.com, connection: linear-empty, action: issue.view, resource: "issue:ENG-9", want: resource_not_visible, reason: "resource_not_visible: issue ENG-9 does not exist or hallpass cannot see it"}
+  - {user: bob@example.com, connection: linear-empty, action: project.view, resource: "project:missing", want: resource_not_visible, reason: "resource_not_visible: project missing does not exist or hallpass cannot see it"}
+  - {user: bob@example.com, connection: linear-vanished, action: workspace.member, resource: workspace, want: upstream_error, reason: "upstream_error: Linear could not search users: the record vanished between queries"}
+  - {user: bob@example.com, connection: linear-dup, action: workspace.member, resource: workspace, want: user_ambiguous, reason: "user_ambiguous: 2 Linear users have email bob@example.com"}
+  - {user: bob@example.com, connection: linear-badid, action: workspace.member, resource: workspace, want: upstream_error, reason: "upstream_error: Linear returned a user id that is not an id"}
+  - {user: bob@example.com, connection: linear-ratelimited, action: workspace.member, resource: workspace, want: upstream_rate_limited, reason: "upstream_rate_limited: Linear rate limit exhausted"}
+  - {user: bob@example.com, connection: linear-ratelimited-text, action: workspace.member, resource: workspace, want: upstream_rate_limited, reason: "upstream_rate_limited: Linear rate limit exhausted"}
+  - {user: bob@example.com, connection: linear-forbidden, action: workspace.member, resource: workspace, want: credential_rejected, reason: "credential_rejected: Linear refused the query (Forbidden): the credential lacks the read scope or the plan lacks the feature"}
+  - {user: bob@example.com, connection: linear-gqlerror, action: workspace.member, resource: workspace, want: upstream_error, reason: "upstream_error: Linear's GraphQL query failed (error)"}
+  - {user: bob@example.com, connection: linear-401, action: workspace.member, resource: workspace, want: credential_rejected, reason: "credential_rejected: Linear rejected hallpass's credential (HTTP 401)"}
+  - {user: bob@example.com, connection: linear-403, action: workspace.member, resource: workspace, want: credential_rejected, reason: "credential_rejected: Linear refused the request (HTTP 403): the credential lacks the read scope"}
+  - {user: bob@example.com, connection: linear-418, action: workspace.member, resource: workspace, want: upstream_error, reason: "upstream_error: Linear answered HTTP 418"}
+  - {user: bob@example.com, connection: linear-500, action: workspace.member, resource: workspace, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: bob@example.com, connection: linear-nodata, action: workspace.member, resource: workspace, want: upstream_error, reason: "upstream_error: Linear's response carried no data"}
+  - {user: bob@example.com, connection: linear-baddata, action: workspace.member, resource: workspace, want: upstream_error, reason: "upstream_error: Linear's data could not be decoded"}
+  - {user: bob@example.com, connection: linear-garbage, action: workspace.member, resource: workspace, want: upstream_error, reason: "upstream_error: Linear's response was not JSON (HTTP 200)"}

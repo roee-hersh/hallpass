@@ -232,8 +232,8 @@ same check.
 
 **MCP servers** (`hallpass[mcp]`, the official `mcp` SDK v2 and its `MCPServer`). Server
 middleware, whatever transport the call came over. The user is the authenticated access token's
-`email` claim (`user_claim="sub"` for its subject); a request without a token (stdio, or HTTP
-without auth) uses `user=`. A refusal is a tool result with `isError: true`:
+`email` claim (`user_claim="sub"` for its subject), refused when the token says
+`email_verified: false`; a request without a token (stdio, or HTTP without auth) uses `user=`. A refusal is a tool result with `isError: true`:
 
 ```python
 from hallpass.mcp import Rule, guard
@@ -408,8 +408,8 @@ the model cannot choose the user. With `ANTHROPIC_API_KEY` set, a live test per 
 Claude. Each file skips when its framework is not installed:
 
 ```sh
-cd hallpass-py && python -m pytest tests/frameworks -v
-cd examples/agent-ts && npm test
+(cd hallpass-py && python -m pytest tests/frameworks -v)
+(cd examples/agent-ts && npm test)
 ```
 
 ## Checklist

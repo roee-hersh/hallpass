@@ -430,6 +430,7 @@ def _http_server(hp: RecordingHallpass, **guard_kw: Any) -> Iterator[str]:
             "admin-token": {"sub": "u-admin", "email": ADMIN, "groups": ["platform-team"]},
             "dana-token": {"sub": "u-dana", "email": DANA, "groups": ["platform-team"]},
             "no-email-token": {"sub": "u-nobody"},
+            "unverified-token": {"sub": "u-mallory", "email": ADMIN, "email_verified": False, "groups": ["platform-team"]},
         }
     )
     server = make_server(
@@ -663,3 +664,21 @@ def test_live_claude(fw_mcp_hp: RecordingHallpass) -> None:
     assert all(s["resource"] == "thing:1" for s in fw_mcp_hp.seen)
     assert set(RAN) == {"write_thing:1"}
     assert len(RAN) == sum(1 for s in fw_mcp_hp.seen if s["user"] == ADMIN)
+
+
+def test_http_token_with_unverified_email_is_refused(fw_mcp_http: str, fw_mcp_hp: RecordingHallpass) -> None:
+    """A token whose provider says the email is not verified does not speak
+    for that address: whoever set it has not shown they own it."""
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+
+    async def call(token: str) -> CallToolResult:
+        async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + token}) as http:
+            async with Client(streamable_http_client(fw_mcp_http, http_client=http)) as client:
+                [res] = await drive(client, [("write_thing", {"thing_id": "1", "content": "hi"})])
+                return res
+
+    res = asyncio.run(call("unverified-token"))
+    assert (res.is_error, text(res)) == (True, REFUSED + "no user for this request: the access token's email is not verified (email_verified is false)")
+    assert fw_mcp_hp.seen == [], "hallpass must not be asked about an unverified email"
+    assert RAN == []

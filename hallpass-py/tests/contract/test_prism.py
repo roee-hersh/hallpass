@@ -1,4 +1,4 @@
-"""Port of test/contract/prism_test.go: runs integrations against Prism
+"""Port of v0.5.0:test/contract/prism_test.go: runs integrations against Prism
 (@stoplight/prism-cli), a mock server that answers from the vendor's OpenAPI
 description: every response is built from the description's examples and
 schemas, and Prism rejects requests that violate the description. The tests

@@ -3,7 +3,7 @@
 //
 //     npm test
 //
-// With HALLPASS_SDK_PACKED=1, CI imports the package from a tarball made by `npm pack`
+// With HALLPASS_TS_PACKED=1, CI imports the package from a tarball made by `npm pack`
 // and installed into a scratch project, so a missing file in "files" fails here.
 
 import assert from "node:assert/strict";
@@ -11,7 +11,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer } from "node:http";
 import { after, before, test } from "node:test";
 
-const mod = process.env.HALLPASS_SDK_PACKED === "1" ? "hallpass-client" : "../dist/index.js";
+const mod = process.env.HALLPASS_TS_PACKED === "1" ? "hallpass-client" : "../dist/index.js";
 const { Hallpass, PermissionDenied, guarded } = await import(mod);
 
 let server;

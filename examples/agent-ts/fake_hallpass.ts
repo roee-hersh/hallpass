@@ -1,7 +1,6 @@
 /**
  * A fake hallpass for the tests: answers per resource id, records every
  * request, and misbehaves on request (garbage, truncation, redirects).
- * The same table as ../agent/test_hallpass_client.py.
  */
 
 import http from "node:http";

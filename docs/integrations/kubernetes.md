@@ -39,7 +39,7 @@ reference it with `credential: file:/path` and hallpass re-reads it on every use
 |---|---|
 | `url` | API server URL |
 | `credential` | ServiceAccount token, `env:` or `file:` |
-| `username_template` | How the API server names your users. Placeholders `{email}`, `{local}`, `{domain}`. Must contain `{email}` or `{local}` |
+| `username_template` | How the API server names your users. Placeholders `{email}`, `{local}`, `{domain}`. Must contain `{email}` or `{local}`. A name that comes out starting with `system:` (Kubernetes' own ServiceAccounts and components) is refused (`invalid_request`). `{local}` drops the domain, so it suits a single-domain directory |
 | `group_prefix` | Prefix the API server puts on groups from your identity provider. Without it a caller group starting with `system:` is rejected (`invalid_request`), since it would name a built-in group such as `system:masters` |
 | `add_authenticated_group` | Also send `system:authenticated`, as the API server would for any logged-in user |
 

@@ -2,7 +2,7 @@
 recorded calls and failure injection, Deps wired to it, and a canary check
 that fails a test when a secret shows up in logs.
 
-A port of the original Go harness (internal/integration/itest). Handlers
+A port of the original Go harness (v0.5.0:internal/integration/itest). Handlers
 take (w, r) the way Go handlers do, so tests port line by line:
 
     srv = itest.Server()

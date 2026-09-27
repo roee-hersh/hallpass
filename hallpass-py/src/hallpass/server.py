@@ -60,6 +60,10 @@ class _BadRequest(Exception):
     pass
 
 
+class _Pairs(list[tuple[str, Any]]):
+    """A JSON object as its key/value pairs in order, duplicates kept."""
+
+
 def _decode(body: bytes) -> dict[str, Any]:
     """Strict decoding: an object, known fields only, the right types, no
     trailing data."""
@@ -71,7 +75,7 @@ def _decode(body: bytes) -> dict[str, Any]:
     if not stripped:
         raise _BadRequest("empty body")
     try:
-        v, end = json.JSONDecoder().raw_decode(stripped)
+        v, end = json.JSONDecoder(object_pairs_hook=_Pairs).raw_decode(stripped)
     except json.JSONDecodeError:
         raise _BadRequest("syntax error") from None
     if stripped[end:].strip(" \t\r\n"):
@@ -79,16 +83,20 @@ def _decode(body: bytes) -> dict[str, Any]:
     if v is None:
         # Go decodes null into the struct as a no-op: an empty request,
         # which the engine answers as invalid.
-        v = {}
-    if not isinstance(v, dict):
+        v = _Pairs()
+    if not isinstance(v, _Pairs):
         raise _BadRequest("wrong type for field ")
-    # Field names match case-insensitively, as Go's decoder matches them;
-    # a later key for the same field wins.
+    # Field names match regardless of ASCII case, as Go's decoder matches
+    # them, but only ASCII case: "uſer" (long s) or a Kelvin sign does not
+    # name a field. A field given twice is refused, so a gateway that reads
+    # the first "user" and this server can never disagree about who asks.
     folded: dict[str, Any] = {}
-    for k, x in v.items():
-        name = k if k in _FIELDS else next((f for f in _FIELDS if f.casefold() == k.casefold()), None)
-        if name is None:
+    for k, x in v:
+        name = k.lower() if k.isascii() else k
+        if name not in _FIELDS:
             raise _BadRequest(f'unknown field "{k}"')
+        if name in folded:
+            raise _BadRequest(f'duplicate field "{k}"')
         folded[name] = x
     v = folded
     out: dict[str, Any] = {}
@@ -103,7 +111,7 @@ def _decode(body: bytes) -> dict[str, Any]:
     g = v.get("groups")
     if g is None:
         out["groups"] = []
-    elif isinstance(g, list) and all(isinstance(x, str) or x is None for x in g):
+    elif isinstance(g, list) and not isinstance(g, _Pairs) and all(isinstance(x, str) or x is None for x in g):
         out["groups"] = [_clean(x) if x is not None else "" for x in g]
     else:
         raise _BadRequest("wrong type for field groups")
@@ -139,6 +147,9 @@ class Server:
         if len(header) < len(prefix) or header[: len(prefix)].lower() != prefix.lower():
             return False
         got = header[len(prefix) :].strip().encode("utf-8", "surrogateescape")
+        if not want:
+            # An empty key authorizes nobody, not everybody.
+            return False
         return hmac.compare_digest(got, want)
 
     def handle_check(self, method: str, auth: str, body: bytes | None, remote: str, too_large: bool = False) -> tuple[int, dict[str, str], bytes]:
@@ -245,9 +256,19 @@ class Server:
                     )
 
             def _length(self) -> int | None:
-                if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+                # One framing only, stated once: a proxy in front that reads
+                # the request differently (another Transfer-Encoding, both
+                # headers, two lengths) must not see a different request
+                # boundary than this server does.
+                tes = self.headers.get_all("Transfer-Encoding") or []
+                cls = self.headers.get_all("Content-Length") or []
+                if tes:
+                    if len(tes) != 1 or tes[0].strip().lower() != "chunked" or cls:
+                        return -1
                     return None
-                cl = self.headers.get("Content-Length")
+                if len(cls) > 1:
+                    return -1
+                cl = cls[0] if cls else None
                 if cl is None:
                     return 0
                 # Digits only: int() would also take "+5", " 5" and "5_0".

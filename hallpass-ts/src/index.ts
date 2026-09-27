@@ -23,8 +23,8 @@
  * The user comes from the application, never from the tool's arguments.
  *
  * Install it with `npm install hallpass-client`. This is the TypeScript
- * counterpart of the Python package (sdk/python) and follows the same
- * contract; the tests in examples/agent-ts/hallpass_client.test.ts spell it
+ * counterpart of `Hallpass.remote` in the Python package (`hallpass`, in
+ * hallpass-py) and follows the same contract; the tests in examples/agent-ts/hallpass_client.test.ts spell it
  * out.
  */
 

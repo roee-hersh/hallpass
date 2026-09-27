@@ -1,4 +1,4 @@
-"""Port of internal/integrations/vault/fuzz_test.go.
+"""Port of v0.5.0:internal/integrations/vault/fuzz_test.go.
 
 FuzzParseTarget and FuzzPolicy become Hypothesis properties with the same
 invariants. Their seed corpora (the f.Add seeds, and for FuzzPolicy the

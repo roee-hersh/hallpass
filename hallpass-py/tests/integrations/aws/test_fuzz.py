@@ -1,4 +1,4 @@
-"""Port of internal/integrations/aws/fuzz_test.go (FuzzParseResource) as a
+"""Port of v0.5.0:internal/integrations/aws/fuzz_test.go (FuzzParseResource) as a
 Hypothesis property test plus its seed corpus. The Go package has no
 testdata/fuzz directory, so the f.Add seeds are the whole corpus."""
 

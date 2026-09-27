@@ -1,4 +1,4 @@
-"""Port of internal/httpx/httpx_test.go, plus proxy and TLS server name
+"""Port of v0.5.0:internal/httpx/httpx_test.go, plus proxy and TLS server name
 tests for the transport the Python port builds itself."""
 
 from __future__ import annotations
@@ -828,3 +828,54 @@ def test_transport_error_unwraps_to_its_cause(servers: Callable[..., itest.Serve
     c = Client(http=new_http_client(Options(timeout=2.0)), base=srv.url, sleep=_no_sleep)
     err = _err(lambda: c.do(background(), Request(path="/")))
     assert as_error(err, TransportError) is not None and is_error(err, ssl.SSLCertVerificationError), repr(err)
+
+
+class _KeepAlive(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    peers: list[int] = []
+
+    def do_GET(self) -> None:
+        type(self).peers.append(self.client_address[1])
+        body = b'{"ok":true}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+
+def test_keep_alive_connection_is_reused_after_a_content_length_body() -> None:
+    """The second request goes over the first one's connection. On Python
+    3.10 HTTPResponse.read1 left a Content-Length response open after its
+    last byte, and the reused connection then refused the next request
+    (ResponseNotReady) unless the transport closed the response."""
+    handler = type("KA", (_KeepAlive,), {"peers": []})
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        hc = new_http_client(Options(timeout=5.0))
+        url = f"http://127.0.0.1:{srv.server_address[1]}/x"
+        for _ in range(3):
+            resp = hc.send(background(), httpx.PreparedRequest(method="GET", url=url, headers=Headers()))
+            assert resp.status == 200 and resp.body == b'{"ok":true}', resp
+        assert len(handler.peers) == 3 and len(set(handler.peers)) == 1, f"connections used: {handler.peers}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_tunnel_reader_answers_a_zero_byte_read_at_once() -> None:
+    """Python 3.10's HTTPResponse.read1 asks for 0 bytes once a body is
+    complete; through a TLS-in-TLS tunnel that must not wait for data the
+    server will never send."""
+
+    class NoRecv:
+        def recv(self, n: int) -> bytes:
+            raise AssertionError("read1(0) waited for data")
+
+    r = httpx._BufferedReader(NoRecv())  # type: ignore[arg-type]
+    assert r.read1(0) == b""

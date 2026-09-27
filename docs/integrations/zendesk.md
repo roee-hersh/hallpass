@@ -46,7 +46,7 @@ Use an administrator: an agent credential cannot read tickets outside its own ti
 `GET /api/v2/users/search?query=email:<email>`. The search matches loosely, so only a record whose
 `email` equals the address (ignoring case) is the user; when no primary email matches, each result's
 `GET /api/v2/users/{id}/identities` is read and a secondary `email` identity equal to the address
-counts. None is `user_not_found`, two are `user_ambiguous`. A deleted user (`active: false`) or a suspended one is denied every action. The
+counts. None is `user_not_found`, two are `user_ambiguous`. A deleted user (`active: false`) or a suspended one is denied every action; a record that does not say whether the user is active and not suspended is unknown (`unsupported`). The
 identity carries the role, `role_type`, `custom_role_id`, `ticket_restriction`,
 `only_private_comments` and the default `organization_id`; for agents and administrators the
 identity's groups are the ids from `GET /api/v2/users/{id}/group_memberships` (agents only:

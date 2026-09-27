@@ -139,10 +139,10 @@ service:
 resources: {}
   # limits:
   #   cpu: 500m
-  #   memory: 128Mi
+  #   memory: 256Mi
   # requests:
   #   cpu: 50m
-  #   memory: 32Mi
+  #   memory: 64Mi
 
 livenessProbe:
   httpGet:

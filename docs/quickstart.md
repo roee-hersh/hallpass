@@ -156,6 +156,8 @@ connections:
 Then check the file and the credential before you rely on it:
 
 ```sh
+export JIRA_TOKEN=...              # the token from the integration page
+export HALLPASS_API_KEY=change-me  # validate reads api_key when the file has one
 hallpass validate -config hallpass.yaml
 hallpass probe    -config hallpass.yaml -connection jira-main
 hallpass check    -config hallpass.yaml -connection jira-main \

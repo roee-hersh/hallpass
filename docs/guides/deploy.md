@@ -62,7 +62,7 @@ docker run -d --name hallpass -p 127.0.0.1:8080:8080 \
   -e HALLPASS_API_KEY="$(openssl rand -hex 32)" \
   -e JIRA_TOKEN \
   -v "$PWD/hallpass.yaml:/etc/hallpass/hallpass.yaml:ro" \
-  ghcr.io/roee-hersh/hallpass:0.4.0
+  ghcr.io/roee-hersh/hallpass:0.6.0
 ```
 
 The image is `python:3.13-slim` with `hallpass[crypto]` installed and compiled, runs as the

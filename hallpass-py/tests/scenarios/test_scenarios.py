@@ -1,10 +1,11 @@
-"""Recorded decision scenarios: each engine decision's code against the
-expected one.
+"""Recorded decision scenarios: each engine decision's outcome, code and
+reason against the expected ones.
 
 Each file in scenarios/ describes connections, the fake upstream's routes
-and a list of checks with the expected code; every check runs through the
-engine against that upstream. They were recorded while porting from Go,
-where both implementations had to agree on every one.
+and a list of checks with the expected code and reason; every check runs
+through the engine against that upstream. The reasons are the Go
+implementation's (v0.5.0) answers to the same checks, recorded when it was
+retired, so the text of every decision stays what operators saw before.
 """
 
 from __future__ import annotations
@@ -76,9 +77,9 @@ def test_scenario(path: Path, index: int) -> None:
         for r in doc.get("upstream") or []:
             _route(srv, r)
         subst = {"url": srv.url, "ca_file": itest.test_ca().ca_file}
-        cfg_doc = {"api_key": "env:HALLPASS_PARITY_KEY", "decision_log": "none", "connections": _render(doc["connections"], subst)}
+        cfg_doc = {"api_key": "env:HALLPASS_SCENARIO_KEY", "decision_log": "none", "connections": _render(doc["connections"], subst)}
         text = yaml.safe_dump(cfg_doc, sort_keys=False)
-        env = {**os.environ, **{k: str(v) for k, v in (doc.get("env") or {}).items()}, "HALLPASS_PARITY_KEY": "k"}
+        env = {**os.environ, **{k: str(v) for k, v in (doc.get("env") or {}).items()}, "HALLPASS_SCENARIO_KEY": "k"}
         old = dict(os.environ)
         os.environ.update(env)
         try:
@@ -97,5 +98,9 @@ def test_scenario(path: Path, index: int) -> None:
         finally:
             os.environ.clear()
             os.environ.update(old)
-        py = {"decision": d.outcome.value, "reason": d.reason()}
-        assert py["reason"].split(":", 1)[0] == check["want"], f"python: {py}, want code {check['want']}"
+        got = {"decision": d.outcome.value, "reason": d.reason()}
+        assert got["reason"].split(":", 1)[0] == check["want"], f"got {got}, want code {check['want']}"
+        # The reason as the Go implementation (v0.5.0) gave it for this check.
+        assert got["reason"] == check["reason"], f"got {got}, want reason {check['reason']!r}"
+        want_decision = {"allowed": "allow", "denied": "deny", "user_not_found": "deny"}.get(check["want"], "unknown")
+        assert got["decision"] == want_decision, f"got {got}"

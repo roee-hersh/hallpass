@@ -1,4 +1,4 @@
-"""Port of internal/integrations/kubernetes/kubernetes_test.go."""
+"""Port of v0.5.0:internal/integrations/kubernetes/kubernetes_test.go."""
 
 from __future__ import annotations
 
@@ -203,6 +203,16 @@ def test_template_and_prefix(setup: Setup) -> None:
     _, _, c2 = setup({"username_template": "{local}@corp"})
     ident = c2.resolve_identity(background(), dana)
     assert ident.id == "dana@corp", ident.id
+
+    # A template must never turn an email into one of Kubernetes' own
+    # identities (a ServiceAccount, a control-plane component).
+    srv3, _, c3 = setup({"username_template": "{local}"})
+    sa = User(email="system:serviceaccount:kube-system:generic-garbage-collector@corp.com")
+    d = check(c3, sa, "raw:delete:deployments.apps", "namespace:payments")
+    itest.expect_code(d, Code.INVALID_REQUEST)
+    assert "reserved Kubernetes username" in d.text, d.text
+    for call in srv3.calls():
+        assert not call.path.endswith("/subjectaccessreviews"), f"review sent for a reserved username: {call}"
     for bad in ("static", "{user}", "{email"):
         with pytest.raises(ValueError):
             validate_template(bad)

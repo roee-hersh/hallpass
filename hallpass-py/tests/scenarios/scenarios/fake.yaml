@@ -8,25 +8,25 @@ connections:
     integration: fake
     fail: upstream_timeout
 checks:
-  - {user: root@example.com, action: thing.write, resource: "thing:1", want: allowed}
-  - {user: dana@example.com, action: thing.read, resource: "thing:1", want: allowed}
-  - {user: dana@example.com, action: thing.write, resource: "thing:1", want: denied}
-  - {user: MIXED.case@example.COM, action: thing.read, resource: "thing:1", want: allowed}
-  - {user: nobody@example.com, action: thing.read, resource: "thing:1", want: user_not_found}
-  - {user: x-ambiguous@example.com, action: thing.read, resource: "thing:1", want: user_ambiguous}
-  - {user: dana@example.com, action: thing.read, resource: "thing:hidden", want: resource_not_visible}
-  - {user: dana@example.com, action: thing.read, resource: "thing:broken", want: unsupported}
-  - {user: dana@example.com, action: thing.read, resource: "other:1", want: invalid_request}
-  - {user: dana@example.com, action: thing.read, resource: "thing:", want: invalid_request}
-  - {user: dana@example.com, action: thing.delete, resource: "thing:1", want: unknown_action}
-  - {user: dana@example.com, action: thing.read, resource: "thing:1", connection: nope, want: unknown_connection}
-  - {user: not-an-email, action: thing.read, resource: "thing:1", want: invalid_request}
-  - {user: dana@example.com, action: "bad action", resource: "thing:1", want: invalid_request}
-  - {user: dana@example.com, action: thing.read, resource: "Thing:1", want: invalid_request}
-  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=b;c", want: invalid_request}
-  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=%zz", want: invalid_request}
-  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=%C2%85", want: invalid_request}
-  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=1&a=2", want: invalid_request}
-  - {user: dana@example.com, groups: ["", "x"], action: thing.read, resource: "thing:1", want: invalid_request}
-  - {user: dana@example.com, groups: ["b", "a", "b"], action: thing.read, resource: "thing:1", want: allowed}
-  - {user: dana@example.com, action: thing.read, resource: "thing:1", connection: fake-broken, want: upstream_timeout}
+  - {user: root@example.com, action: thing.write, resource: "thing:1", want: allowed, reason: "allowed: root@example.com is an admin"}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1", want: allowed, reason: "allowed: dana@example.com is a known user"}
+  - {user: dana@example.com, action: thing.write, resource: "thing:1", want: denied, reason: "denied: dana@example.com is not an admin"}
+  - {user: MIXED.case@example.COM, action: thing.read, resource: "thing:1", want: allowed, reason: "allowed: mixed.case@example.com is a known user"}
+  - {user: nobody@example.com, action: thing.read, resource: "thing:1", want: user_not_found, reason: "user_not_found: no account for nobody@example.com"}
+  - {user: x-ambiguous@example.com, action: thing.read, resource: "thing:1", want: user_ambiguous, reason: "user_ambiguous: several accounts match x-ambiguous@example.com"}
+  - {user: dana@example.com, action: thing.read, resource: "thing:hidden", want: resource_not_visible, reason: "resource_not_visible: thing \"hidden\" is not visible to the fake credential"}
+  - {user: dana@example.com, action: thing.read, resource: "thing:broken", want: unsupported, reason: "unsupported: thing \"broken\" uses a policy the fake integration cannot evaluate"}
+  - {user: dana@example.com, action: thing.read, resource: "other:1", want: invalid_request, reason: "invalid_request: resource must be thing:<id>"}
+  - {user: dana@example.com, action: thing.read, resource: "thing:", want: invalid_request, reason: "invalid_request: resource must be thing:<id>"}
+  - {user: dana@example.com, action: thing.delete, resource: "thing:1", want: unknown_action, reason: "unknown_action: integration fake has no action \"thing.delete\""}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1", connection: nope, want: unknown_connection, reason: "unknown_connection: no connection with id \"nope\""}
+  - {user: not-an-email, action: thing.read, resource: "thing:1", want: invalid_request, reason: "invalid_request: user must be an email address"}
+  - {user: dana@example.com, action: "bad action", resource: "thing:1", want: invalid_request, reason: "invalid_request: action \"bad action\" contains characters outside ^[A-Za-z0-9][A-Za-z0-9_.:/*-]*$"}
+  - {user: dana@example.com, action: thing.read, resource: "Thing:1", want: invalid_request, reason: "invalid_request: resource type \"Thing\" must match ^[a-z][a-z0-9_]{0,63}$"}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=b;c", want: invalid_request, reason: "invalid_request: resource query: invalid semicolon separator in query"}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=%zz", want: invalid_request, reason: "invalid_request: resource query: invalid URL escape \"%zz\""}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=%C2%85", want: invalid_request, reason: "invalid_request: resource query value for \"a\" contains a control character"}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1?a=1&a=2", want: invalid_request, reason: "invalid_request: resource query key \"a\" must be a single lowercase key"}
+  - {user: dana@example.com, groups: ["", "x"], action: thing.read, resource: "thing:1", want: invalid_request, reason: "invalid_request: groups contains an empty entry"}
+  - {user: dana@example.com, groups: ["b", "a", "b"], action: thing.read, resource: "thing:1", want: allowed, reason: "allowed: dana@example.com is a known user"}
+  - {user: dana@example.com, action: thing.read, resource: "thing:1", connection: fake-broken, want: upstream_timeout, reason: "upstream_timeout: fake failure"}

@@ -97,26 +97,26 @@ upstream:
     status: 403
     json: {errors: [Forbidden]}
 checks:
-  - {user: dana@example.com, action: logs.read, resource: org, want: allowed}
-  - {user: bob@example.com, action: users.manage, resource: org, want: denied}
-  - {user: off@example.com, action: logs.read, resource: org, want: denied}
-  - {user: pending@example.com, action: logs.read, resource: org, want: denied}
-  - {user: nostatus@example.com, action: logs.read, resource: org, want: unsupported}
-  - {user: ghost@example.com, action: logs.read, resource: org, want: user_not_found}
-  - {user: dup@example.com, action: logs.read, resource: org, want: user_ambiguous}
-  - {user: lost@example.com, action: logs.read, resource: org, want: resource_not_visible}
-  - {user: dana@example.com, action: monitor.edit, resource: "monitor:1", want: allowed}
-  - {user: bob@example.com, action: monitor.edit, resource: "monitor:1", want: denied}
-  - {user: dana@example.com, action: monitor.edit, resource: "monitor:2", want: denied}
-  - {user: bob@example.com, action: monitor.read, resource: "monitor:2", want: allowed}
-  - {user: dana@example.com, action: monitor.edit, resource: "monitor:3", want: denied}
-  - {user: bob@example.com, action: monitor.read, resource: "monitor:3", want: allowed}
-  - {user: dana@example.com, action: monitor.edit, resource: "monitor:404", want: resource_not_visible}
-  - {user: dana@example.com, action: dashboard.edit, resource: "dashboard:abc-def", want: allowed}
-  - {user: dana@example.com, action: "raw:monitors_write", resource: "monitor:2", want: denied}
-  - {user: dana@example.com, action: "raw:monitors_read", resource: "monitor:3", want: allowed}
-  - {user: dana@example.com, action: "raw:Monitors", resource: org, want: unknown_action}
-  - {user: dana@example.com, action: monitor.edit, resource: "dashboard:abc-def", want: invalid_request}
-  - {user: dana@example.com, action: monitor.edit, resource: "monitor:-1", want: invalid_request}
-  - {user: dana@example.com, action: logs.read, resource: org, connection: dd-broken, want: upstream_error}
-  - {user: dana@example.com, action: logs.read, resource: org, connection: dd-forbidden, want: credential_rejected}
+  - {user: dana@example.com, action: logs.read, resource: org, want: allowed, reason: "allowed: a role of dana@example.com carries logs_read_data"}
+  - {user: bob@example.com, action: users.manage, resource: org, want: denied, reason: "denied: no role of bob@example.com carries user_access_manage"}
+  - {user: off@example.com, action: logs.read, resource: org, want: denied, reason: "denied: off@example.com is disabled in Datadog"}
+  - {user: pending@example.com, action: logs.read, resource: org, want: denied, reason: "denied: pending@example.com was invited to Datadog but has not accepted, so cannot act"}
+  - {user: nostatus@example.com, action: logs.read, resource: org, want: unsupported, reason: "unsupported: Datadog did not report whether nostatus@example.com is disabled"}
+  - {user: ghost@example.com, action: logs.read, resource: org, want: user_not_found, reason: "user_not_found: no Datadog user has email ghost@example.com"}
+  - {user: dup@example.com, action: logs.read, resource: org, want: user_ambiguous, reason: "user_ambiguous: 2 Datadog users have email dup@example.com"}
+  - {user: lost@example.com, action: logs.read, resource: org, want: resource_not_visible, reason: "resource_not_visible: role 55555555-5555-5555-5555-555555555555 of lost@example.com does not exist or hallpass cannot see it"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:1", want: allowed, reason: "allowed: a role of dana@example.com carries monitors_write and monitor 1 carries no restriction"}
+  - {user: bob@example.com, action: monitor.edit, resource: "monitor:1", want: denied, reason: "denied: no role of bob@example.com carries monitors_write, which change, delete or resolve the monitor (monitors_write) needs"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:2", want: denied, reason: "denied: monitor 2 is restricted to 1 role(s) that dana@example.com does not hold"}
+  - {user: bob@example.com, action: monitor.read, resource: "monitor:2", want: allowed, reason: "allowed: a role of bob@example.com carries monitors_read and monitor 2 carries no restriction"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:3", want: denied, reason: "denied: the restriction policy of monitor 3 grants editor to none of dana@example.com's roles, teams or user"}
+  - {user: bob@example.com, action: monitor.read, resource: "monitor:3", want: allowed, reason: "allowed: the restriction policy of monitor 3 grants viewer to the whole org, and a role of bob@example.com carries monitors_read"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:404", want: resource_not_visible, reason: "resource_not_visible: monitor 404 does not exist or hallpass cannot see it"}
+  - {user: dana@example.com, action: dashboard.edit, resource: "dashboard:abc-def", want: allowed, reason: "allowed: a role of dana@example.com carries dashboards_write and dana@example.com is the author of dashboard abc-def, which its restricted roles cannot exclude"}
+  - {user: dana@example.com, action: "raw:monitors_write", resource: "monitor:2", want: denied, reason: "denied: monitor 2 is restricted to 1 role(s) that dana@example.com does not hold"}
+  - {user: dana@example.com, action: "raw:monitors_read", resource: "monitor:3", want: allowed, reason: "allowed: the restriction policy of monitor 3 grants viewer to the whole org, and a role of dana@example.com carries monitors_read"}
+  - {user: dana@example.com, action: "raw:Monitors", resource: org, want: unknown_action, reason: "unknown_action: integration datadog has no action \"raw:Monitors\""}
+  - {user: dana@example.com, action: monitor.edit, resource: "dashboard:abc-def", want: invalid_request, reason: "invalid_request: action monitor.edit takes a monitor: resource, not dashboard:"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:-1", want: invalid_request, reason: "invalid_request: monitor: id must be the asset's id"}
+  - {user: dana@example.com, action: logs.read, resource: org, connection: dd-broken, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: dana@example.com, action: logs.read, resource: org, connection: dd-forbidden, want: credential_rejected, reason: "credential_rejected: Datadog refused to search users (HTTP 403): the API key or application key is invalid, or the application key lacks the scope"}

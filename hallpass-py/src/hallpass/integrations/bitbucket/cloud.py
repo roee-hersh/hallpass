@@ -1,5 +1,5 @@
 """Bitbucket Cloud (api.bitbucket.org/2.0). Every resource belongs to the
-connection's workspace. (Go: internal/integrations/bitbucket/cloud.go.)"""
+connection's workspace. (Go: v0.5.0:internal/integrations/bitbucket/cloud.go.)"""
 
 from __future__ import annotations
 

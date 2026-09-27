@@ -1,5 +1,5 @@
 """The gitlab action table, resource parsing and protected-branch pattern
-matching (Go: internal/integrations/gitlab/actions.go)."""
+matching (Go: v0.5.0:internal/integrations/gitlab/actions.go)."""
 
 from __future__ import annotations
 

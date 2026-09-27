@@ -1,4 +1,4 @@
-"""Port of internal/integrations/argocd/fuzz_test.go (FuzzBuildRequest,
+"""Port of v0.5.0:internal/integrations/argocd/fuzz_test.go (FuzzBuildRequest,
 FuzzGlob) and fuzz_glob_test.go as Hypothesis property tests plus their
 seeds. The Go package has no testdata/fuzz directory, so the f.Add seeds
 are the whole corpus. The Go test hooks (CompileGlobForTest,

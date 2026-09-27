@@ -1,4 +1,4 @@
-"""Port of test/e2e/kubernetes_test.go: tests that run against a real
+"""Port of v0.5.0:test/e2e/kubernetes_test.go: tests that run against a real
 Kubernetes API server. Skipped unless the environment names one
 (HALLPASS_E2E_KUBERNETES_URL, _TOKEN_FILE and _CA_FILE); test/kind/run.sh
 sets up a kind cluster and exports them."""

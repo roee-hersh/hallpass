@@ -1,4 +1,4 @@
-"""Port of internal/integrations/vault/vault_test.go."""
+"""Port of v0.5.0:internal/integrations/vault/vault_test.go."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ class FakeEntity:
     id: str
     name: str
     email: str
-    disabled: bool
+    disabled: bool | None
     policies: list[str] | None
     groups: list[str] | None
     metadata: dict[str, str] | None
@@ -180,7 +180,7 @@ class Fake:
                             {
                                 "id": e.id,
                                 "name": e.name,
-                                "disabled": e.disabled,
+                                **({} if e.disabled is None else {"disabled": e.disabled}),
                                 "policies": e.policies,
                                 "metadata": e.metadata,
                                 "group_ids": e.groups,
@@ -648,6 +648,30 @@ def test_missing_policy_is_skipped(env: Env) -> None:
     expect(check(c, dana, "secret.read", "kv:secret/dev/app"), Code.ALLOWED, "")
     seen = any(call.path.endswith("/sys/policies/acl/gone-policy") for call in srv.calls())
     assert seen, "the missing policy was not read"
+
+
+def test_entity_without_disabled_is_unsupported(env: Env) -> None:
+    # A read that does not say whether the entity is disabled must not be
+    # taken as enabled.
+    _, f, c = env.setup()
+    with f.mu:
+        f.entities[0].disabled = None
+    expect(check(c, dana, "secret.read", "kv:secret/dev/app"), Code.UNSUPPORTED, "did not say whether entity dana")
+
+
+def test_missing_policy_under_a_namespace_is_unsupported(env: Env) -> None:
+    # Under a namespace a 404 may hide a parent namespace's policy (with a
+    # deny in it); it is not skipped there.
+    _, _, c = env.setup_values({"namespace": "team/"}, "")
+    expect(check(c, dana, "secret.read", "kv:secret/dev/app"), Code.UNSUPPORTED, "policy gone-policy is not readable in namespace team/")
+
+
+def test_group_id_with_unexpected_shape_is_an_error(env: Env) -> None:
+    # Skipping the group would skip its policies, denies included.
+    _, f, c = env.setup()
+    with f.mu:
+        f.entities[0].groups = [GRP_TEAM, "not-a-group-id!"]
+    expect(check(c, dana, "secret.read", "kv:secret/dev/app"), Code.UPSTREAM_ERROR, "unexpected shape")
 
 
 def test_policies_are_cached(env: Env) -> None:

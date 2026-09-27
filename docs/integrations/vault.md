@@ -62,7 +62,8 @@ under the secrets engines themselves is read.
 `POST identity/lookup/entity` with `alias_name` = the email and `alias_mount_accessor` = the
 alias mount's accessor; no entity is `user_not_found`. Then `GET identity/entity/id/<id>` for the
 entity's policies, `disabled` flag, metadata, aliases and group ids, and `GET identity/group/id/<id>`
-for each direct and inherited group's name and policies. A disabled entity is denied every action.
+for each direct and inherited group's name and policies. A disabled entity is denied every action;
+an entity read that does not say whether it is disabled is unknown (`unsupported`).
 The identity's groups are the group ids; its attributes carry the entity name, metadata, aliases and
 group names so that policy templates can be resolved. Groups sent by the caller are ignored.
 
@@ -153,6 +154,9 @@ list forms) are parsed. Heredocs and other syntax answer `unsupported`.
 - **Sentinel** (EGP and RGP) policies, **control groups**, **MFA** enforcement.
 - **Request parameters**: `allowed_parameters` and friends.
 - **Namespaces above the connection's**: policies granted in a parent namespace on child paths.
+  Under a `namespace`, a policy of the entity or its groups that answers 404 may be such a policy,
+  so the answer is unknown (`unsupported`) rather than a check without it; in the root namespace a
+  policy Vault does not have is skipped, as Vault skips it.
 - **Token-specific state**: TTLs, uses, bound CIDRs, `sudo` paths' `x-vault-sudo` requirement is
   not checked unless asked with `raw:sudo`.
 - **Path aliases** resolved by engines (e.g. `secret/foo` on KV v2 rewritten by the CLI): hallpass

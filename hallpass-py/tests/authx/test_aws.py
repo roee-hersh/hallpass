@@ -1,4 +1,4 @@
-"""Port of internal/authx/aws_test.go."""
+"""Port of v0.5.0:internal/authx/aws_test.go."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Port of internal/catalog/catalog_test.go and fuzz_test.go.
+"""Port of v0.5.0:internal/catalog/catalog_test.go and fuzz_test.go.
 
 The Go fuzz targets are Hypothesis property tests with the same
 invariants. Their seed corpus runs as ordinary cases, as `go test` runs

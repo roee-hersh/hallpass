@@ -153,31 +153,31 @@ upstream:
   - {method: POST, path: /throttled/api/v2/statements, status: 429, json: {message: slow down}}
   - {method: POST, path: /broken/api/v2/statements, status: 500, body: oops}
 checks:
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", want: allowed}
-  - {user: Dana@Example.com, action: database.usage, resource: "database:PROD", want: allowed}
-  - {user: dana@example.com, action: database.usage, resource: "database:dev", want: denied}
-  - {user: dana@example.com, action: database.create_schema, resource: "database:prod", want: denied}
-  - {user: dana@example.com, action: schema.usage, resource: "schema:prod.sales", want: denied}
-  - {user: dana@example.com, action: table.select, resource: "table:prod.sales.orders", want: denied}
-  - {user: dana@example.com, action: role.use, resource: "role:analyst", want: allowed}
-  - {user: dana@example.com, action: role.use, resource: "role:public", want: allowed}
-  - {user: dana@example.com, action: role.use, resource: "role:dev", want: denied}
-  - {user: dana@example.com, action: account.create_database, resource: account, want: denied}
-  - {user: dana@example.com, action: "raw:MONITOR", resource: "warehouse:analytics_wh", want: denied}
-  - {user: dana@example.com, action: "raw:USAGE", resource: "database:prod", want: allowed}
-  - {user: dana@example.com, action: "raw:USAGE", resource: "role:analyst", want: invalid_request}
-  - {user: dana@example.com, action: "raw:OWNERSHIP", resource: "database:prod", want: unknown_action}
-  - {user: dana@example.com, action: table.select, resource: "table:orders", want: invalid_request}
-  - {user: dana@example.com, action: table.select, resource: "table:prod.sales.o;drop", want: invalid_request}
-  - {user: dana@example.com, action: table.select, resource: 'table:prod.sales."a"b"', want: invalid_request}
-  - {user: dana@example.com, action: account.create_database, resource: "account:x", want: invalid_request}
-  - {user: nobody@example.com, action: database.usage, resource: "database:prod", want: user_not_found}
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-off, want: denied}
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-unknown, want: unsupported}
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-amb, want: user_ambiguous}
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-hidden, want: credential_rejected}
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-priv, want: credential_rejected}
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-other, want: upstream_error}
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-rejected, want: credential_rejected}
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-throttled, want: upstream_rate_limited}
-  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-broken, want: upstream_error}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", want: allowed, reason: "allowed: role \"ANALYST\" holds USAGE on database \"PROD\"; dana@example.com has it directly"}
+  - {user: Dana@Example.com, action: database.usage, resource: "database:PROD", want: allowed, reason: "allowed: role \"ANALYST\" holds USAGE on database \"PROD\"; dana@example.com has it directly"}
+  - {user: dana@example.com, action: database.usage, resource: "database:dev", want: denied, reason: "denied: none of the 2 role(s) dana@example.com holds carries USAGE on database \"DEV\" (or the object does not exist)"}
+  - {user: dana@example.com, action: database.create_schema, resource: "database:prod", want: denied, reason: "denied: none of the 2 role(s) dana@example.com holds carries CREATE SCHEMA on database \"PROD\" (or the object does not exist)"}
+  - {user: dana@example.com, action: schema.usage, resource: "schema:prod.sales", want: denied, reason: "denied: none of the 2 role(s) dana@example.com holds carries USAGE on schema \"PROD\".\"SALES\" (or the object does not exist)"}
+  - {user: dana@example.com, action: table.select, resource: "table:prod.sales.orders", want: denied, reason: "denied: none of the 2 role(s) dana@example.com holds carries SELECT on table \"PROD\".\"SALES\".\"ORDERS\" (or the object does not exist)"}
+  - {user: dana@example.com, action: role.use, resource: "role:analyst", want: allowed, reason: "allowed: role \"ANALYST\" is granted to dana@example.com directly"}
+  - {user: dana@example.com, action: role.use, resource: "role:public", want: allowed, reason: "allowed: role \"PUBLIC\" is granted to dana@example.com directly"}
+  - {user: dana@example.com, action: role.use, resource: "role:dev", want: denied, reason: "denied: role \"DEV\" is not granted to dana@example.com, directly or through the 2 role(s) they hold"}
+  - {user: dana@example.com, action: account.create_database, resource: account, want: denied, reason: "denied: none of the 2 role(s) dana@example.com holds carries CREATE DATABASE on the account (or the object does not exist)"}
+  - {user: dana@example.com, action: "raw:MONITOR", resource: "warehouse:analytics_wh", want: denied, reason: "denied: none of the 2 role(s) dana@example.com holds carries MONITOR on warehouse \"ANALYTICS_WH\" (or the object does not exist)"}
+  - {user: dana@example.com, action: "raw:USAGE", resource: "database:prod", want: allowed, reason: "allowed: role \"ANALYST\" holds USAGE on database \"PROD\"; dana@example.com has it directly"}
+  - {user: dana@example.com, action: "raw:USAGE", resource: "role:analyst", want: invalid_request, reason: "invalid_request: raw: privileges do not apply to role:; use role.use"}
+  - {user: dana@example.com, action: "raw:OWNERSHIP", resource: "database:prod", want: unknown_action, reason: "unknown_action: integration snowflake has no action \"raw:OWNERSHIP\""}
+  - {user: dana@example.com, action: table.select, resource: "table:orders", want: invalid_request, reason: "invalid_request: table: expected 3 dotted part(s), found 1"}
+  - {user: dana@example.com, action: table.select, resource: "table:prod.sales.o;drop", want: invalid_request, reason: "invalid_request: table: \"o;drop\" is not an identifier (letters, digits, _ and $, or double-quoted)"}
+  - {user: dana@example.com, action: table.select, resource: 'table:prod.sales."a"b"', want: invalid_request, reason: "invalid_request: table: unterminated quoted identifier"}
+  - {user: dana@example.com, action: account.create_database, resource: "account:x", want: invalid_request, reason: "invalid_request: account takes no id"}
+  - {user: nobody@example.com, action: database.usage, resource: "database:prod", want: user_not_found, reason: "user_not_found: no Snowflake user is named nobody@example.com or has it as login name or email"}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-off, want: denied, reason: "denied: user \"PROD\" (dana@example.com) is disabled"}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-unknown, want: unsupported, reason: "unsupported: SHOW USERS did not report whether \"PROD\" is disabled"}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-amb, want: user_ambiguous, reason: "user_ambiguous: 2 Snowflake users have dana@example.com as name, login name or email"}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-hidden, want: credential_rejected, reason: "credential_rejected: hallpass's role may not list users; it needs MANAGE GRANTS"}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-priv, want: credential_rejected, reason: "credential_rejected: hallpass's role lacks the privilege for the command (Snowflake error 003001); it needs MANAGE GRANTS"}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-other, want: upstream_error, reason: "upstream_error: the statement failed (Snowflake error 001003, SQL state unknown)"}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-rejected, want: credential_rejected, reason: "credential_rejected: Snowflake rejected the key-pair token (HTTP 401): check account, user and the public key registered on the user"}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-throttled, want: upstream_rate_limited, reason: "upstream_rate_limited: Snowflake throttled the request (HTTP 429)"}
+  - {user: dana@example.com, action: database.usage, resource: "database:prod", connection: snow-broken, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}

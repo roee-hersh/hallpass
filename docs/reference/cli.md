@@ -14,8 +14,9 @@ FILE`); `--config=FILE` works too.
 | `hallpass check -server URL [-api-key REF] [-ca-file PEM] [-timeout D] [-fresh] ...` | Ask a running hallpass the same question; `-fresh` skips its caches |
 | `hallpass catalog [INTEGRATION]` | List integrations, config keys and actions |
 
-At startup `serve` probes every connection and logs warnings. A broken connection never stops the
-service from starting.
+At startup `serve` reads the API key and exits with an error when it cannot (a server that could
+not would report healthy and refuse every check), then probes every connection and logs warnings.
+A broken connection never stops the service from starting.
 
 `check` runs the same code path as `POST /check` in-process, so it needs the config file and the
 connection's credential but no running server and no API key. Caches and the decision log are off. It prints the decision and reason

@@ -8,7 +8,7 @@ npm install hallpass-client
 ```
 
 It is on [npm](https://www.npmjs.com/package/hallpass-client). Its version matches the hallpass
-release, so in a project pin the one you run (`npm install hallpass-client@0.4.0`). From 0.4.1 on,
+release, so in a project pin the one you run (`npm install hallpass-client@0.6.0`). From 0.4.1 on,
 the hallpass release workflow publishes it with npm provenance.
 
 It needs a running hallpass server: the `ghcr.io/roee-hersh/hallpass` image, the Helm chart, or

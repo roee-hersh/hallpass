@@ -79,53 +79,53 @@ upstream:
       - {id: 7, username: alice, state: active, public_email: "", bot: false}
   - {method: GET, path: /tpl/api/v4/projects/acme/webapp/members/all/7, json: {access_level: 20, state: active}}
 checks:
-  - {user: alice@example.com, action: mr.create, resource: "project:acme/webapp", want: allowed}
-  - {user: ALICE@example.com, action: project.read, resource: "project:acme/webapp", want: allowed}
-  - {user: alice@example.com, action: project.delete, resource: "project:acme/webapp", want: denied}
-  - {user: bob@example.com, action: member.manage, resource: "project:acme/webapp", want: allowed}
-  - {user: nobody@example.com, action: project.read, resource: "project:acme/webapp", want: user_not_found}
-  - {user: dup@example.com, action: project.read, resource: "project:acme/webapp", want: user_ambiguous}
-  - {user: "alice @example.com", action: project.read, resource: "project:acme/webapp", want: invalid_request}
-  - {user: blocked@example.com, action: project.read, resource: "project:acme/webapp", want: denied}
-  - {user: newbie@example.com, action: project.read, resource: "project:acme/webapp", want: unsupported}
+  - {user: alice@example.com, action: mr.create, resource: "project:acme/webapp", want: allowed, reason: "allowed: alice has Developer access to project acme/webapp, which grants mr.create"}
+  - {user: ALICE@example.com, action: project.read, resource: "project:acme/webapp", want: allowed, reason: "allowed: alice has Developer access to project acme/webapp, which grants project.read"}
+  - {user: alice@example.com, action: project.delete, resource: "project:acme/webapp", want: denied, reason: "denied: alice has Developer access to project acme/webapp; project.delete needs Owner"}
+  - {user: bob@example.com, action: member.manage, resource: "project:acme/webapp", want: allowed, reason: "allowed: bob has Maintainer access to project acme/webapp, which grants member.manage"}
+  - {user: nobody@example.com, action: project.read, resource: "project:acme/webapp", want: user_not_found, reason: "user_not_found: no GitLab account has the email nobody@example.com"}
+  - {user: dup@example.com, action: project.read, resource: "project:acme/webapp", want: user_ambiguous, reason: "user_ambiguous: 2 GitLab accounts have the email dup@example.com"}
+  - {user: "alice @example.com", action: project.read, resource: "project:acme/webapp", want: invalid_request, reason: "invalid_request: user contains whitespace or a control character"}
+  - {user: blocked@example.com, action: project.read, resource: "project:acme/webapp", want: denied, reason: "denied: GitLab account blocked is blocked"}
+  - {user: newbie@example.com, action: project.read, resource: "project:acme/webapp", want: unsupported, reason: "unsupported: GitLab account newbie is in state \"something_new\", which hallpass does not know"}
   # Non-members: visibility decides, administrators pass.
-  - {user: carol@example.com, action: project.read, resource: "project:acme/webapp", want: denied}
-  - {user: carol@example.com, action: project.read, resource: "project:acme/public", want: allowed}
-  - {user: carol@example.com, action: issue.create, resource: "project:acme/public", want: allowed}
-  - {user: carol@example.com, action: issue.create, resource: "project:acme/noissues", want: denied}
-  - {user: carol@example.com, action: project.read, resource: "project:acme/internal", want: allowed}
-  - {user: carol@example.com, action: mr.create, resource: "project:acme/public", want: denied}
-  - {user: root@example.com, action: project.delete, resource: "project:acme/webapp", want: allowed}
-  - {user: alice@example.com, action: project.read, resource: "project:acme/missing", want: resource_not_visible}
+  - {user: carol@example.com, action: project.read, resource: "project:acme/webapp", want: denied, reason: "denied: carol is not a member of project acme/webapp (private); project.read needs Guest, Planner, Reporter, Security Manager, Developer, Maintainer, Owner"}
+  - {user: carol@example.com, action: project.read, resource: "project:acme/public", want: allowed, reason: "allowed: carol is not a member of project acme/public, but the project is public and project.read is open to every signed-in user"}
+  - {user: carol@example.com, action: issue.create, resource: "project:acme/public", want: allowed, reason: "allowed: carol is not a member of project acme/public, but the project is public and issue.create is open to every signed-in user"}
+  - {user: carol@example.com, action: issue.create, resource: "project:acme/noissues", want: denied, reason: "denied: issues are disabled on project acme/noissues, so no one can create one"}
+  - {user: carol@example.com, action: project.read, resource: "project:acme/internal", want: allowed, reason: "allowed: carol is not a member of project acme/internal, but the project is internal and project.read is open to every signed-in user"}
+  - {user: carol@example.com, action: mr.create, resource: "project:acme/public", want: denied, reason: "denied: carol is not a member of project acme/public (public); mr.create needs Developer, Maintainer, Owner"}
+  - {user: root@example.com, action: project.delete, resource: "project:acme/webapp", want: allowed, reason: "allowed: root is an instance administrator, which grants project.delete on every project"}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/missing", want: resource_not_visible, reason: "resource_not_visible: project acme/missing is not visible to the token (HTTP 404)"}
   # Levels and custom roles.
-  - {user: alice@example.com, action: mr.approve, resource: "project:acme/webapp", want: allowed}
-  - {user: dana@example.com, action: project.read, resource: "project:acme/webapp", want: allowed}
-  - {user: dana@example.com, action: repo.push, resource: "project:acme/webapp@feature", want: unsupported}
+  - {user: alice@example.com, action: mr.approve, resource: "project:acme/webapp", want: allowed, reason: "allowed: alice has Developer access to project acme/webapp, which grants mr.approve"}
+  - {user: dana@example.com, action: project.read, resource: "project:acme/webapp", want: allowed, reason: "allowed: dana has custom role \"guest-plus\" (base Guest) access to project acme/webapp, which grants project.read"}
+  - {user: dana@example.com, action: repo.push, resource: "project:acme/webapp@feature", want: unsupported, reason: "unsupported: dana has custom role \"guest-plus\" (base Guest) on project acme/webapp; the base level does not grant repo.push but a custom role can add abilities hallpass cannot see"}
   # Protected branches.
-  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp", want: unsupported}
-  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp@main", want: denied}
-  - {user: alice@example.com, action: mr.merge, resource: "project:acme/webapp@main", want: allowed}
-  - {user: bob@example.com, action: repo.push, resource: "project:acme/webapp@main", want: allowed}
-  - {user: bob@example.com, action: repo.push, resource: "project:acme/webapp@locked", want: denied}
-  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp@feature/x", want: allowed}
+  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp", want: unsupported, reason: "unsupported: project acme/webapp has 2 protected-branch rules, which decide repo.push per branch; add @branch to the resource"}
+  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp@main", want: denied, reason: "denied: alice has Developer access to project acme/webapp, and no entry of protected branch rule main of project acme/webapp allows that user to push to branch main"}
+  - {user: alice@example.com, action: mr.merge, resource: "project:acme/webapp@main", want: allowed, reason: "allowed: alice may merge into branch main: protected branch rule main of project acme/webapp allows Developer and up, and the user has Developer access"}
+  - {user: bob@example.com, action: repo.push, resource: "project:acme/webapp@main", want: allowed, reason: "allowed: bob may push to branch main: protected branch rule main of project acme/webapp allows Maintainer and up, and the user has Maintainer access"}
+  - {user: bob@example.com, action: repo.push, resource: "project:acme/webapp@locked", want: denied, reason: "denied: no one may push to branch locked: protected branch rule locked of project acme/webapp allows no one"}
+  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp@feature/x", want: allowed, reason: "allowed: alice has Developer access to project acme/webapp, which grants repo.push"}
   # Groups.
-  - {user: alice@example.com, action: group.admin, resource: "group:acme", want: allowed}
-  - {user: carol@example.com, action: group.member, resource: "group:acme", want: denied}
-  - {user: alice@example.com, action: group.member, resource: "group:nope", want: resource_not_visible}
+  - {user: alice@example.com, action: group.admin, resource: "group:acme", want: allowed, reason: "allowed: alice has Owner access to group acme, which grants group.admin"}
+  - {user: carol@example.com, action: group.member, resource: "group:acme", want: denied, reason: "denied: carol is not a member of group acme (); group.member needs Guest, Planner, Reporter, Security Manager, Developer, Maintainer, Owner"}
+  - {user: alice@example.com, action: group.member, resource: "group:nope", want: resource_not_visible, reason: "resource_not_visible: group nope is not visible to the token (HTTP 404)"}
   # Bad requests.
-  - {user: alice@example.com, action: project.read, resource: "group:acme", want: invalid_request}
-  - {user: alice@example.com, action: project.read, resource: "project:../etc", want: invalid_request}
-  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp@a..b", want: invalid_request}
-  - {user: alice@example.com, action: project.read, resource: "project:acme/webapp?x=1", want: invalid_request}
-  - {user: alice@example.com, action: repo.delete, resource: "project:acme/webapp", want: unknown_action}
+  - {user: alice@example.com, action: project.read, resource: "group:acme", want: invalid_request, reason: "invalid_request: action project.read takes a project:<path-or-id> resource, not group:"}
+  - {user: alice@example.com, action: project.read, resource: "project:../etc", want: invalid_request, reason: "invalid_request: project \"../etc\": path segments . and .. are not allowed"}
+  - {user: alice@example.com, action: repo.push, resource: "project:acme/webapp@a..b", want: invalid_request, reason: "invalid_request: branch \"a..b\": must not contain .. or @{"}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/webapp?x=1", want: invalid_request, reason: "invalid_request: gitlab resources take no query parameters"}
+  - {user: alice@example.com, action: repo.delete, resource: "project:acme/webapp", want: unknown_action, reason: "unknown_action: integration gitlab has no action \"repo.delete\""}
   # Upstream failures.
-  - {user: alice@example.com, action: project.read, resource: "project:acme/locked", want: credential_rejected}
-  - {user: alice@example.com, action: project.read, resource: "project:acme/broken", want: upstream_error}
-  - {user: alice@example.com, action: project.read, resource: "project:acme/busy", want: upstream_rate_limited}
-  - {user: alice@example.com, action: project.read, resource: "project:acme/garbled", want: upstream_error}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/locked", want: credential_rejected, reason: "credential_rejected: the token may not read the members of project acme/locked (HTTP 403)"}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/broken", want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/busy", want: upstream_rate_limited, reason: "upstream_rate_limited: rate limited by the upstream system"}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/garbled", want: upstream_error, reason: "upstream_error: upstream call failed"}
   # A non-admin token cannot see emails.
-  - {user: alice@example.com, action: project.read, resource: "project:acme/webapp", connection: gitlab-nonadmin, want: unsupported}
+  - {user: alice@example.com, action: project.read, resource: "project:acme/webapp", connection: gitlab-nonadmin, want: unsupported, reason: "unsupported: the token's user is not an administrator, so private emails are not searchable; use an administrator's token or another identity_mode"}
   # identity_mode template.
-  - {user: alice@example.com, action: issue.edit, resource: "project:acme/webapp", connection: gitlab-template, want: allowed}
-  - {user: alice@example.com, action: mr.create, resource: "project:acme/webapp", connection: gitlab-template, want: denied}
-  - {user: alice@attacker.example, action: project.read, resource: "project:acme/webapp", connection: gitlab-template, want: unsupported}
+  - {user: alice@example.com, action: issue.edit, resource: "project:acme/webapp", connection: gitlab-template, want: allowed, reason: "allowed: alice has Reporter access to project acme/webapp, which grants issue.edit"}
+  - {user: alice@example.com, action: mr.create, resource: "project:acme/webapp", connection: gitlab-template, want: denied, reason: "denied: alice has Reporter access to project acme/webapp; mr.create needs Developer, Maintainer, Owner"}
+  - {user: alice@attacker.example, action: project.read, resource: "project:acme/webapp", connection: gitlab-template, want: unsupported, reason: "unsupported: domain not allowed for template identities: alice@attacker.example is not in email_domains"}

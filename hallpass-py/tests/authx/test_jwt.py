@@ -1,4 +1,4 @@
-"""Port of internal/authx/jwt_test.go. TestRFC7515A2 is in test_rfc7515.py
+"""Port of v0.5.0:internal/authx/jwt_test.go. TestRFC7515A2 is in test_rfc7515.py
 with its vector."""
 
 from __future__ import annotations

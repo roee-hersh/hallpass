@@ -90,28 +90,28 @@ upstream:
     status: 500
     json: {error_code: INTERNAL_ERROR, message: boom}
 checks:
-  - {user: dana@example.com, action: table.read, resource: "table:main.sales.orders", want: allowed}
-  - {user: dana@example.com, action: table.write, resource: "table:main.sales.orders", want: denied}
-  - {user: dana@example.com, action: raw:SELECT, resource: "table:main.sales.orders", want: allowed}
-  - {user: sam@example.com, action: table.read, resource: "table:main.sales.orders", want: denied}
-  - {user: dana@example.com, action: uc.manage, resource: "catalog:main", want: allowed}
-  - {user: dana@example.com, action: catalog.use, resource: "catalog:main", want: allowed}
-  - {user: sam@example.com, action: catalog.use, resource: "catalog:main", want: resource_not_visible}
-  - {user: dana@example.com, action: table.create, resource: "schema:main.hidden", want: resource_not_visible}
-  - {user: dana@example.com, action: table.read, resource: "table:main.sales.missing", want: resource_not_visible}
-  - {user: dana@example.com, action: cluster.attach, resource: "cluster:0123-456789-abcde1f2", want: allowed}
-  - {user: dana@example.com, action: cluster.restart, resource: "cluster:0123-456789-abcde1f2", want: allowed}
-  - {user: dana@example.com, action: cluster.manage, resource: "cluster:0123-456789-abcde1f2", want: denied}
-  - {user: sam@example.com, action: cluster.manage, resource: "cluster:0123-456789-abcde1f2", want: allowed}
-  - {user: dana@example.com, action: job.manage, resource: "job:43", want: allowed}
-  - {user: sam@example.com, action: raw:IS_OWNER, resource: "job:43", want: denied}
-  - {user: dana@example.com, action: job.view, resource: "job:44", want: resource_not_visible}
-  - {user: bob@example.com, action: table.read, resource: "table:main.sales.orders", want: user_not_found}
-  - {user: off@example.com, action: table.read, resource: "table:main.sales.orders", want: denied}
-  - {user: nostatus@example.com, action: table.read, resource: "table:main.sales.orders", want: unsupported}
-  - {user: dana@example.com, action: table.read, resource: "table:main.sales", want: invalid_request}
-  - {user: dana@example.com, action: raw:CAN_FOO, resource: "cluster:0123-456789-abcde1f2", want: invalid_request}
-  - {user: dana@example.com, action: table.read, resource: "cluster:abc", want: invalid_request}
-  - {user: dana@example.com, action: raw:select, resource: "table:main.sales.orders", want: unknown_action}
-  - {user: dana@example.com, action: table.read, resource: "table:main.sales.orders", connection: dbx-denied, want: credential_rejected}
-  - {user: dana@example.com, action: table.read, resource: "table:main.sales.orders", connection: dbx-broken, want: upstream_error}
+  - {user: dana@example.com, action: table.read, resource: "table:main.sales.orders", want: allowed, reason: "allowed: dana@example.com holds SELECT, USE_SCHEMA, USE_CATALOG on table:main.sales.orders (via group data-readers on schema main.sales; via group data-readers on catalog main)"}
+  - {user: dana@example.com, action: table.write, resource: "table:main.sales.orders", want: denied, reason: "denied: dana@example.com lacks MODIFY on table:main.sales.orders"}
+  - {user: dana@example.com, action: raw:SELECT, resource: "table:main.sales.orders", want: allowed, reason: "allowed: dana@example.com holds SELECT on table:main.sales.orders (via group data-readers on schema main.sales; via group data-readers on catalog main)"}
+  - {user: sam@example.com, action: table.read, resource: "table:main.sales.orders", want: denied, reason: "denied: sam@example.com lacks SELECT, USE_SCHEMA, USE_CATALOG on table:main.sales.orders"}
+  - {user: dana@example.com, action: uc.manage, resource: "catalog:main", want: allowed, reason: "allowed: dana@example.com owns catalog main (owner data-readers), which carries MANAGE"}
+  - {user: dana@example.com, action: catalog.use, resource: "catalog:main", want: allowed, reason: "allowed: dana@example.com owns catalog main (owner data-readers), which carries USE_CATALOG"}
+  - {user: sam@example.com, action: catalog.use, resource: "catalog:main", want: resource_not_visible, reason: "resource_not_visible: the grants on catalog main list no principal but hallpass itself: either nobody else holds any, or hallpass may only see its own; give hallpass MANAGE on the catalog to be sure"}
+  - {user: dana@example.com, action: table.create, resource: "schema:main.hidden", want: resource_not_visible, reason: "resource_not_visible: the grants on schema main.hidden list no principal but hallpass itself: either nobody else holds any, or hallpass may only see its own; give hallpass MANAGE on the catalog to be sure"}
+  - {user: dana@example.com, action: table.read, resource: "table:main.sales.missing", want: resource_not_visible, reason: "resource_not_visible: table main.sales.missing does not exist or hallpass cannot see it"}
+  - {user: dana@example.com, action: cluster.attach, resource: "cluster:0123-456789-abcde1f2", want: allowed, reason: "allowed: dana@example.com holds CAN_ATTACH_TO on cluster:0123-456789-abcde1f2 (via group users)"}
+  - {user: dana@example.com, action: cluster.restart, resource: "cluster:0123-456789-abcde1f2", want: allowed, reason: "allowed: dana@example.com holds CAN_RESTART on cluster:0123-456789-abcde1f2 (granted directly)"}
+  - {user: dana@example.com, action: cluster.manage, resource: "cluster:0123-456789-abcde1f2", want: denied, reason: "denied: dana@example.com holds only CAN_ATTACH_TO, CAN_RESTART on cluster:0123-456789-abcde1f2, not CAN_MANAGE"}
+  - {user: sam@example.com, action: cluster.manage, resource: "cluster:0123-456789-abcde1f2", want: allowed, reason: "allowed: sam@example.com is a workspace admin, which carries CAN_MANAGE on every object, so CAN_MANAGE on cluster:0123-456789-abcde1f2"}
+  - {user: dana@example.com, action: job.manage, resource: "job:43", want: allowed, reason: "allowed: dana@example.com holds IS_OWNER, which implies CAN_MANAGE on job:43 (granted directly)"}
+  - {user: sam@example.com, action: raw:IS_OWNER, resource: "job:43", want: denied, reason: "denied: sam@example.com has no permission on job:43"}
+  - {user: dana@example.com, action: job.view, resource: "job:44", want: resource_not_visible, reason: "resource_not_visible: jobs 44 does not exist or hallpass cannot see it"}
+  - {user: bob@example.com, action: table.read, resource: "table:main.sales.orders", want: user_not_found, reason: "user_not_found: no workspace user with email bob@example.com"}
+  - {user: off@example.com, action: table.read, resource: "table:main.sales.orders", want: denied, reason: "denied: off@example.com is deactivated in the workspace"}
+  - {user: nostatus@example.com, action: table.read, resource: "table:main.sales.orders", want: unsupported, reason: "unsupported: the workspace did not report whether nostatus@example.com is active"}
+  - {user: dana@example.com, action: table.read, resource: "table:main.sales", want: invalid_request, reason: "invalid_request: table: id must have 3 dot-separated parts, as in table:main.sales.orders"}
+  - {user: dana@example.com, action: raw:CAN_FOO, resource: "cluster:0123-456789-abcde1f2", want: invalid_request, reason: "invalid_request: CAN_FOO is not a permission level of cluster; the levels are CAN_ATTACH_TO, CAN_RESTART, CAN_MANAGE"}
+  - {user: dana@example.com, action: table.read, resource: "cluster:abc", want: invalid_request, reason: "invalid_request: action table.read takes a table resource, not cluster:"}
+  - {user: dana@example.com, action: raw:select, resource: "table:main.sales.orders", want: unknown_action, reason: "unknown_action: integration databricks has no action \"raw:select\""}
+  - {user: dana@example.com, action: table.read, resource: "table:main.sales.orders", connection: dbx-denied, want: credential_rejected, reason: "credential_rejected: the workspace refused to search users (PERMISSION_DENIED): hallpass's principal needs CAN_MANAGE on the object, or MANAGE, ownership or metastore admin for Unity Catalog grants"}
+  - {user: dana@example.com, action: table.read, resource: "table:main.sales.orders", connection: dbx-broken, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}

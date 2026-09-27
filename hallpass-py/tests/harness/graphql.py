@@ -4,7 +4,7 @@ arguments the schema declares, required arguments must be given,
 selection sets must sit on composite types only, and the variables must
 match their declared input types.
 
-A port of internal/integration/itest/graphql.go. Load a schema through
+A port of v0.5.0:internal/integration/itest/graphql.go. Load a schema through
 tests.harness.spec.load_spec (it detects SDL) or new_graphql directly.
 """
 

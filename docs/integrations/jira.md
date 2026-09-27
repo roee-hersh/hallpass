@@ -58,7 +58,9 @@ Identity: `GET /rest/api/3/user/search?query=<email>` is read in pages of 50 (`s
 five pages. The results are filtered to `accountType: atlassian` and `active: true`, and a candidate
 counts only when its `emailAddress` equals the request email case-insensitively; a display name is
 never a match. Exactly one match is the identity; several are `user_ambiguous`; none is
-`user_not_found`, except that when candidates remain whose email the profile hides the answer is
+`user_not_found` once `GET /rest/api/3/myself` confirms the credential authenticates (Atlassian
+answers the search for a credential it does not accept as an anonymous caller, with no users, so
+that case is `credential_rejected`; a confirmation is trusted for five minutes), except that when candidates remain whose email the profile hides the answer is
 unknown (`unsupported`, "email hidden by profile visibility": make the email visible to the site or
 use a scoped token that can read it), and when five full pages hold no match it is unknown
 (`unsupported`, "too many candidates"), since the account may sit on a page hallpass did not read.

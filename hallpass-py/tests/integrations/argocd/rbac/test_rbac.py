@@ -1,4 +1,4 @@
-"""Port of internal/integrations/argocd/rbac/rbac_test.go.
+"""Port of v0.5.0:internal/integrations/argocd/rbac/rbac_test.go.
 
 These tests are ported from argo-cd/util/rbac/rbac_test.go and
 argo-cd/server/rbacpolicy/rbacpolicy_test.go. Names are kept so a reader

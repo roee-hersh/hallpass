@@ -1,4 +1,4 @@
-"""Port of internal/authx/rfc7515_vector_test.go and the TestRFC7515A2
+"""Port of v0.5.0:internal/authx/rfc7515_vector_test.go and the TestRFC7515A2
 test in jwt_test.go that uses it.
 
 RFC 7515 Appendix A.2: "Example JWS Using RSASSA-PKCS1-v1_5 SHA-256".

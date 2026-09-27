@@ -90,36 +90,36 @@ upstream:
         - {roles: [read], link: {scope: existingAccess}}
   - {method: GET, path: "/v1.0/drives/b!drive1", json: {id: "b!drive1"}}
 checks:
-  - {user: dana@example.com, action: user.active, resource: "user:dana@example.com", want: allowed}
-  - {user: dana@example.com, action: user.active, resource: "user:bob@example.com", want: unsupported}
-  - {user: off@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: denied}
-  - {user: nostate@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: unsupported}
-  - {user: nobody@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: user_not_found}
-  - {user: shared@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", connection: m365-amb, want: user_ambiguous}
-  - {user: dana@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: allowed}
-  - {user: bob@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: denied}
-  - {user: guest@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000003", want: resource_not_visible}
-  - {user: bob@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000003", want: unsupported}
-  - {user: dana@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000099", want: resource_not_visible}
-  - {user: dana@example.com, action: group.member, resource: "group:not-a-guid", want: invalid_request}
-  - {user: dana@example.com, action: role.member, resource: "role:CCCCCCCC-0000-0000-0000-000000000001", want: allowed}
-  - {user: bob@example.com, action: role.member, resource: "role:cccccccc-0000-0000-0000-000000000001", want: credential_rejected}
-  - {user: dana@example.com, action: team.owner, resource: "team:dddddddd-0000-0000-0000-000000000001", want: allowed}
-  - {user: bob@example.com, action: team.owner, resource: "team:dddddddd-0000-0000-0000-000000000001", want: denied}
-  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000001", want: allowed}
-  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000002", want: upstream_error}
-  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000003", want: upstream_rate_limited}
-  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000009", want: resource_not_visible}
-  - {user: dana@example.com, action: channel.read, resource: "team:dddddddd-0000-0000-0000-000000000001/channel/19:priv@thread.tacv2", want: allowed}
-  - {user: bob@example.com, action: channel.read, resource: "team:dddddddd-0000-0000-0000-000000000001/channel/19:priv@thread.tacv2", want: denied}
-  - {user: bob@example.com, action: channel.read, resource: "team:dddddddd-0000-0000-0000-000000000001/channel/19:odd@thread.tacv2", want: unsupported}
-  - {user: dana@example.com, action: file.read, resource: "drive:b!drive1/item/item1", want: allowed}
-  - {user: bob@example.com, action: file.edit, resource: "drive:b!drive1/item/item1", want: allowed}
-  - {user: guest@example.com, action: file.read, resource: "drive:b!drive1/item/item1", want: denied}
-  - {user: dana@example.com, action: file.share, resource: "drive:b!drive1/item/item1", want: unsupported}
-  - {user: dana@example.com, action: file.read, resource: "drive:b!drive1/item/item2", want: unsupported}
-  - {user: dana@example.com, action: file.read, resource: "drive:b!drive1/item/missing", want: resource_not_visible}
-  - {user: dana@example.com, action: mail.send_as_self, resource: "mailbox:Dana@Example.com", want: allowed}
-  - {user: dana@example.com, action: mail.send_as, resource: "mailbox:bob@example.com", want: unsupported}
-  - {user: dana@example.com, action: calendar.write, resource: "mailbox:bob@example.com", want: unsupported}
-  - {user: dana@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", connection: m365-badcred, want: credential_rejected}
+  - {user: dana@example.com, action: user.active, resource: "user:dana@example.com", want: allowed, reason: "allowed: dana@example.com: account enabled"}
+  - {user: dana@example.com, action: user.active, resource: "user:bob@example.com", want: unsupported, reason: "unsupported: user.active is evaluated for the caller's own account only; bob@example.com is another account"}
+  - {user: off@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: denied, reason: "denied: off@example.com: account disabled"}
+  - {user: nostate@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: unsupported, reason: "unsupported: nostate@example.com: Graph did not report whether the account is enabled"}
+  - {user: nobody@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: user_not_found, reason: "user_not_found: no Entra user has nobody@example.com as UPN, mail or proxy address"}
+  - {user: shared@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", connection: m365-amb, want: user_ambiguous, reason: "user_ambiguous: 2 Entra users match shared@example.com"}
+  - {user: dana@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: allowed, reason: "allowed: dana@example.com is a transitive member of group bbbbbbbb-0000-0000-0000-000000000001"}
+  - {user: bob@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", want: denied, reason: "denied: bob@example.com is not a member of group bbbbbbbb-0000-0000-0000-000000000001"}
+  - {user: guest@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000003", want: resource_not_visible, reason: "resource_not_visible: user aaaaaaaa-0000-0000-0000-000000000003 was not found or is not visible to hallpass"}
+  - {user: bob@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000003", want: unsupported, reason: "unsupported: group bbbbbbbb-0000-0000-0000-000000000003 has hidden membership; checkMemberGroups omits it without Member.Read.Hidden, so bob@example.com's membership is unknown"}
+  - {user: dana@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000099", want: resource_not_visible, reason: "resource_not_visible: group bbbbbbbb-0000-0000-0000-000000000099 was not found or is not visible to hallpass"}
+  - {user: dana@example.com, action: group.member, resource: "group:not-a-guid", want: invalid_request, reason: "invalid_request: group: id must be a GUID"}
+  - {user: dana@example.com, action: role.member, resource: "role:CCCCCCCC-0000-0000-0000-000000000001", want: allowed, reason: "allowed: dana@example.com holds directory role template CCCCCCCC-0000-0000-0000-000000000001"}
+  - {user: bob@example.com, action: role.member, resource: "role:cccccccc-0000-0000-0000-000000000001", want: credential_rejected, reason: "credential_rejected: reading directory roles needs RoleManagement.Read.Directory"}
+  - {user: dana@example.com, action: team.owner, resource: "team:dddddddd-0000-0000-0000-000000000001", want: allowed, reason: "allowed: dana@example.com owns team dddddddd-0000-0000-0000-000000000001"}
+  - {user: bob@example.com, action: team.owner, resource: "team:dddddddd-0000-0000-0000-000000000001", want: denied, reason: "denied: bob@example.com is a member but not an owner of team dddddddd-0000-0000-0000-000000000001"}
+  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000001", want: allowed, reason: "allowed: bob@example.com is a member of team dddddddd-0000-0000-0000-000000000001"}
+  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000002", want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000003", want: upstream_rate_limited, reason: "upstream_rate_limited: rate limited by the upstream system"}
+  - {user: bob@example.com, action: team.member, resource: "team:dddddddd-0000-0000-0000-000000000009", want: resource_not_visible, reason: "resource_not_visible: team dddddddd-0000-0000-0000-000000000009 was not found or is not visible to hallpass"}
+  - {user: dana@example.com, action: channel.read, resource: "team:dddddddd-0000-0000-0000-000000000001/channel/19:priv@thread.tacv2", want: allowed, reason: "allowed: dana@example.com is a member of channel 19:priv@thread.tacv2 of team dddddddd-0000-0000-0000-000000000001 (private channel)"}
+  - {user: bob@example.com, action: channel.read, resource: "team:dddddddd-0000-0000-0000-000000000001/channel/19:priv@thread.tacv2", want: denied, reason: "denied: bob@example.com is not a member of channel 19:priv@thread.tacv2 of team dddddddd-0000-0000-0000-000000000001 (private channel)"}
+  - {user: bob@example.com, action: channel.read, resource: "team:dddddddd-0000-0000-0000-000000000001/channel/19:odd@thread.tacv2", want: unsupported, reason: "unsupported: channel 19:odd@thread.tacv2 has membership type \"unknownFutureValue\", which hallpass does not model"}
+  - {user: dana@example.com, action: file.read, resource: "drive:b!drive1/item/item1", want: allowed, reason: "allowed: dana@example.com may read item item1 in drive b!drive1: granted directly"}
+  - {user: bob@example.com, action: file.edit, resource: "drive:b!drive1/item/item1", want: allowed, reason: "allowed: bob@example.com may edit item item1 in drive b!drive1 via an organization-wide sharing link"}
+  - {user: guest@example.com, action: file.read, resource: "drive:b!drive1/item/item1", want: denied, reason: "denied: no permission on item item1 in drive b!drive1 is granted to guest_gmail.com#EXT#@example.onmicrosoft.com (guest account) or a group they belong to; its organization-wide sharing link is not usable by guest accounts"}
+  - {user: dana@example.com, action: file.share, resource: "drive:b!drive1/item/item1", want: unsupported, reason: "unsupported: dana@example.com has write access to item item1 in drive b!drive1 but is not an owner; sharing rights depend on site settings"}
+  - {user: dana@example.com, action: file.read, resource: "drive:b!drive1/item/item2", want: unsupported, reason: "unsupported: item item2 in drive b!drive1 has a sharing link with scope \"existingAccess\", which hallpass does not model; dana@example.com's access is unknown"}
+  - {user: dana@example.com, action: file.read, resource: "drive:b!drive1/item/missing", want: resource_not_visible, reason: "resource_not_visible: item missing in drive b!drive1 was not found or is not visible to hallpass"}
+  - {user: dana@example.com, action: mail.send_as_self, resource: "mailbox:Dana@Example.com", want: allowed, reason: "allowed: dana@example.com may send from their own mailbox"}
+  - {user: dana@example.com, action: mail.send_as, resource: "mailbox:bob@example.com", want: unsupported, reason: "unsupported: Send As, Send on Behalf and Full Access are Exchange delegations with no Graph API; hallpass cannot evaluate mail.send_as on mailbox bob@example.com"}
+  - {user: dana@example.com, action: calendar.write, resource: "mailbox:bob@example.com", want: unsupported, reason: "unsupported: calendar delegation and folder permissions have no application-permission Graph API; hallpass cannot evaluate calendar.write on mailbox bob@example.com"}
+  - {user: dana@example.com, action: group.member, resource: "group:bbbbbbbb-0000-0000-0000-000000000001", connection: m365-badcred, want: credential_rejected, reason: "credential_rejected: the token endpoint rejected hallpass's credential (invalid_client)"}

@@ -64,6 +64,10 @@ env:
   JIRA_TOKEN: parity-jira-token
   CONF_TOKEN: parity-confluence-token
 upstream:
+  # the credential check before an empty user search counts as "no such user"
+  - method: GET
+    path: /rest/api/3/myself
+    json: {accountId: acc-hallpass, displayName: hallpass}
   # the identity connection's user search
   - method: GET
     path: /rest/api/3/user/search
@@ -159,34 +163,34 @@ upstream:
     status: 502
     body: bad gateway
 checks:
-  - {user: dana@example.com, action: page.read, resource: "page:100", connection: conf, want: allowed}
-  - {user: noname@example.com, action: blogpost.update, resource: "blogpost:100", connection: conf, want: allowed}
-  - {user: dana@example.com, action: page.update, resource: "page:200", connection: conf, want: denied}
-  - {user: dana@example.com, action: blogpost.read, resource: "blogpost:300", connection: conf, want: unsupported}
-  - {user: dana@example.com, action: page.read, resource: "page:999", connection: conf, want: resource_not_visible}
-  - {user: dana@example.com, action: page.delete, resource: "page:403", connection: conf, want: credential_rejected}
-  - {user: dana@example.com, action: page.read, resource: "page:500", connection: conf, want: upstream_error}
-  - {user: dana@example.com, action: page.read, resource: "page:600", connection: conf, want: upstream_error}
-  - {user: dana@example.com, action: space.export, resource: "space:DEV", connection: conf, want: allowed}
-  - {user: dana@example.com, action: page.create, resource: "space:DEV", connection: conf, want: allowed}
-  - {user: dana@example.com, action: blogpost.create, resource: "space:DEV", connection: conf, want: denied}
-  - {user: dana@example.com, action: comment.create, resource: "space:DEV", connection: conf, want: denied}
-  - {user: dana@example.com, action: space.admin, resource: "space:DEV", connection: conf, want: denied}
-  - {user: dana@example.com, action: space.read, resource: "space:DEV", connection: conf, want: unsupported}
-  - {user: dana@example.com, action: space.export, resource: "space:dev", connection: conf, want: unsupported}
-  - {user: twin@example.com, action: page.read, resource: "page:100", connection: conf, want: user_ambiguous}
-  - {user: nobody@example.com, action: page.read, resource: "page:100", connection: conf, want: user_not_found}
-  - {user: dana@example.com, action: page.read, resource: "space:DEV", connection: conf, want: invalid_request}
-  - {user: dana@example.com, action: page.create, resource: "page:100", connection: conf, want: invalid_request}
-  - {user: dana@example.com, action: page.read, resource: "page:0", connection: conf, want: invalid_request}
-  - {user: dana@example.com, action: space.read, resource: "space:bad key", connection: conf, want: invalid_request}
-  - {user: dana@example.com, action: page.read, resource: "global", connection: conf, want: invalid_request}
-  - {user: dana@example.com, action: page.move, resource: "page:100", connection: conf, want: unknown_action}
-  - {user: dana@example.com, action: page.read, resource: "page:100", connection: conf-noid, want: unsupported}
-  - {user: dana@example.com, action: space.export, resource: "space:OPS", connection: conf-admin, want: allowed}
-  - {user: noname@example.com, action: page.restrict, resource: "space:OPS", connection: conf-admin, want: allowed}
-  - {user: dana@example.com, action: space.export, resource: "space:DEV", connection: conf-forbidden, want: credential_rejected}
-  - {user: dana@example.com, action: space.export, resource: "space:DEV", connection: conf-dup, want: unsupported}
-  - {user: dana@example.com, action: page.read, resource: "page:100", connection: conf-rejected, want: credential_rejected}
-  - {user: dana@example.com, action: space.read, resource: "space:DEV", connection: conf-rejected, want: resource_not_visible}
-  - {user: dana@example.com, action: space.read, resource: "space:DEV", connection: conf-broken, want: upstream_error}
+  - {user: dana@example.com, action: page.read, resource: "page:100", connection: conf, want: allowed, reason: "allowed: Dana may read page 100"}
+  - {user: noname@example.com, action: blogpost.update, resource: "blogpost:100", connection: conf, want: allowed, reason: "allowed: acc-noname may update blogpost 100"}
+  - {user: dana@example.com, action: page.update, resource: "page:200", connection: conf, want: denied, reason: "denied: Dana may not update page 200"}
+  - {user: dana@example.com, action: blogpost.read, resource: "blogpost:300", connection: conf, want: unsupported, reason: "unsupported: Confluence reported 2 error(s) instead of a permission answer for blogpost 300; the check could not be evaluated"}
+  - {user: dana@example.com, action: page.read, resource: "page:999", connection: conf, want: resource_not_visible, reason: "resource_not_visible: page 999 does not exist or is not visible to hallpass's account"}
+  - {user: dana@example.com, action: page.delete, resource: "page:403", connection: conf, want: credential_rejected, reason: "credential_rejected: hallpass's account may not check other users' permissions; it needs Confluence Administrator (HTTP 403)"}
+  - {user: dana@example.com, action: page.read, resource: "page:500", connection: conf, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: dana@example.com, action: page.read, resource: "page:600", connection: conf, want: upstream_error, reason: "upstream_error: upstream call failed"}
+  - {user: dana@example.com, action: space.export, resource: "space:DEV", connection: conf, want: allowed, reason: "allowed: Dana holds space.export (export/space) in space DEV directly"}
+  - {user: dana@example.com, action: page.create, resource: "space:DEV", connection: conf, want: allowed, reason: "allowed: Dana holds page.create (create/page) in space DEV through group engineering"}
+  - {user: dana@example.com, action: blogpost.create, resource: "space:DEV", connection: conf, want: denied, reason: "denied: no space permission grants blogpost.create (create/blogpost) in space DEV or administer/space to Dana or their groups"}
+  - {user: dana@example.com, action: comment.create, resource: "space:DEV", connection: conf, want: denied, reason: "denied: no space permission grants comment.create (create/comment) in space DEV or administer/space to Dana or their groups"}
+  - {user: dana@example.com, action: space.admin, resource: "space:DEV", connection: conf, want: denied, reason: "denied: no space permission grants space.admin (administer/space) in space DEV or administer/space to Dana or their groups"}
+  - {user: dana@example.com, action: space.read, resource: "space:DEV", connection: conf, want: unsupported, reason: "unsupported: anonymous/role-based space permissions not evaluated: space.read (read/space) in space DEV or administer/space is granted to a principal type hallpass does not model"}
+  - {user: dana@example.com, action: space.export, resource: "space:dev", connection: conf, want: unsupported, reason: "unsupported: space key dev has no exact match; Confluence returned DEV, use the exact key"}
+  - {user: twin@example.com, action: page.read, resource: "page:100", connection: conf, want: user_ambiguous, reason: "user_ambiguous: 2 active Atlassian accounts have the email twin@example.com"}
+  - {user: nobody@example.com, action: page.read, resource: "page:100", connection: conf, want: user_not_found, reason: "user_not_found: no active Atlassian account has the email nobody@example.com"}
+  - {user: dana@example.com, action: page.read, resource: "space:DEV", connection: conf, want: invalid_request, reason: "invalid_request: page.read applies to page:<id>, not space:DEV"}
+  - {user: dana@example.com, action: page.create, resource: "page:100", connection: conf, want: invalid_request, reason: "invalid_request: page.create applies to space:<KEY>, not page:100"}
+  - {user: dana@example.com, action: page.read, resource: "page:0", connection: conf, want: invalid_request, reason: "invalid_request: page id \"0\" must be a numeric content id"}
+  - {user: dana@example.com, action: space.read, resource: "space:bad key", connection: conf, want: invalid_request, reason: "invalid_request: space key \"bad key\" must match ^[A-Za-z0-9~_-]{1,255}$"}
+  - {user: dana@example.com, action: page.read, resource: "global", connection: conf, want: invalid_request, reason: "invalid_request: resource type \"global\"; use page:<id>, blogpost:<id> or space:<KEY>"}
+  - {user: dana@example.com, action: page.move, resource: "page:100", connection: conf, want: unknown_action, reason: "unknown_action: integration confluence has no action \"page.move\""}
+  - {user: dana@example.com, action: page.read, resource: "page:100", connection: conf-noid, want: unsupported, reason: "unsupported: Confluence cannot look up users by email; set identity_connection to a jira connection on the same site"}
+  - {user: dana@example.com, action: space.export, resource: "space:OPS", connection: conf-admin, want: allowed, reason: "allowed: Dana holds space.export (export/space) in space OPS as a space administrator through group grp-admins"}
+  - {user: noname@example.com, action: page.restrict, resource: "space:OPS", connection: conf-admin, want: allowed, reason: "allowed: acc-noname holds page.restrict (restrict_content/space) in space OPS as a space administrator through group grp-admins"}
+  - {user: dana@example.com, action: space.export, resource: "space:DEV", connection: conf-forbidden, want: credential_rejected, reason: "credential_rejected: hallpass's account may not read space permissions or group memberships (HTTP 403)"}
+  - {user: dana@example.com, action: space.export, resource: "space:DEV", connection: conf-dup, want: unsupported, reason: "unsupported: space key DEV matches 2 spaces; hallpass cannot tell which one is meant"}
+  - {user: dana@example.com, action: page.read, resource: "page:100", connection: conf-rejected, want: credential_rejected, reason: "credential_rejected: the connection's credential was rejected (HTTP 401)"}
+  - {user: dana@example.com, action: space.read, resource: "space:DEV", connection: conf-rejected, want: resource_not_visible, reason: "resource_not_visible: space DEV does not exist or is not visible to hallpass's account"}
+  - {user: dana@example.com, action: space.read, resource: "space:DEV", connection: conf-broken, want: upstream_error, reason: "upstream_error: upstream returned HTTP 502"}

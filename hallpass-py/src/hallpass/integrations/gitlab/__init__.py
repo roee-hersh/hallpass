@@ -8,7 +8,7 @@ it also reads the project's protected-branch rules: on a named branch it
 evaluates them, without one it answers unknown when any exist.
 The token is read-only (read_api) and nothing is written.
 
-A port of internal/integrations/gitlab.
+A port of v0.5.0:internal/integrations/gitlab.
 """
 
 from __future__ import annotations

@@ -13,6 +13,9 @@ that the confluence integration shares. Jira Data Center is out of scope.
 from __future__ import annotations
 
 import re
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -72,7 +75,7 @@ class Jira(Integration):
         return [Action(name=a.name, description=a.desc) for a in ACTION_LIST]
 
     def new(self, ctx: Context, s: Settings, d: Deps) -> Connection:
-        return JiraConnection(new_site(s, d, "jira"))
+        return JiraConnection(new_site(s, d, "jira"), d.now if d.now is not None else time.monotonic)
 
 
 # -- helpers -------------------------------------------------------------------
@@ -199,6 +202,10 @@ def _decision_or_raise(err: BaseException) -> Decision:
 
 _PARSE_INT_RE = re.compile(r"[+-]?[0-9]+")
 
+# How long a confirmed credential is trusted before an empty user search
+# confirms it again.
+AUTH_CONFIRM_TTL = 300.0
+
 
 def _parse_id(s: str) -> int:
     """strconv.ParseInt(s, 10, 64), and positive."""
@@ -212,8 +219,12 @@ def _parse_id(s: str) -> int:
 class JiraConnection(Connection):
     """One Jira Cloud site."""
 
-    def __init__(self, site: Site) -> None:
+    def __init__(self, site: Site, now: Callable[[], float] = time.monotonic) -> None:
         self._site = site
+        self._now = now
+        # When the credential was last seen to authenticate (monotonic).
+        self._authenticated_at: float | None = None
+        self._auth_lock = threading.Lock()
 
     def site(self) -> Site:
         """The transport, for integrations on the same site."""
@@ -285,7 +296,32 @@ class JiraConnection(Connection):
                 f"email hidden by profile visibility: {len(hidden)} candidate(s) for {email} show no email; "
                 "make the email visible to the site or use a scoped token that can read it",
             )
+        # Atlassian answers the search with a credential it does not accept
+        # as an anonymous caller: 200 and no users. So an empty answer only
+        # means "no such user" once the credential is known to work.
+        self._confirm_authenticated(ctx)
         raise user_not_found(f"no active Atlassian account has the email {email}")
+
+    def _confirm_authenticated(self, ctx: Context) -> None:
+        """Raise unless the credential authenticates; a success is trusted
+        for AUTH_CONFIRM_TTL seconds."""
+        with self._auth_lock:
+            at = self._authenticated_at
+        if at is not None and self._now() - at < AUTH_CONFIRM_TTL:
+            return
+        try:
+            _, v = self._site.get_json(ctx, "/rest/api/3/myself")
+            account_id = jsonx.s(jsonx.obj(v), "accountId")
+        except Exception as e:
+            if httpx.status(e) == 403:
+                # Authenticated, but may not read its own profile.
+                account_id = "?"
+            else:
+                raise _classify(e) from e
+        if account_id == "":
+            raise errorf(Code.CREDENTIAL_REJECTED, "the credential does not authenticate: Jira answers it as an anonymous caller")
+        with self._auth_lock:
+            self._authenticated_at = self._now()
 
     def check(self, ctx: Context, r: CheckRequest) -> Decision:
         """Post one permissions/check for the account and the resource."""

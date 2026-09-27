@@ -1,5 +1,5 @@
 """Linear: team, issue and project visibility and workspace roles, read
-through the GraphQL API (Go: internal/integrations/linear)."""
+through the GraphQL API (Go: v0.5.0:internal/integrations/linear)."""
 
 from __future__ import annotations
 

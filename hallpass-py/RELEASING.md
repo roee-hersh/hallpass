@@ -9,7 +9,8 @@ One release version covers everything the repository ships:
 | The server image | [`Dockerfile`](../Dockerfile), which installs `hallpass[crypto]` | `ghcr.io/roee-hersh/hallpass` |
 | The Helm chart | [`deploy/helm/hallpass`](../deploy/helm/hallpass) | `oci://ghcr.io/roee-hersh/charts/hallpass` |
 
-Each version in the repository is `0.0.0`. The `release` workflow (`.github/workflows/release.yaml`,
+Each version in the repository is `0.0.0` (the chart's appVersion is `latest`, so a chart
+installed from a clone runs the latest published image). The `release` workflow (`.github/workflows/release.yaml`,
 started by hand or by `daily-release`) tags `main` and sets the version from the tag everywhere:
 `.github/scripts/build-python.sh` writes it into `src/hallpass/_version.py`; the image, the chart
 (version and appVersion) and the npm package get it too. The release skill
