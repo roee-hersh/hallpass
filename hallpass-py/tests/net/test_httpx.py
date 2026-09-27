@@ -744,6 +744,7 @@ def test_environment_proxy_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         ("10.0.0.0/8", "10.96.0.1", 443, False),  # CIDR
         ("10.0.0.0/8", "11.0.0.1", 443, True),
+        ("10.0.0.0/8", "::ffff:10.1.2.3", 443, False),  # IPv4-mapped, as Go's IPNet.Contains
         ("fd00::/8", "fd00::1", 443, False),
         ("10.96.0.1", "10.96.0.1", 443, False),  # an IP
         ("10.96.0.1:6443", "10.96.0.1", 443, True),  # an IP and another port
@@ -787,8 +788,12 @@ def test_environment_proxy_hallpass_cannot_use_is_an_error_not_a_bypass(monkeypa
     for k in ("HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("HTTPS_PROXY", value)
-    with pytest.raises(TransportError):
+    with pytest.raises(TransportError) as ei:
         new_http_client(Options())._proxy_for("https", "api.example.com", 443)
+    # A configuration problem: not retried, and said as such.
+    assert not httpx._retryable(ei.value)
+    he = classify(ei.value)
+    assert he is not None and he.code == Code.UPSTREAM_ERROR and "proxy set in the environment" in str(he), he
 
 
 def test_tls_server_name(servers: Callable[..., itest.Server]) -> None:
@@ -1011,7 +1016,9 @@ def test_ca_file_skips_a_block_that_does_not_parse(tmp_path: Any) -> None:
     bad = b"-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n"
     other = b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"
     f = tmp_path / "ca.pem"
-    f.write_bytes(bad + other + b"some text\n" + ca.ca_pem)
+    truncated = b"-----BEGIN CERTIFICATE-----\nAAAA\n"  # cut short by the next BEGIN
+    good = ca.ca_pem.replace(b"-----BEGIN CERTIFICATE-----\n", b"-----BEGIN CERTIFICATE-----  \n", 1)  # trailing spaces
+    f.write_bytes(bad + other + b"some text\n" + truncated + good)
     srv, url = _https_server(ca.cert_file, ca.key_file)
     try:
         hc = new_http_client(Options(ca_file=str(f), timeout=5.0))

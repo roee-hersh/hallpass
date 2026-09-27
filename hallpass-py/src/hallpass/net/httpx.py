@@ -156,6 +156,11 @@ class TransportError(Exception):
         return any(isinstance(e, (socket.timeout, TimeoutError)) and not isinstance(e, DeadlineExceeded) for e in _chain_all(self.err))
 
 
+class ProxyConfigError(TransportError):
+    """The proxy the environment names cannot be used. A configuration
+    problem, so never retried."""
+
+
 def _chain_all(err: BaseException) -> Iterable[BaseException]:
     from hallpass.core.errors import chain
 
@@ -233,7 +238,31 @@ class RawResponse:
     body: bytes
 
 
-_PEM_BLOCK = re.compile(rb"-----BEGIN ([^-\r\n]+)-----\r?\n(.*?)-----END \1-----", re.S)
+_PEM_BEGIN = re.compile(rb"-----BEGIN ([^-\r\n]*)-----")
+
+
+def _pem_blocks(pem: bytes) -> list[tuple[bytes, list[bytes]]]:
+    """(type, body lines) of each complete PEM block, read as Go's
+    pem.Decode reads them: a BEGIN line (trailing whitespace allowed) up to
+    its END line; a block cut short by another BEGIN line is dropped and
+    reading resumes at that line."""
+    out: list[tuple[bytes, list[bytes]]] = []
+    label: bytes | None = None
+    body: list[bytes] = []
+    for raw in pem.splitlines():
+        line = raw.rstrip()
+        m = _PEM_BEGIN.fullmatch(line)
+        if m:
+            label, body = m.group(1), []
+            continue
+        if label is None:
+            continue
+        if line == b"-----END " + label + b"-----":
+            out.append((label, body))
+            label = None
+            continue
+        body.append(line)
+    return out
 
 
 def _load_pem_certificates(ctx: ssl.SSLContext, pem: bytes) -> int:
@@ -241,11 +270,11 @@ def _load_pem_certificates(ctx: ssl.SSLContext, pem: bytes) -> int:
     added. As Go's CertPool.AppendCertsFromPEM: other block types, blocks
     with headers and blocks that do not parse are skipped, not fatal."""
     n = 0
-    for m in _PEM_BLOCK.finditer(pem):
-        if m.group(1) != b"CERTIFICATE" or b":" in m.group(2).split(b"\n", 1)[0]:
+    for label, body in _pem_blocks(pem):
+        if label != b"CERTIFICATE" or (body and b":" in body[0]):
             continue
         try:
-            der = base64.b64decode(b"".join(m.group(2).split()), validate=True)
+            der = base64.b64decode(b"".join(b"".join(body).split()), validate=True)
             ctx.load_verify_locations(cadata=der)
         except (ValueError, ssl.SSLError):
             continue
@@ -339,7 +368,10 @@ def _use_proxy(host: str, port: int, no_proxy: str) -> bool:
         except ValueError:
             net = None
         if net is not None:
-            if ip is not None and ip.version == net.version and ip in net:
+            # As Go's IPNet.Contains, an IPv4-mapped IPv6 host is matched
+            # against IPv4 ranges.
+            cand = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None and net.version == 4 else ip
+            if cand is not None and cand.version == net.version and cand in net:
                 return False
             continue
         phost, pport = p, ""
@@ -388,6 +420,9 @@ class Transport:
         self.connect_timeout = min(_CONNECT_TIMEOUT_CAP, self.timeout)
         self.ssl_context = _make_ssl_context(o)
         self._proxy: _Proxy | None = _parse_proxy(o.proxy_url) if o.proxy_url else None
+        # The environment's proxy settings, read once as Go reads them once.
+        self._env_proxy = {"https": _env_any("HTTPS_PROXY", "https_proxy"), "http": _env_any("HTTP_PROXY", "http_proxy")}
+        self._env_no_proxy = _env_any("NO_PROXY", "no_proxy")
         self._lock = threading.Lock()
         self._idle: dict[tuple[str, str, int, str], list[http.client.HTTPConnection]] = {}
 
@@ -397,17 +432,17 @@ class Transport:
         if self._proxy is not None:
             return self._proxy
         # The environment, as Go's ProxyFromEnvironment reads it.
-        raw = _env_any("HTTPS_PROXY", "https_proxy") if scheme == "https" else _env_any("HTTP_PROXY", "http_proxy")
-        if not raw or not _use_proxy(host, port, _env_any("NO_PROXY", "no_proxy")):
+        raw = self._env_proxy.get(scheme, "")
+        if not raw or not _use_proxy(host, port, self._env_no_proxy):
             return None
         if "://" in raw and raw.split("://", 1)[0].lower() in ("socks5", "socks5h"):
             # Go dials through it; going direct instead would bypass a proxy
             # the environment requires.
-            raise TransportError(ValueError(f"the {scheme} proxy from the environment is a SOCKS proxy, which hallpass does not support"))
+            raise ProxyConfigError(ValueError(f"the {scheme} proxy from the environment is a SOCKS proxy, which hallpass does not support"))
         try:
             return _parse_proxy(raw)
         except ValueError as e:
-            raise TransportError(ValueError(f"the {scheme} proxy from the environment is not usable: {e}")) from None
+            raise ProxyConfigError(ValueError(f"the {scheme} proxy from the environment is not usable: {e}")) from None
 
     # -- connections --
 
@@ -1213,7 +1248,7 @@ def _retryable(err: BaseException) -> bool:
     se = as_error(err, StatusError)
     if se is not None:
         return se.status in (429, 502, 503, 504)
-    if context_ended(err) or is_error(err, BodyTooLarge):
+    if context_ended(err) or is_error(err, BodyTooLarge) or as_error(err, ProxyConfigError) is not None:
         return False
     te = as_error(err, TransportError)
     if te is not None:
@@ -1300,6 +1335,9 @@ def classify(err: BaseException | None) -> HallpassError | None:
         return wrap_error(Code.UPSTREAM_ERROR, err, f"upstream returned HTTP {se.status}")
     if is_error(err, BodyTooLarge):
         return wrap_error(Code.UPSTREAM_ERROR, err, "upstream response too large")
+    pe = as_error(err, ProxyConfigError)
+    if pe is not None:
+        return wrap_error(Code.UPSTREAM_ERROR, err, "the proxy set in the environment cannot be used")
     te = as_error(err, TransportError)
     if te is not None:
         if te.timeout():

@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+import hallpass.integrations.jira.jira as jira_mod
 from hallpass.core.context import background
 from hallpass.core.decision import Code, Decision, to_decision
 from hallpass.core.integration import Connection, User, validate_fields
@@ -925,9 +926,17 @@ def test_rejected_credential_is_not_user_not_found(setup: Setup) -> None:
     assert any(call.path == "/rest/api/3/myself" for call in srv.calls()), "the credential was not confirmed"
 
 
-def test_confirmed_credential_is_trusted_for_a_while(setup: Setup) -> None:
+def test_confirmed_credential_is_trusted_for_a_while(setup: Setup, monkeypatch: pytest.MonkeyPatch) -> None:
     clock = [1000.0]
-    srv, _, c = setup(MODE_BASIC, {}, lambda: clock[0])
+    monkeypatch.setattr(jira_mod, "_clock", lambda: clock[0])
+    srv, _, c = setup(MODE_BASIC, {}, None)
+
+    def confirmations() -> int:
+        return sum(call.path == "/rest/api/3/myself" for call in srv.calls())
+
     for _ in range(3):
         itest.expect_code(resolve_err(c, User(email="nobody@example.com")), Code.USER_NOT_FOUND)
-    assert sum(call.path == "/rest/api/3/myself" for call in srv.calls()) == 1, [call.path for call in srv.calls()]
+    assert confirmations() == 1, [call.path for call in srv.calls()]
+    clock[0] += jira_mod.AUTH_CONFIRM_TTL + 1
+    itest.expect_code(resolve_err(c, User(email="nobody@example.com")), Code.USER_NOT_FOUND)
+    assert confirmations() == 2

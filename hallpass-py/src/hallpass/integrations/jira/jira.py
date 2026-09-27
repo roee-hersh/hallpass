@@ -75,7 +75,7 @@ class Jira(Integration):
         return [Action(name=a.name, description=a.desc) for a in ACTION_LIST]
 
     def new(self, ctx: Context, s: Settings, d: Deps) -> Connection:
-        return JiraConnection(new_site(s, d, "jira"), d.now if d.now is not None else time.monotonic)
+        return JiraConnection(new_site(s, d, "jira"))
 
 
 # -- helpers -------------------------------------------------------------------
@@ -207,6 +207,10 @@ _PARSE_INT_RE = re.compile(r"[+-]?[0-9]+")
 AUTH_CONFIRM_TTL = 300.0
 
 
+def _clock() -> float:
+    return time.monotonic()
+
+
 def _parse_id(s: str) -> int:
     """strconv.ParseInt(s, 10, 64), and positive."""
     if _PARSE_INT_RE.fullmatch(s):
@@ -219,9 +223,10 @@ def _parse_id(s: str) -> int:
 class JiraConnection(Connection):
     """One Jira Cloud site."""
 
-    def __init__(self, site: Site, now: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, site: Site, now: Callable[[], float] | None = None) -> None:
         self._site = site
-        self._now = now
+        # Monotonic, so a wall-clock step back cannot stretch the trust.
+        self._now = now or _clock
         # When the credential was last seen to authenticate (monotonic).
         self._authenticated_at: float | None = None
         self._auth_lock = threading.Lock()

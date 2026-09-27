@@ -666,6 +666,16 @@ def test_missing_policy_under_a_namespace_is_unsupported(env: Env) -> None:
     expect(check(c, dana, "secret.read", "kv:secret/dev/app"), Code.UNSUPPORTED, "policy gone-policy is not readable in namespace team/")
 
 
+def test_missing_own_policy_under_a_namespace_is_skipped(env: Env) -> None:
+    # The entity's own policies live in its namespace: a 404 there is a
+    # policy Vault does not have either, and Vault skips it.
+    _, f, c = env.setup_values({"namespace": "team/"}, "")
+    with f.mu:
+        f.entities[0].policies = ["dev", "stale-policy"]
+        f.entities[0].groups = [GRP_TEAM]
+    expect(check(c, dana, "secret.read", "kv:secret/dev/app"), Code.ALLOWED, "")
+
+
 def test_group_id_with_unexpected_shape_is_an_error(env: Env) -> None:
     # Skipping the group would skip its policies, denies included.
     _, f, c = env.setup()

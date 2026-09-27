@@ -409,6 +409,18 @@ def test_build_errors() -> None:
     assert 'connection "a" (failing)' in str(ei.value), str(ei.value)
 
 
+def test_group_names_may_hold_unicode_spaces() -> None:
+    # Directory group names such as Japanese ones use U+3000; controls and
+    # line separators are still refused.
+    c = Counting()
+    e, _ = build_engine(c, Options())
+    r = e.check(background(), groups_req("a@x.com", "\u958b\u767a\u3000\u30c1\u30fc\u30e0", "team\u00a0a"))
+    assert r.decision.outcome == Outcome.ALLOW, r
+    for bad in ("a\u2028b", "a\u0085b", "a\nb"):
+        r = e.check(background(), groups_req("a@x.com", bad))
+        assert r.decision.code == Code.INVALID_REQUEST, (bad, r)
+
+
 def test_identity_cache_keeps_non_ascii_case_variants_apart() -> None:
     """ASCII case variants share an Identity (every integration matches
     them alike); non-ASCII ones do not, because Unicode lowercasing and the

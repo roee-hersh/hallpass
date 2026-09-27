@@ -431,6 +431,7 @@ def _http_server(hp: RecordingHallpass, **guard_kw: Any) -> Iterator[str]:
             "dana-token": {"sub": "u-dana", "email": DANA, "groups": ["platform-team"]},
             "no-email-token": {"sub": "u-nobody"},
             "unverified-token": {"sub": "u-mallory", "email": ADMIN, "email_verified": False, "groups": ["platform-team"]},
+            "unverified-str-token": {"sub": "u-mallory", "email": ADMIN, "email_verified": "false", "groups": ["platform-team"]},
         }
     )
     server = make_server(
@@ -678,7 +679,8 @@ def test_http_token_with_unverified_email_is_refused(fw_mcp_http: str, fw_mcp_hp
                 [res] = await drive(client, [("write_thing", {"thing_id": "1", "content": "hi"})])
                 return res
 
-    res = asyncio.run(call("unverified-token"))
-    assert (res.is_error, text(res)) == (True, REFUSED + "no user for this request: the access token's email is not verified (email_verified is false)")
+    for token in ("unverified-token", "unverified-str-token"):
+        res = asyncio.run(call(token))
+        assert (res.is_error, text(res)) == (True, REFUSED + "no user for this request: the access token's email is not verified (email_verified is false)")
     assert fw_mcp_hp.seen == [], "hallpass must not be asked about an unverified email"
     assert RAN == []

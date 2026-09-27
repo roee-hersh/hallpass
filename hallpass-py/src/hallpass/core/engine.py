@@ -383,7 +383,11 @@ def _validate_groups(gs: list[str]) -> None:
         if len(g.encode("utf-8", "surrogatepass")) > _MAX_GROUP:
             raise ValueError(f"group longer than {_MAX_GROUP} bytes")
         for ch in g:
-            if ch != " " and _is_space_or_control(ch):
+            # Directory group names may hold spaces, Unicode ones included
+            # (U+3000 in Japanese names); controls and line separators,
+            # which would forge log lines, never.
+            o = ord(ch)
+            if o < 0x20 or 0x7F <= o <= 0x9F or o in (0x2028, 0x2029):
                 raise ValueError("group contains a control character")
 
 
