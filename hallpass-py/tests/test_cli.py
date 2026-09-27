@@ -1,4 +1,4 @@
-"""Port of cmd/hallpass/main_test.go."""
+"""Port of v0.5.0:cmd/hallpass/main_test.go."""
 
 from __future__ import annotations
 
@@ -420,3 +420,35 @@ def test_check_server_response_decoding(monkeypatch: pytest.MonkeyPatch, body: s
     finally:
         srv.close()
     assert got[0] == code and got[1] == out and err in got[2], got
+
+
+NO_KEY_CONFIG = """
+decision_log: none
+connections:
+  - id: demo
+    integration: fake
+    users: dana@example.com
+    admins: admin@example.com
+"""
+
+
+def test_in_process_config_without_api_key(write_config: Any) -> None:
+    """validate, probe and check take the file of an in-process engine,
+    which has no api_key; only serve needs one."""
+    p = write_config(NO_KEY_CONFIG)
+    code, out, errs = capture("validate", "-config", p)
+    assert code == 0 and "ok, 1 connection" in out and "hallpass serve needs one" in errs, (code, out, errs)
+    code, out, errs = capture("probe", "-config", p)
+    assert code == 0, (code, out, errs)
+    code, out, errs = capture("check", "-config", p, "-connection", "demo", "-user", "admin@example.com", "-action", "thing.write", "-resource", "thing:1")
+    assert code == 0 and out.startswith("allow"), (code, out, errs)
+    code, _, errs = capture("serve", "-config", p, "-listen", "127.0.0.1:0")
+    assert code == 1 and "api_key is required" in errs, (code, errs)
+
+
+def test_serve_refuses_to_start_without_a_readable_api_key(monkeypatch: pytest.MonkeyPatch, write_config: Any) -> None:
+    # It would otherwise report healthy and refuse every check.
+    p = write_config(GOOD_CONFIG)
+    monkeypatch.delenv("HALLPASS_API_KEY", raising=False)
+    code, _, errs = capture("serve", "-config", p, "-listen", "127.0.0.1:0")
+    assert code == 1 and "api_key: secret: environment variable HALLPASS_API_KEY is not set" in errs, (code, errs)

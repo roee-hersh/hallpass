@@ -22,9 +22,10 @@ Unicode general categories (``\\pL``, ``\\p{Lu}``, ``\\PN``, ``\\p{^N}``,
 ``\\p{Any}``) are expanded into ranges from Python's Unicode database, whose
 version may trail Go's by a release.
 
-Not supported (rejected, so such a pattern never matches): Unicode scripts
-such as ``\\p{Greek}``, ``\\C``, the U (ungreedy) flag, negated POSIX classes
-inside a larger bracket expression.
+Not supported (RE2Unsupported, which the enforcer answers as unknown rather
+than as a pattern that never matches): Unicode scripts such as
+``\\p{Greek}``, the U (ungreedy) flag, negated POSIX classes inside a larger
+bracket expression. ``\\C``, which Go rejects, never matches.
 """
 
 from __future__ import annotations
@@ -34,11 +35,187 @@ import sys
 import threading
 import unicodedata
 
-__all__ = ["RE2Error", "compile_re2", "translate"]
+__all__ = ["RE2Error", "RE2Unsupported", "compile_re2", "translate"]
 
 
 class RE2Error(ValueError):
     pass
+
+
+# The Unicode scripts Go's regexp knows (unicode.Scripts in Go 1.24).
+_GO_SCRIPTS = frozenset(
+    [
+        "Adlam",
+        "Ahom",
+        "Anatolian_Hieroglyphs",
+        "Arabic",
+        "Armenian",
+        "Avestan",
+        "Balinese",
+        "Bamum",
+        "Bassa_Vah",
+        "Batak",
+        "Bengali",
+        "Bhaiksuki",
+        "Bopomofo",
+        "Brahmi",
+        "Braille",
+        "Buginese",
+        "Buhid",
+        "Canadian_Aboriginal",
+        "Carian",
+        "Caucasian_Albanian",
+        "Chakma",
+        "Cham",
+        "Cherokee",
+        "Chorasmian",
+        "Common",
+        "Coptic",
+        "Cuneiform",
+        "Cypriot",
+        "Cypro_Minoan",
+        "Cyrillic",
+        "Deseret",
+        "Devanagari",
+        "Dives_Akuru",
+        "Dogra",
+        "Duployan",
+        "Egyptian_Hieroglyphs",
+        "Elbasan",
+        "Elymaic",
+        "Ethiopic",
+        "Georgian",
+        "Glagolitic",
+        "Gothic",
+        "Grantha",
+        "Greek",
+        "Gujarati",
+        "Gunjala_Gondi",
+        "Gurmukhi",
+        "Han",
+        "Hangul",
+        "Hanifi_Rohingya",
+        "Hanunoo",
+        "Hatran",
+        "Hebrew",
+        "Hiragana",
+        "Imperial_Aramaic",
+        "Inherited",
+        "Inscriptional_Pahlavi",
+        "Inscriptional_Parthian",
+        "Javanese",
+        "Kaithi",
+        "Kannada",
+        "Katakana",
+        "Kawi",
+        "Kayah_Li",
+        "Kharoshthi",
+        "Khitan_Small_Script",
+        "Khmer",
+        "Khojki",
+        "Khudawadi",
+        "Lao",
+        "Latin",
+        "Lepcha",
+        "Limbu",
+        "Linear_A",
+        "Linear_B",
+        "Lisu",
+        "Lycian",
+        "Lydian",
+        "Mahajani",
+        "Makasar",
+        "Malayalam",
+        "Mandaic",
+        "Manichaean",
+        "Marchen",
+        "Masaram_Gondi",
+        "Medefaidrin",
+        "Meetei_Mayek",
+        "Mende_Kikakui",
+        "Meroitic_Cursive",
+        "Meroitic_Hieroglyphs",
+        "Miao",
+        "Modi",
+        "Mongolian",
+        "Mro",
+        "Multani",
+        "Myanmar",
+        "Nabataean",
+        "Nag_Mundari",
+        "Nandinagari",
+        "New_Tai_Lue",
+        "Newa",
+        "Nko",
+        "Nushu",
+        "Nyiakeng_Puachue_Hmong",
+        "Ogham",
+        "Ol_Chiki",
+        "Old_Hungarian",
+        "Old_Italic",
+        "Old_North_Arabian",
+        "Old_Permic",
+        "Old_Persian",
+        "Old_Sogdian",
+        "Old_South_Arabian",
+        "Old_Turkic",
+        "Old_Uyghur",
+        "Oriya",
+        "Osage",
+        "Osmanya",
+        "Pahawh_Hmong",
+        "Palmyrene",
+        "Pau_Cin_Hau",
+        "Phags_Pa",
+        "Phoenician",
+        "Psalter_Pahlavi",
+        "Rejang",
+        "Runic",
+        "Samaritan",
+        "Saurashtra",
+        "Sharada",
+        "Shavian",
+        "Siddham",
+        "SignWriting",
+        "Sinhala",
+        "Sogdian",
+        "Sora_Sompeng",
+        "Soyombo",
+        "Sundanese",
+        "Syloti_Nagri",
+        "Syriac",
+        "Tagalog",
+        "Tagbanwa",
+        "Tai_Le",
+        "Tai_Tham",
+        "Tai_Viet",
+        "Takri",
+        "Tamil",
+        "Tangsa",
+        "Tangut",
+        "Telugu",
+        "Thaana",
+        "Thai",
+        "Tibetan",
+        "Tifinagh",
+        "Tirhuta",
+        "Toto",
+        "Ugaritic",
+        "Vai",
+        "Vithkuqi",
+        "Wancho",
+        "Warang_Citi",
+        "Yezidi",
+        "Yi",
+        "Zanabazar_Square",
+    ]
+)
+
+
+class RE2Unsupported(RE2Error):
+    """A pattern Go may well accept but this translation cannot express.
+    Unlike an invalid pattern, it must not be read as "never matches": in a
+    deny rule that would skip the deny."""
 
 
 _WORD = "0-9A-Za-z_"
@@ -184,6 +361,9 @@ def _unicode_class(p: str, i: int) -> tuple[str, int]:
         name = p[j]
         j += 1
     if name != "Any" and name not in _CATEGORIES:
+        if name in _GO_SCRIPTS:
+            # A Unicode script such as Greek or Han, which Go knows.
+            raise RE2Unsupported(f"Unicode script class \\p{{{name}}} is not supported")
         raise RE2Error("invalid or unsupported character class range")
     body = _class_body(_ranges_of(name), negate)
     if body == "":
@@ -263,7 +443,7 @@ def _bracket(p: str, i: int) -> tuple[str, int]:
                     j = end + 2
                     continue
                 if name.startswith("^") and name[1:] in _POSIX:
-                    raise RE2Error("negated POSIX class not supported")
+                    raise RE2Unsupported("negated POSIX class inside a bracket expression is not supported")
                 raise RE2Error("invalid character class range")
         if c == "\\":
             if p.startswith("\\Q", j):
@@ -313,7 +493,7 @@ def translate(p: str) -> str:
                 out.append("[" + t + "]")
                 continue
             if i + 1 < n and p[i + 1] == "C":
-                raise RE2Error("unsupported escape")
+                raise RE2Error("invalid escape sequence")
             t, i = _escape(p, i, False)
             out.append(t)
             continue
@@ -335,8 +515,10 @@ def translate(p: str) -> str:
                     i += 3
                     continue
                 m = _FLAGS.match(p, i)
-                if not m or m.group(1) in ("", "-") or m.group(1).endswith("-") or "U" in m.group(1):
+                if not m or m.group(1) in ("", "-") or m.group(1).endswith("-"):
                     raise RE2Error("invalid or unsupported Perl syntax")
+                if "U" in m.group(1):
+                    raise RE2Unsupported("the U (ungreedy) flag is not supported")
                 flags = m.group(1)
                 if m.group(2) == ":":
                     out.append(f"(?{flags}:")

@@ -68,6 +68,10 @@ connections:
 env:
   JIRA_TOKEN: parity-jira-token
 upstream:
+  # the credential check before an empty user search counts as "no such user"
+  - method: GET
+    path: /rest/api/3/myself
+    json: {accountId: acc-hallpass, displayName: hallpass}
   # jira
   - method: GET
     path: /rest/api/3/user/search
@@ -224,35 +228,35 @@ upstream:
     json:
       - {accountId: acc-dana, accountType: atlassian, active: "yes", emailAddress: dana@example.com, displayName: Dana}
 checks:
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: allowed}
-  - {user: DANA@example.com, action: CREATE_ISSUES, resource: "issue:OPS-1", want: allowed}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:SEC", want: denied}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:SEC-7", want: denied}
-  - {user: bob@example.com, action: BROWSE_PROJECTS, resource: "issue:SEC-7", want: allowed}
-  - {user: dana@example.com, action: EDIT_ISSUES, resource: "project:OPS", want: unsupported}
-  - {user: dana@example.com, action: ADMINISTER, resource: global, want: allowed}
-  - {user: dana@example.com, action: BULK_CHANGE, resource: global, want: denied}
-  - {user: noname@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: allowed}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:NOPE", want: resource_not_visible}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:NOPE-9", want: resource_not_visible}
-  - {user: twin@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: user_ambiguous}
-  - {user: nobody@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: user_not_found}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: global, want: invalid_request}
-  - {user: dana@example.com, action: ADMINISTER, resource: "project:OPS", want: invalid_request}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:ops", want: invalid_request}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-0", want: invalid_request}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "board:1", want: invalid_request}
-  - {user: dana@example.com, action: ADMINISTER, resource: "global:x", want: invalid_request}
-  - {user: dana@example.com, action: NOT_A_KEY, resource: global, want: unknown_action}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-hidden, want: unsupported}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-crowded, want: unsupported}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-rejected, want: credential_rejected}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-noadmin, want: credential_rejected}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-1", connection: jira-noadmin, want: credential_rejected}
-  - {user: dana@example.com, action: ADMINISTER, resource: global, connection: jira-badkey, want: unsupported}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-broken, want: upstream_error}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-limited, want: upstream_rate_limited}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-badid, want: upstream_error}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-1", connection: jira-badid, want: upstream_error}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-2", connection: jira-badid, want: upstream_error}
-  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-badtype, want: upstream_error}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: allowed, reason: "allowed: Dana holds CREATE_ISSUES on project OPS"}
+  - {user: DANA@example.com, action: CREATE_ISSUES, resource: "issue:OPS-1", want: allowed, reason: "allowed: Dana holds CREATE_ISSUES on issue OPS-1"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:SEC", want: denied, reason: "denied: Dana does not hold CREATE_ISSUES on project SEC"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:SEC-7", want: denied, reason: "denied: Dana does not hold CREATE_ISSUES on issue SEC-7"}
+  - {user: bob@example.com, action: BROWSE_PROJECTS, resource: "issue:SEC-7", want: allowed, reason: "allowed: Bob holds BROWSE_PROJECTS on issue SEC-7"}
+  - {user: dana@example.com, action: EDIT_ISSUES, resource: "project:OPS", want: unsupported, reason: "unsupported: Jira did not evaluate the permission key EDIT_ISSUES for project OPS; the key may not exist on this site"}
+  - {user: dana@example.com, action: ADMINISTER, resource: global, want: allowed, reason: "allowed: Dana holds ADMINISTER on this site"}
+  - {user: dana@example.com, action: BULK_CHANGE, resource: global, want: denied, reason: "denied: Dana does not hold BULK_CHANGE on this site"}
+  - {user: noname@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: allowed, reason: "allowed: acc-noname holds CREATE_ISSUES on project OPS"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:NOPE", want: resource_not_visible, reason: "resource_not_visible: project NOPE does not exist or is not visible to hallpass's account"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:NOPE-9", want: resource_not_visible, reason: "resource_not_visible: issue NOPE-9 does not exist or is not visible to hallpass's account"}
+  - {user: twin@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: user_ambiguous, reason: "user_ambiguous: 2 active Atlassian accounts have the email twin@example.com"}
+  - {user: nobody@example.com, action: CREATE_ISSUES, resource: "project:OPS", want: user_not_found, reason: "user_not_found: no active Atlassian account has the email nobody@example.com"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: global, want: invalid_request, reason: "invalid_request: CREATE_ISSUES is a project permission; use project:<KEY> or issue:<KEY-N>"}
+  - {user: dana@example.com, action: ADMINISTER, resource: "project:OPS", want: invalid_request, reason: "invalid_request: ADMINISTER is a global permission; use the resource global"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:ops", want: invalid_request, reason: "invalid_request: project key \"ops\" must match ^[A-Z][A-Z0-9_]{1,9}$"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-0", want: invalid_request, reason: "invalid_request: issue key \"OPS-0\" must match ^[A-Z][A-Z0-9_]{1,9}-[1-9][0-9]*$"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "board:1", want: invalid_request, reason: "invalid_request: resource type \"board\"; use project:<KEY>, issue:<KEY-N> or global"}
+  - {user: dana@example.com, action: ADMINISTER, resource: "global:x", want: invalid_request, reason: "invalid_request: global takes no id"}
+  - {user: dana@example.com, action: NOT_A_KEY, resource: global, want: unknown_action, reason: "unknown_action: integration jira has no action \"NOT_A_KEY\""}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-hidden, want: unsupported, reason: "unsupported: email hidden by profile visibility: 2 candidate(s) for dana@example.com show no email; make the email visible to the site or use a scoped token that can read it"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-crowded, want: unsupported, reason: "unsupported: too many candidates: the user search for dana@example.com filled 5 pages without an exact email match"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-rejected, want: credential_rejected, reason: "credential_rejected: the connection's credential was rejected (HTTP 401)"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-noadmin, want: credential_rejected, reason: "credential_rejected: hallpass's account may not browse project OPS (HTTP 403)"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-1", connection: jira-noadmin, want: credential_rejected, reason: "credential_rejected: hallpass's account may not check other users' permissions; it needs Administer Jira (HTTP 403)"}
+  - {user: dana@example.com, action: ADMINISTER, resource: global, connection: jira-badkey, want: unsupported, reason: "unsupported: Jira rejected the permission check for ADMINISTER; the permission key may not exist on this site"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-broken, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-limited, want: upstream_rate_limited, reason: "upstream_rate_limited: rate limited by the upstream system"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-badid, want: upstream_error, reason: "upstream_error: project OPS: upstream returned a non-numeric id"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-1", connection: jira-badid, want: upstream_error, reason: "upstream_error: upstream call failed"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "issue:OPS-2", connection: jira-badid, want: upstream_error, reason: "upstream_error: upstream call failed"}
+  - {user: dana@example.com, action: CREATE_ISSUES, resource: "project:OPS", connection: jira-badtype, want: upstream_error, reason: "upstream_error: upstream call failed"}

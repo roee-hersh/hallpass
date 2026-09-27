@@ -1,4 +1,4 @@
-"""Port of internal/httpx/httpx_test.go, plus proxy and TLS server name
+"""Port of v0.5.0:internal/httpx/httpx_test.go, plus proxy and TLS server name
 tests for the transport the Python port builds itself."""
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import os
 import select
 import socket
 import ssl
+import sys
 import threading
 import time
 import urllib.parse
@@ -725,18 +726,76 @@ def test_environment_proxy_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:8080")
     monkeypatch.setenv("NO_PROXY", "internal.example")
     t = new_http_client(Options())
-    p = t._proxy_for("https", "api.example.com")
+    p = t._proxy_for("https", "api.example.com", 443)
     assert p is not None and (p.host, p.port) == ("sproxy.example", 3128)
-    p = t._proxy_for("http", "api.example.com")
+    p = t._proxy_for("http", "api.example.com", 80)
     assert p is not None and (p.host, p.port) == ("proxy.example", 8080)
-    assert t._proxy_for("https", "internal.example") is None
-    assert t._proxy_for("https", "127.0.0.1") is None
-    assert t._proxy_for("https", "localhost") is None
-    assert t._proxy_for("https", "::1") is None
+    assert t._proxy_for("https", "internal.example", 443) is None
+    assert t._proxy_for("https", "127.0.0.1", 443) is None
+    assert t._proxy_for("https", "localhost", 443) is None
+    assert t._proxy_for("https", "::1", 443) is None
     # An explicit proxy_url applies to every host.
     t2 = new_http_client(Options(proxy_url="http://explicit.example:1"))
-    p = t2._proxy_for("https", "127.0.0.1")
+    p = t2._proxy_for("https", "127.0.0.1", 443)
     assert p is not None and p.host == "explicit.example"
+
+
+@pytest.mark.parametrize(
+    ("no_proxy", "host", "port", "proxied"),
+    [
+        ("10.0.0.0/8", "10.96.0.1", 443, False),  # CIDR
+        ("10.0.0.0/8", "11.0.0.1", 443, True),
+        ("10.0.0.0/8", "::ffff:10.1.2.3", 443, False),  # IPv4-mapped, as Go's IPNet.Contains
+        ("fd00::/8", "fd00::1", 443, False),
+        ("10.96.0.1", "10.96.0.1", 443, False),  # an IP
+        ("10.96.0.1:6443", "10.96.0.1", 443, True),  # an IP and another port
+        ("10.96.0.1:443", "10.96.0.1", 443, False),
+        ("[fd00::1]:443", "fd00::1", 443, False),
+        ("example.com", "example.com", 443, False),  # a domain and its subdomains
+        ("example.com", "api.example.com", 443, False),
+        ("example.com", "badexample.com", 443, True),
+        (".example.com", "example.com", 443, True),  # only subdomains
+        (".example.com", "api.example.com", 443, False),
+        ("*.example.com", "api.example.com", 443, False),
+        ("*.example.com", "example.com", 443, True),
+        ("example.com:8443", "example.com", 443, True),  # a domain and a port
+        ("example.com:443", "example.com", 443, False),
+        (" Example.COM ,other", "api.example.com", 443, False),  # case and spaces
+        ("*", "anything.example", 443, False),
+        ("", "10.96.0.1", 443, True),
+    ],
+)
+def test_no_proxy_entries_as_go_reads_them(monkeypatch: pytest.MonkeyPatch, no_proxy: str, host: str, port: int, proxied: bool) -> None:
+    for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://sproxy.example:3128")
+    monkeypatch.setenv("NO_PROXY", no_proxy)
+    t = new_http_client(Options())
+    assert (t._proxy_for("https", host, port) is not None) == proxied
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows environment variables are case-insensitive: one variable")
+def test_uppercase_proxy_variable_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k in ("HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://upper.example:1")
+    monkeypatch.setenv("https_proxy", "http://lower.example:2")
+    p = new_http_client(Options())._proxy_for("https", "api.example.com", 443)
+    assert p is not None and p.host == "upper.example"
+
+
+@pytest.mark.parametrize("value", ["socks5://socks.example:1080", "socks5h://socks.example:1080", "ftp://proxy.example:21"])
+def test_environment_proxy_hallpass_cannot_use_is_an_error_not_a_bypass(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """Going direct would bypass a proxy the environment requires."""
+    for k in ("HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", value)
+    with pytest.raises(TransportError) as ei:
+        new_http_client(Options())._proxy_for("https", "api.example.com", 443)
+    # A configuration problem: not retried, and said as such.
+    assert not httpx._retryable(ei.value)
+    he = classify(ei.value)
+    assert he is not None and he.code == Code.UPSTREAM_ERROR and "proxy set in the environment" in str(he), he
 
 
 def test_tls_server_name(servers: Callable[..., itest.Server]) -> None:
@@ -828,3 +887,148 @@ def test_transport_error_unwraps_to_its_cause(servers: Callable[..., itest.Serve
     c = Client(http=new_http_client(Options(timeout=2.0)), base=srv.url, sleep=_no_sleep)
     err = _err(lambda: c.do(background(), Request(path="/")))
     assert as_error(err, TransportError) is not None and is_error(err, ssl.SSLCertVerificationError), repr(err)
+
+
+class _KeepAlive(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    peers: list[int] = []
+
+    def do_GET(self) -> None:
+        type(self).peers.append(self.client_address[1])
+        body = b'{"ok":true}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+
+def test_keep_alive_connection_is_reused_after_a_content_length_body() -> None:
+    """The second request goes over the first one's connection. On Python
+    3.10 HTTPResponse.read1 left a Content-Length response open after its
+    last byte, and the reused connection then refused the next request
+    (ResponseNotReady) unless the transport closed the response."""
+    handler = type("KA", (_KeepAlive,), {"peers": []})
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        hc = new_http_client(Options(timeout=5.0))
+        url = f"http://127.0.0.1:{srv.server_address[1]}/x"
+        for _ in range(3):
+            resp = hc.send(background(), httpx.PreparedRequest(method="GET", url=url, headers=Headers()))
+            assert resp.status == 200 and resp.body == b'{"ok":true}', resp
+        assert len(handler.peers) == 3 and len(set(handler.peers)) == 1, f"connections used: {handler.peers}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_tunnel_reader_answers_a_zero_byte_read_at_once() -> None:
+    """Python 3.10's HTTPResponse.read1 asks for 0 bytes once a body is
+    complete; through a TLS-in-TLS tunnel that must not wait for data the
+    server will never send."""
+
+    class NoRecv:
+        def recv(self, n: int) -> bytes:
+            raise AssertionError("read1(0) waited for data")
+
+    r = httpx._BufferedReader(NoRecv())  # type: ignore[arg-type]
+    assert r.read1(0) == b""
+
+
+def _https_server(cert_file: str, key_file: str) -> tuple[ThreadingHTTPServer, str]:
+    handler = type("KA2", (_KeepAlive,), {"peers": []})
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    sctx.load_cert_chain(cert_file, key_file)
+    srv.socket = sctx.wrap_socket(srv.socket, server_side=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"https://localhost:{srv.server_address[1]}/x"
+
+
+def test_certificate_naming_the_host_only_in_its_common_name_is_refused(tmp_path: Any) -> None:
+    """As Go: the host must be in the subjectAltName."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "cn-only test CA")])
+    ca = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(hours=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+
+    def leaf(san: bool) -> tuple[str, str]:
+        key = ec.generate_private_key(ec.SECP256R1())
+        b = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")]))
+            .issuer_name(ca_name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(hours=1))
+            .not_valid_after(now + datetime.timedelta(days=1))
+        )
+        if san:
+            b = b.add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
+        cert = b.sign(ca_key, hashes.SHA256())
+        name = "san" if san else "cn"
+        cf, kf = tmp_path / f"{name}.pem", tmp_path / f"{name}.key"
+        cf.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        kf.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        return str(cf), str(kf)
+
+    ca_file = tmp_path / "ca.pem"
+    ca_file.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+    hc = new_http_client(Options(ca_file=str(ca_file), timeout=5.0))
+    for san, ok in ((True, True), (False, False)):
+        srv, url = _https_server(*leaf(san))
+        try:
+            req = httpx.PreparedRequest(method="GET", url=url, headers=Headers())
+            if ok:
+                assert hc.send(background(), req).status == 200
+            else:
+                with pytest.raises(TransportError):
+                    hc.send(background(), req)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
+def test_ca_file_skips_a_block_that_does_not_parse(tmp_path: Any) -> None:
+    """As Go's AppendCertsFromPEM: a broken or foreign block is skipped and
+    the good certificates still count."""
+    ca = itest.test_ca()
+    bad = b"-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n"
+    other = b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"
+    f = tmp_path / "ca.pem"
+    truncated = b"-----BEGIN CERTIFICATE-----\nAAAA\n"  # cut short by the next BEGIN
+    good = ca.ca_pem.replace(b"-----BEGIN CERTIFICATE-----\n", b"-----BEGIN CERTIFICATE-----  \n", 1)  # trailing spaces
+    f.write_bytes(bad + other + b"some text\n" + truncated + good)
+    srv, url = _https_server(ca.cert_file, ca.key_file)
+    try:
+        hc = new_http_client(Options(ca_file=str(f), timeout=5.0))
+        assert hc.send(background(), httpx.PreparedRequest(method="GET", url=url, headers=Headers())).status == 200
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    only_bad = tmp_path / "bad.pem"
+    only_bad.write_bytes(bad + other)
+    with pytest.raises(ValueError, match="no PEM certificates found"):
+        new_http_client(Options(ca_file=str(only_bad), timeout=5.0))

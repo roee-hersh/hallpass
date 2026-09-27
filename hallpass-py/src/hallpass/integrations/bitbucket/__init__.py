@@ -11,7 +11,7 @@ project-default, public and global grants into the effective level, then
 the ref restrictions for @branch questions. Every call is a read with
 hallpass's own token; nothing is written.
 
-A port of internal/integrations/bitbucket.
+A port of v0.5.0:internal/integrations/bitbucket.
 """
 
 from __future__ import annotations

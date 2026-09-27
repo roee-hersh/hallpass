@@ -15,8 +15,11 @@ def anchors(path):
     s=re.sub(r'```.*?```','',s,flags=re.S)
     return {slug(m) for m in re.findall(r'^#+\s+(.*)$',s,re.M)}
 bad=0
-for f in glob.glob('**/*.md',recursive=True):
-    if 'node_modules' in f or f.startswith(('.specs/', 'dist/')): continue
+# '**' skips hidden folders; .github and .claude hold Markdown too (the PR
+# template, the skills).
+files=glob.glob('**/*.md',recursive=True)+glob.glob('.github/**/*.md',recursive=True)+glob.glob('.claude/**/*.md',recursive=True)
+for f in files:
+    if 'node_modules' in f or f.startswith(('.specs/', 'dist/', '.git/')) or '/.venv/' in f: continue
     s=open(f).read()
     s2=re.sub(r'```.*?```','',s,flags=re.S)
     for m in re.finditer(r'\]\(([^)\s]+)\)',s2):

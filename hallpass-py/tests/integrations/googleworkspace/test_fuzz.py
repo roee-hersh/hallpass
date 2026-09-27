@@ -1,4 +1,4 @@
-"""Port of internal/integrations/googleworkspace/fuzz_test.go.
+"""Port of v0.5.0:internal/integrations/googleworkspace/fuzz_test.go.
 
 FuzzParseRef becomes a Hypothesis property with the same invariant; its seed
 corpus (the f.Add seeds; the Go package has no testdata/fuzz files) is

@@ -1,4 +1,4 @@
-"""Port of internal/integration/integration_test.go.
+"""Port of v0.5.0:internal/integration/integration_test.go.
 
 The integration package is split in the port: decision.go is
 hallpass.core.decision, integration.go and registry.go are

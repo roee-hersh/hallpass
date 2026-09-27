@@ -1,4 +1,4 @@
-"""Port of internal/config/config_test.go.
+"""Port of v0.5.0:internal/config/config_test.go.
 
 Go's Parse returns *Error (a YAML syntax error, or an empty file) or Errors
 (every validation problem); here parse raises ConfigError or ConfigErrors,

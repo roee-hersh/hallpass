@@ -112,38 +112,38 @@ upstream:
     status: 401
     json: {error: "Couldn't authenticate you"}
 checks:
-  - {user: admin@example.com, action: account.admin, resource: account, want: allowed}
-  - {user: admin@example.com, action: account.admin, resource: account, connection: zd-oauth, want: allowed}
-  - {user: dana@example.com, action: account.admin, resource: account, want: denied}
-  - {user: dana@example.com, action: ticket.view, resource: "ticket:1", want: allowed}
-  - {user: dana@example.com, action: ticket.view, resource: "ticket:2", want: denied}
-  - {user: dana@example.com, action: ticket.view, resource: "ticket:5", want: unsupported}
-  - {user: dana@example.com, action: ticket.edit, resource: "ticket:1", want: allowed}
-  - {user: dana@example.com, action: ticket.delete, resource: "ticket:1", want: denied}
-  - {user: dana@example.com, action: ticket.merge, resource: "ticket:1", want: allowed}
-  - {user: dana@example.com, action: view.manage, resource: account, want: allowed}
-  - {user: dana@example.com, action: macro.manage, resource: account, want: denied}
-  - {user: dana@example.com, action: user.edit, resource: "user:20", want: allowed}
-  - {user: dana@example.com, action: user.edit, resource: "user:10", want: denied}
-  - {user: dana@example.com, action: organization.edit, resource: "organization:500", want: denied}
-  - {user: sara@example.com, action: ticket.view, resource: "ticket:2", want: allowed}
-  - {user: sara@example.com, action: ticket.delete, resource: "ticket:2", want: unsupported}
-  - {user: sara@example.com, action: user.edit, resource: "user:20", want: denied}
-  - {user: admin@example.com, action: ticket.edit, resource: "ticket:3", want: denied}
-  - {user: admin@example.com, action: ticket.delete, resource: "ticket:3", want: allowed}
-  - {user: admin@example.com, action: ticket.view, resource: "ticket:7", want: resource_not_visible}
-  - {user: admin@example.com, action: ticket.view, resource: "ticket:404", want: resource_not_visible}
-  - {user: admin@example.com, action: organization.edit, resource: "organization:500", want: allowed}
-  - {user: admin@example.com, action: organization.edit, resource: "organization:9", want: resource_not_visible}
-  - {user: end@example.com, action: ticket.view, resource: "ticket:1", want: allowed}
-  - {user: end@example.com, action: ticket.comment_public, resource: "ticket:2", want: denied}
-  - {user: end@example.com, action: user.edit, resource: "user:20", want: allowed}
-  - {user: gone@example.com, action: ticket.view, resource: "ticket:1", want: denied}
-  - {user: susp@example.com, action: ticket.view, resource: "ticket:1", want: denied}
-  - {user: weird@example.com, action: ticket.view, resource: "ticket:1", want: unsupported}
-  - {user: ghost@example.com, action: account.admin, resource: account, want: user_not_found}
-  - {user: dup@example.com, action: account.admin, resource: account, want: user_ambiguous}
-  - {user: admin@example.com, action: ticket.view, resource: "ticket:012", want: invalid_request}
-  - {user: admin@example.com, action: ticket.view, resource: "organization:500", want: invalid_request}
-  - {user: admin@example.com, action: account.admin, resource: account, connection: zd-broken, want: upstream_error}
-  - {user: admin@example.com, action: account.admin, resource: account, connection: zd-rejected, want: credential_rejected}
+  - {user: admin@example.com, action: account.admin, resource: account, want: allowed, reason: "allowed: admin@example.com is an administrator"}
+  - {user: admin@example.com, action: account.admin, resource: account, connection: zd-oauth, want: allowed, reason: "allowed: admin@example.com is an administrator"}
+  - {user: dana@example.com, action: account.admin, resource: account, want: denied, reason: "denied: dana@example.com is an custom role Tier 1, not an administrator"}
+  - {user: dana@example.com, action: ticket.view, resource: "ticket:1", want: allowed, reason: "allowed: the ticket is in group 300, one of dana@example.com's groups"}
+  - {user: dana@example.com, action: ticket.view, resource: "ticket:2", want: denied, reason: "denied: dana@example.com (custom role Tier 1) sees tickets of their groups only and the ticket is in group 301"}
+  - {user: dana@example.com, action: ticket.view, resource: "ticket:5", want: unsupported, reason: "unsupported: the ticket is in no group and dana@example.com (custom role Tier 1) sees tickets of their groups; whether unassigned tickets are visible depends on views hallpass does not read"}
+  - {user: dana@example.com, action: ticket.edit, resource: "ticket:1", want: allowed, reason: "allowed: dana@example.com (custom role Tier 1) may change the ticket's properties: status, assignee, fields and can see ticket 1 (the ticket is in group 300, one of dana@example.com's groups)"}
+  - {user: dana@example.com, action: ticket.delete, resource: "ticket:1", want: denied, reason: "denied: dana@example.com (custom role Tier 1) may not delete the ticket"}
+  - {user: dana@example.com, action: ticket.merge, resource: "ticket:1", want: allowed, reason: "allowed: dana@example.com (custom role Tier 1) may merge the ticket into another and can see ticket 1 (the ticket is in group 300, one of dana@example.com's groups)"}
+  - {user: dana@example.com, action: view.manage, resource: account, want: allowed, reason: "allowed: dana@example.com (custom role Tier 1) may create and change shared views"}
+  - {user: dana@example.com, action: macro.manage, resource: account, want: denied, reason: "denied: dana@example.com (custom role Tier 1) may not create and change shared macros"}
+  - {user: dana@example.com, action: user.edit, resource: "user:20", want: allowed, reason: "allowed: dana@example.com (custom role Tier 1) may edit end-user profiles"}
+  - {user: dana@example.com, action: user.edit, resource: "user:10", want: denied, reason: "denied: user 10 is a team member (admin) and only administrators edit other team members"}
+  - {user: dana@example.com, action: organization.edit, resource: "organization:500", want: denied, reason: "denied: dana@example.com (custom role Tier 1) may not add or change organizations"}
+  - {user: sara@example.com, action: ticket.view, resource: "ticket:2", want: allowed, reason: "allowed: the ticket is in group 301, one of sara@example.com's groups"}
+  - {user: sara@example.com, action: ticket.delete, resource: "ticket:2", want: unsupported, reason: "unsupported: whether sara@example.com (agent) may delete the ticket is an account setting Zendesk does not expose on plans without custom roles"}
+  - {user: sara@example.com, action: user.edit, resource: "user:20", want: denied, reason: "denied: sara@example.com (agent) may only view end-user profiles"}
+  - {user: admin@example.com, action: ticket.edit, resource: "ticket:3", want: denied, reason: "denied: ticket 3 is closed; closed tickets take no comments, merges or property changes"}
+  - {user: admin@example.com, action: ticket.delete, resource: "ticket:3", want: allowed, reason: "allowed: admin@example.com is an administrator, who may delete the ticket"}
+  - {user: admin@example.com, action: ticket.view, resource: "ticket:7", want: resource_not_visible, reason: "resource_not_visible: hallpass's Zendesk user may not see ticket 7 (HTTP 403); use an administrator"}
+  - {user: admin@example.com, action: ticket.view, resource: "ticket:404", want: resource_not_visible, reason: "resource_not_visible: ticket 404 does not exist or hallpass cannot see it"}
+  - {user: admin@example.com, action: organization.edit, resource: "organization:500", want: allowed, reason: "allowed: admin@example.com is an administrator, who may add or change organizations"}
+  - {user: admin@example.com, action: organization.edit, resource: "organization:9", want: resource_not_visible, reason: "resource_not_visible: organization 9 does not exist or hallpass cannot see it"}
+  - {user: end@example.com, action: ticket.view, resource: "ticket:1", want: allowed, reason: "allowed: end@example.com requested the ticket"}
+  - {user: end@example.com, action: ticket.comment_public, resource: "ticket:2", want: denied, reason: "denied: end@example.com did not request the ticket and is not a collaborator on it"}
+  - {user: end@example.com, action: user.edit, resource: "user:20", want: allowed, reason: "allowed: end@example.com may edit their own profile"}
+  - {user: gone@example.com, action: ticket.view, resource: "ticket:1", want: denied, reason: "denied: gone@example.com is deleted in Zendesk"}
+  - {user: susp@example.com, action: ticket.view, resource: "ticket:1", want: denied, reason: "denied: susp@example.com is suspended in Zendesk"}
+  - {user: weird@example.com, action: ticket.view, resource: "ticket:1", want: unsupported, reason: "unsupported: weird@example.com has role \"owner\", which hallpass does not know"}
+  - {user: ghost@example.com, action: account.admin, resource: account, want: user_not_found, reason: "user_not_found: no Zendesk user has email ghost@example.com"}
+  - {user: dup@example.com, action: account.admin, resource: account, want: user_ambiguous, reason: "user_ambiguous: 2 Zendesk users have email dup@example.com"}
+  - {user: admin@example.com, action: ticket.view, resource: "ticket:012", want: invalid_request, reason: "invalid_request: ticket: id must be a positive Zendesk id in plain decimal"}
+  - {user: admin@example.com, action: ticket.view, resource: "organization:500", want: invalid_request, reason: "invalid_request: action ticket.view takes a ticket: resource, not organization:"}
+  - {user: admin@example.com, action: account.admin, resource: account, connection: zd-broken, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: admin@example.com, action: account.admin, resource: account, connection: zd-rejected, want: credential_rejected, reason: "credential_rejected: Zendesk rejected hallpass's credential"}

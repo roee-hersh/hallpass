@@ -12,6 +12,7 @@ import base64
 import email.utils
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 import random
@@ -30,7 +31,7 @@ from hallpass.core import evidence
 from hallpass.core.context import Context, DeadlineExceeded, context_ended
 from hallpass.core.decision import Code, HallpassError, wrap_error
 from hallpass.core.errors import JoinedError, as_error, is_error
-from hallpass.core.integration import DEFAULT_TIMEOUT, is_loopback_host
+from hallpass.core.integration import DEFAULT_TIMEOUT
 from hallpass.core.log import Logger
 
 __all__ = [
@@ -155,6 +156,11 @@ class TransportError(Exception):
         return any(isinstance(e, (socket.timeout, TimeoutError)) and not isinstance(e, DeadlineExceeded) for e in _chain_all(self.err))
 
 
+class ProxyConfigError(TransportError):
+    """The proxy the environment names cannot be used. A configuration
+    problem, so never retried."""
+
+
 def _chain_all(err: BaseException) -> Iterable[BaseException]:
     from hallpass.core.errors import chain
 
@@ -232,12 +238,59 @@ class RawResponse:
     body: bytes
 
 
+_PEM_BEGIN = re.compile(rb"-----BEGIN ([^-\r\n]*)-----")
+
+
+def _pem_blocks(pem: bytes) -> list[tuple[bytes, list[bytes]]]:
+    """(type, body lines) of each complete PEM block, read as Go's
+    pem.Decode reads them: a BEGIN line (trailing whitespace allowed) up to
+    its END line; a block cut short by another BEGIN line is dropped and
+    reading resumes at that line."""
+    out: list[tuple[bytes, list[bytes]]] = []
+    label: bytes | None = None
+    body: list[bytes] = []
+    for raw in pem.splitlines():
+        line = raw.rstrip()
+        m = _PEM_BEGIN.fullmatch(line)
+        if m:
+            label, body = m.group(1), []
+            continue
+        if label is None:
+            continue
+        if line == b"-----END " + label + b"-----":
+            out.append((label, body))
+            label = None
+            continue
+        body.append(line)
+    return out
+
+
+def _load_pem_certificates(ctx: ssl.SSLContext, pem: bytes) -> int:
+    """Add each CERTIFICATE block of pem to ctx and return how many were
+    added. As Go's CertPool.AppendCertsFromPEM: other block types, blocks
+    with headers and blocks that do not parse are skipped, not fatal."""
+    n = 0
+    for label, body in _pem_blocks(pem):
+        if label != b"CERTIFICATE" or (body and b":" in body[0]):
+            continue
+        try:
+            der = base64.b64decode(b"".join(b"".join(body).split()), validate=True)
+            ctx.load_verify_locations(cadata=der)
+        except (ValueError, ssl.SSLError):
+            continue
+        n += 1
+    return n
+
+
 def _make_ssl_context(o: Options) -> ssl.SSLContext:
     if o.ssl_context is not None:
         return o.ssl_context
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = True
+    # The name must be in the subjectAltName, as Go requires; a certificate
+    # that names the host only in its Common Name is refused.
+    ctx.hostname_checks_common_name = False
     ctx.verify_mode = ssl.CERT_REQUIRED
     if o.ca_file:
         try:
@@ -245,10 +298,8 @@ def _make_ssl_context(o: Options) -> ssl.SSLContext:
                 pem = f.read()
         except OSError as e:
             raise ValueError(f"ca_file: open {o.ca_file}: {e.strerror or e}") from None
-        try:
-            ctx.load_verify_locations(cadata=pem.decode("ascii", "replace"))
-        except (ssl.SSLError, ValueError):
-            raise ValueError(f"ca_file {o.ca_file}: no PEM certificates found") from None
+        if _load_pem_certificates(ctx, pem) == 0:
+            raise ValueError(f"ca_file {o.ca_file}: no PEM certificates found")
     else:
         ctx.load_default_certs(ssl.Purpose.SERVER_AUTH)
         cafile = os.environ.get("SSL_CERT_FILE")
@@ -280,6 +331,74 @@ def _parse_proxy(raw: str) -> _Proxy:
     return _Proxy(u.scheme, u.hostname, port, auth)
 
 
+def _env_any(*names: str) -> str:
+    """The first of the variables that is set and not empty, as Go's
+    httpproxy reads HTTPS_PROXY before https_proxy."""
+    for n in names:
+        v = os.environ.get(n, "")
+        if v:
+            return v
+    return ""
+
+
+def _use_proxy(host: str, port: int, no_proxy: str) -> bool:
+    """Go's httpproxy useProxy: never for localhost or a loopback address;
+    NO_PROXY entries are "*", IP addresses and CIDR ranges, host or
+    [IPv6]:port pairs, and domains ("example.com" matches it and its
+    subdomains, ".example.com" and "*.example.com" only the subdomains)."""
+    host = host.strip().lower().strip("[]")
+    if host == "" or host == "localhost":
+        return host != "localhost"
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address | None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and (ip.is_loopback or (isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None and ip.ipv4_mapped.is_loopback)):
+        return False
+    sport = str(port)
+    for entry in no_proxy.split(","):
+        p = entry.strip().lower()
+        if p == "":
+            continue
+        if p == "*":
+            return False
+        try:
+            net = ipaddress.ip_network(p, strict=False) if "/" in p else None
+        except ValueError:
+            net = None
+        if net is not None:
+            # As Go's IPNet.Contains, an IPv4-mapped IPv6 host is matched
+            # against IPv4 ranges.
+            cand = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None and net.version == 4 else ip
+            if cand is not None and cand.version == net.version and cand in net:
+                return False
+            continue
+        phost, pport = p, ""
+        m = re.fullmatch(r"\[([^\]]*)\]:(\d*)|([^:\[\]]*):(\d*)", p)
+        if m:
+            phost, pport = (m.group(1), m.group(2)) if m.group(1) is not None else (m.group(3), m.group(4))
+            if phost == "":
+                continue
+        phost = phost.strip("[]")
+        try:
+            pip = ipaddress.ip_address(phost)
+        except ValueError:
+            pip = None
+        if pip is not None:
+            if ip is not None and pip == ip and pport in ("", sport):
+                return False
+            continue
+        if phost.startswith("*."):
+            phost = phost[1:]
+        match_host = not phost.startswith(".")
+        if match_host:
+            phost = "." + phost
+        if (host.endswith(phost) or (match_host and host == phost[1:])) and pport in ("", sport):
+            return False
+    return True
+
+
 class _PooledConn:
     __slots__ = ("conn", "used")
 
@@ -301,28 +420,29 @@ class Transport:
         self.connect_timeout = min(_CONNECT_TIMEOUT_CAP, self.timeout)
         self.ssl_context = _make_ssl_context(o)
         self._proxy: _Proxy | None = _parse_proxy(o.proxy_url) if o.proxy_url else None
+        # The environment's proxy settings, read once as Go reads them once.
+        self._env_proxy = {"https": _env_any("HTTPS_PROXY", "https_proxy"), "http": _env_any("HTTP_PROXY", "http_proxy")}
+        self._env_no_proxy = _env_any("NO_PROXY", "no_proxy")
         self._lock = threading.Lock()
         self._idle: dict[tuple[str, str, int, str], list[http.client.HTTPConnection]] = {}
 
     # -- proxy selection --
 
-    def _proxy_for(self, scheme: str, host: str) -> _Proxy | None:
+    def _proxy_for(self, scheme: str, host: str, port: int) -> _Proxy | None:
         if self._proxy is not None:
             return self._proxy
-        # The environment, as Go's ProxyFromEnvironment reads it: never for
-        # loopback, honouring NO_PROXY.
-        if is_loopback_host(host):
+        # The environment, as Go's ProxyFromEnvironment reads it.
+        raw = self._env_proxy.get(scheme, "")
+        if not raw or not _use_proxy(host, port, self._env_no_proxy):
             return None
-        env = urllib.request.getproxies_environment()
-        raw = env.get(scheme)
-        if not raw:
-            return None
-        if urllib.request.proxy_bypass_environment(host, env):  # type: ignore[attr-defined]
-            return None
+        if "://" in raw and raw.split("://", 1)[0].lower() in ("socks5", "socks5h"):
+            # Go dials through it; going direct instead would bypass a proxy
+            # the environment requires.
+            raise ProxyConfigError(ValueError(f"the {scheme} proxy from the environment is a SOCKS proxy, which hallpass does not support"))
         try:
             return _parse_proxy(raw)
-        except ValueError:
-            return None
+        except ValueError as e:
+            raise ProxyConfigError(ValueError(f"the {scheme} proxy from the environment is not usable: {e}")) from None
 
     # -- connections --
 
@@ -376,7 +496,7 @@ class Transport:
             port = u.port or (443 if scheme == "https" else 80)
         except ValueError as e:
             raise TransportError(e) from e
-        proxy = self._proxy_for(scheme, host)
+        proxy = self._proxy_for(scheme, host, port)
         deadline = time.monotonic() + self.timeout
         cd = ctx.deadline()
         if cd is not None:
@@ -1128,7 +1248,7 @@ def _retryable(err: BaseException) -> bool:
     se = as_error(err, StatusError)
     if se is not None:
         return se.status in (429, 502, 503, 504)
-    if context_ended(err) or is_error(err, BodyTooLarge):
+    if context_ended(err) or is_error(err, BodyTooLarge) or as_error(err, ProxyConfigError) is not None:
         return False
     te = as_error(err, TransportError)
     if te is not None:
@@ -1215,6 +1335,9 @@ def classify(err: BaseException | None) -> HallpassError | None:
         return wrap_error(Code.UPSTREAM_ERROR, err, f"upstream returned HTTP {se.status}")
     if is_error(err, BodyTooLarge):
         return wrap_error(Code.UPSTREAM_ERROR, err, "upstream response too large")
+    pe = as_error(err, ProxyConfigError)
+    if pe is not None:
+        return wrap_error(Code.UPSTREAM_ERROR, err, "the proxy set in the environment cannot be used")
     te = as_error(err, TransportError)
     if te is not None:
         if te.timeout():

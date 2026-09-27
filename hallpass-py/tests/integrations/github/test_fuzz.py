@@ -1,4 +1,4 @@
-"""Port of internal/integrations/github/fuzz_test.go.
+"""Port of v0.5.0:internal/integrations/github/fuzz_test.go.
 
 FuzzParseTarget becomes a Hypothesis property with the same invariants; its
 seed corpus (the f.Add seeds; the Go package has no testdata/fuzz files) is

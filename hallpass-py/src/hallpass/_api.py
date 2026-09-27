@@ -19,7 +19,6 @@ import datetime
 import functools
 import http.client
 import inspect
-import ipaddress
 import json
 import logging
 import os
@@ -282,8 +281,10 @@ class _Remote(_Backend):
             raise ValueError("hallpass API key missing: pass api_key or set HALLPASS_API_KEY")
         self.timeout = timeout
         handlers: list[urllib.request.BaseHandler] = [_NoRedirect()]
+        from hallpass.core.integration import is_loopback_host
+
         host = urllib.parse.urlsplit(self.url).hostname or ""
-        if host == "localhost" or _is_loopback_ip(host):
+        if is_loopback_host(host):
             # Never through a proxy: the API key would travel to it, and Go's
             # proxy selection skips loopback too.
             handlers.append(urllib.request.ProxyHandler({}))
@@ -307,11 +308,11 @@ class _Remote(_Backend):
                 },
             )
             with self._opener.open(req, timeout=self.timeout) as resp:
-                return _parse(resp.status, resp.read())
+                return _parse(resp.status, resp.read(_MAX_RESPONSE + 1))
         except urllib.error.HTTPError as e:
             # 400 and 401 still carry a decision body; anything else is unusable.
             try:
-                raw = e.read()
+                raw = e.read(_MAX_RESPONSE + 1)
             except (OSError, http.client.HTTPException):
                 raw = b""
             return _parse(e.code, raw)
@@ -332,21 +333,11 @@ def _validate_url(url: str) -> str:
     if u.scheme == "https" and u.hostname:
         return url.rstrip("/")
     if u.scheme == "http" and u.hostname:
-        host = u.hostname
-        try:
-            loopback = ipaddress.ip_address(host).is_loopback
-        except ValueError:
-            loopback = host == "localhost"
-        if loopback:
+        from hallpass.core.integration import is_loopback_host
+
+        if is_loopback_host(u.hostname):
             return url.rstrip("/")
     raise ValueError(f"hallpass url {url!r} must start with https:// (http:// only for localhost)")
-
-
-def _is_loopback_ip(host: str) -> bool:
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
 
 
 def _group_list(groups: Iterable[str]) -> list[str]:
@@ -367,7 +358,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+# A decision is a few hundred bytes; a body past this is not one.
+_MAX_RESPONSE = 1 << 20
+
+
 def _parse(status: int, raw: bytes) -> Decision:
+    if len(raw) > _MAX_RESPONSE:
+        return Decision(UNKNOWN, f"client_error: response larger than {_MAX_RESPONSE} bytes (HTTP {status})", status)
     try:
         data = json.loads(raw)
         decision, reason = data["decision"], str(data.get("reason", ""))

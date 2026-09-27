@@ -1,4 +1,4 @@
-"""Port of internal/integrations/jira/jira_test.go."""
+"""Port of v0.5.0:internal/integrations/jira/jira_test.go."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+import hallpass.integrations.jira.jira as jira_mod
 from hallpass.core.context import background
 from hallpass.core.decision import Code, Decision, to_decision
 from hallpass.core.integration import Connection, User, validate_fields
@@ -115,6 +116,11 @@ class FakeJira:
                 return
             path = path.removeprefix(prefix)
         if not self.authorized(r):
+            if path == "/rest/api/3/user/search":
+                # Atlassian answers a credential it does not accept as an
+                # anonymous caller here: 200 and no users.
+                write_json(w, 200, [])
+                return
             write_json(w, 401, {"errorMessages": ["unauthorized " + itest.CANARY]})
             return
         if path == "/rest/api/3/user/search":
@@ -904,3 +910,33 @@ def test_action_BULK_CHANGE_allow(setup: Setup) -> None:
 
 def test_action_BULK_CHANGE_deny(setup: Setup) -> None:
     global_deny(setup, "BULK_CHANGE")
+
+
+def test_rejected_credential_is_not_user_not_found(setup: Setup) -> None:
+    """Atlassian answers the user search with a credential it does not
+    accept as an anonymous caller: 200 and no users. That is a rejected
+    credential, never "no such user" (which would be a deny, and cached)."""
+    _, _, c = setup(MODE_BASIC, {}, None)
+    ok = resolve_err(c, User(email="nobody@example.com"))
+    itest.expect_code(ok, Code.USER_NOT_FOUND)
+
+    srv, _, c = setup(MODE_BASIC, {"username": "someone-else@example.com"}, None)
+    d = resolve_err(c, User(email="nobody@example.com"))
+    itest.expect_code(d, Code.CREDENTIAL_REJECTED)
+    assert any(call.path == "/rest/api/3/myself" for call in srv.calls()), "the credential was not confirmed"
+
+
+def test_confirmed_credential_is_trusted_for_a_while(setup: Setup, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(jira_mod, "_clock", lambda: clock[0])
+    srv, _, c = setup(MODE_BASIC, {}, None)
+
+    def confirmations() -> int:
+        return sum(call.path == "/rest/api/3/myself" for call in srv.calls())
+
+    for _ in range(3):
+        itest.expect_code(resolve_err(c, User(email="nobody@example.com")), Code.USER_NOT_FOUND)
+    assert confirmations() == 1, [call.path for call in srv.calls()]
+    clock[0] += jira_mod.AUTH_CONFIRM_TTL + 1
+    itest.expect_code(resolve_err(c, User(email="nobody@example.com")), Code.USER_NOT_FOUND)
+    assert confirmations() == 2

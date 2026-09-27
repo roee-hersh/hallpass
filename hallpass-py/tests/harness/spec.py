@@ -9,7 +9,7 @@ protocols) and GraphQL schemas in SDL form (see graphql.py). Descriptions
 are loaded from $HALLPASS_SPECS_DIR/<name>.spec; when the directory or
 file is absent validation is skipped and the test says so once.
 
-A port of internal/integration/itest/spec.go and Server.validate in
+A port of v0.5.0:internal/integration/itest/spec.go and Server.validate in
 itest.go. Go's ``error`` returns become a raised SpecError; the server
 hook validate_request turns one into the message the Go harness reports.
 """

@@ -1,4 +1,4 @@
-"""Port of internal/integrations/all/all_test.go."""
+"""Port of v0.5.0:internal/integrations/all/all_test.go."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def module_funcs(files: list[Path]) -> set[str]:
     test_action_DELETE_ISSUES_allow or test_action_delete_issues_allow."""
     out: set[str] = set()
     for f in files:
-        tree = ast.parse(f.read_text(), str(f))
+        tree = ast.parse(f.read_text(encoding="utf-8"), str(f))
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 out.add(node.name.lower())

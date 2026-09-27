@@ -13,7 +13,7 @@ permissions:
 jobs:
   hallpass-py:
     # The engine: lint, types and the whole suite on the oldest and newest
-    # Python it supports, on Linux and Windows; then the built wheels,
+    # Python it supports, on Linux and Windows; then the built wheel,
     # installed into a clean environment, tested from outside the checkout.
     strategy:
       fail-fast: false
@@ -48,8 +48,9 @@ jobs:
           python -m venv /tmp/clean
           /tmp/clean/bin/pip install --quiet "$(ls /tmp/dist/hallpass-*.whl)[crypto]" pytest pytest-timeout hypothesis
           # The tests import each other as the package "tests", so they
-          # keep that name, in a directory with no copy of the source.
-          mkdir /tmp/wheel && cp -r tests /tmp/wheel/tests
+          # keep that name, in a directory with no copy of the source;
+          # pyproject.toml comes along for the pytest settings (timeout).
+          mkdir /tmp/wheel && cp -r tests pyproject.toml /tmp/wheel/
           (cd /tmp/wheel && HALLPASS_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m pytest -q -p no:cacheprovider --rootdir /tmp/wheel tests)
 
   specs:
@@ -157,7 +158,7 @@ jobs:
           cd /tmp/consumer
           npm init -y > /dev/null
           npm install --no-audit --no-fund ./hallpass-client-*.tgz
-          HALLPASS_SDK_PACKED=1 node --test package.test.mjs
+          HALLPASS_TS_PACKED=1 node --test package.test.mjs
       - name: agent examples (TypeScript)
         if: matrix.node == 22
         working-directory: examples/agent-ts

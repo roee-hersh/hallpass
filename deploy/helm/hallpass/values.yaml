@@ -12,7 +12,9 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/roee-hersh/hallpass
-  pullPolicy: IfNotPresent
+  # Empty leaves it to Kubernetes: Always for :latest (the tag of a chart
+  # installed from a clone), IfNotPresent for a version tag.
+  pullPolicy: ""
   # Defaults to the chart's appVersion.
   tag: ""
   # Pin by digest instead, e.g. "sha256:...". Takes precedence over tag.
@@ -139,10 +141,10 @@ service:
 resources: {}
   # limits:
   #   cpu: 500m
-  #   memory: 128Mi
+  #   memory: 256Mi
   # requests:
   #   cpu: 50m
-  #   memory: 32Mi
+  #   memory: 64Mi
 
 livenessProbe:
   httpGet:

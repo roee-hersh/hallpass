@@ -8,7 +8,7 @@ release (03:00 UTC), so merge only complete, working changes.
 1. Run `/code-review main high` on the diff and fix every finding.
 2. Run `/security-review` and fix every finding.
 3. Run the local checks, after the review fixes, and get them clean
-   (in `hallpass-py/`, with `pip install -e ".[crypto]" pytest pytest-timeout hypothesis ruff mypy types-PyYAML`):
+   (in `hallpass-py/`, with `pip install -e ".[crypto]" pytest pytest-timeout hypothesis ruff mypy types-PyYAML build`):
    - `ruff format --check src tests examples`, `ruff check src tests examples`,
      `mypy --strict src/hallpass`, `python -m pytest -q`
    - when an integration or `tests/harness` changed: fetch the API descriptions with

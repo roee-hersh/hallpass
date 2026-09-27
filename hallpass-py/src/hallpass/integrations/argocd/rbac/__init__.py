@@ -22,7 +22,7 @@ from hallpass.core.errors import go_quote, go_trim_space
 
 from .builtin import BUILTIN_POLICY_CSV
 from .glob import glob_match
-from .re2 import RE2Error, compile_re2
+from .re2 import RE2Error, RE2Unsupported, compile_re2
 
 __all__ = [
     "ACTION_ACTION",
@@ -107,6 +107,15 @@ DEFAULT_SCOPES = ("groups",)
 
 # Casbin's default role hierarchy limit.
 MAX_ROLE_DEPTH = 10
+
+
+class UnsupportedPattern(Exception):
+    """A rule that could apply uses a regex this implementation cannot
+    evaluate; the enforcer cannot answer."""
+
+    def __init__(self, pattern: str, why: str) -> None:
+        super().__init__(f"pattern {go_quote(pattern)}: {why}")
+        self.pattern = pattern
 
 
 class PolicyError(ValueError):
@@ -306,7 +315,7 @@ class Enforcer:
         self.link_subs: set[str] = set()
         self.match_mode = REGEX_MATCH_MODE if o.match_mode == REGEX_MATCH_MODE else GLOB_MATCH_MODE
         self.default_role = o.default_role
-        self._regexes: dict[str, re.Pattern[str] | None] = {}
+        self._regexes: dict[str, re.Pattern[str] | RE2Unsupported | None] = {}
         self._regex_lock = threading.Lock()
         for text in (o.builtin, o.user, o.runtime):
             p = parse_policy(text)
@@ -349,16 +358,21 @@ class Enforcer:
     def _regex_match(self, val: str, pattern: str) -> bool:
         """Casbin's RegexMatch: regexp.MatchString(pattern, val), unanchored,
         in Go's RE2 syntax. An invalid pattern never matches (Casbin panics,
-        and Argo CD's enforce treats the resulting error as false)."""
+        and Argo CD's enforce treats the resulting error as false); a valid
+        one this translation cannot express raises UnsupportedPattern."""
         with self._regex_lock:
             if pattern in self._regexes:
                 rx = self._regexes[pattern]
             else:
                 try:
                     rx = compile_re2(pattern)
+                except RE2Unsupported as e:
+                    rx = e
                 except RE2Error:
                     rx = None
                 self._regexes[pattern] = rx
+        if isinstance(rx, RE2Unsupported):
+            raise UnsupportedPattern(pattern, str(rx))
         return rx is not None and rx.search(val) is not None
 
     def _enforce_raw(self, sub: str, res: str, act: str, obj: str) -> bool:

@@ -1,4 +1,4 @@
-"""Port of internal/integrations/slack/fuzz_test.go.
+"""Port of v0.5.0:internal/integrations/slack/fuzz_test.go.
 
 FuzzValidateResource becomes a Hypothesis property with the same invariant;
 its seed corpus (the f.Add seeds; the Go package has no testdata/fuzz files)

@@ -150,54 +150,54 @@ upstream:
     status: 500
     json: {kind: Status, message: internal error, code: 500}
 checks:
-  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:dev/web", connection: argo, want: allowed}
-  - {user: dev@example.com, groups: [developers], action: logs.get, resource: "applications:dev/web", connection: argo, want: allowed}
-  - {user: dev@example.com, groups: [developers], action: app.delete, resource: "applications:dev/web", connection: argo, want: denied}
-  - {user: dev@example.com, groups: [developers], action: app.rollback, resource: "applications:dev/web", connection: argo, want: allowed}
-  - {user: sre@example.com, groups: [sre], action: app.delete, resource: "applications:prod/web", connection: argo, want: denied}
-  - {user: sre@example.com, groups: [sre, developers], action: app.delete, resource: "applications:dev/web", connection: argo, want: allowed}
-  - {user: sre@example.com, groups: [sre], action: cluster.get, resource: "clusters:https://kubernetes.default.svc", connection: argo, want: allowed}
-  - {user: sre@example.com, groups: [sre], action: repo.update, resource: "repositories:https://github.com/acme/api.git", connection: argo, want: allowed}
-  - {user: sre@example.com, groups: [sre], action: repo.update, resource: "repositories:https://gitlab.com/acme/api.git", connection: argo, want: denied}
-  - {user: sre@example.com, groups: [sre], action: "app.update/apps/Deployment/default/web", resource: "applications:dev/web", connection: argo, want: allowed}
-  - {user: sre@example.com, groups: [sre], action: "app.update/apps/StatefulSet/default/db", resource: "applications:dev/web", connection: argo, want: allowed}
-  - {user: sre@example.com, groups: [sre], action: "app.action/apps/Deployment/restart", resource: "applications:dev/web", connection: argo, want: allowed}
-  - {user: sre@example.com, groups: [sre], action: "app.delete//Pod/default/web-0", resource: "applications:prod/web", connection: argo, want: allowed}
-  - {user: dev@example.com, groups: [developers], action: "app.delete//Pod/default/web-0", resource: "applications:dev/web", connection: argo, want: denied}
-  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:broken/x", connection: argo, want: allowed}
-  - {user: dana@example.com, action: app.sync, resource: "applications:prod/web", connection: argo, want: allowed}
-  - {user: dana@example.com, action: app.sync, resource: "applications:prod/web", connection: argo-email, want: allowed}
-  - {user: nobody@example.com, action: app.get, resource: "applications:dev/web", connection: argo, want: denied}
-  - {user: nobody@example.com, action: app.get, resource: "applications:dev/web", connection: argo-email, want: denied}
-  - {user: a@example.com, groups: [team-a-devs], action: app.sync, resource: "applications:team-a/api", connection: argo, want: allowed}
-  - {user: a@example.com, groups: [team-a-devs], action: project.get, resource: "projects:team-a", connection: argo, want: allowed}
-  - {user: a@example.com, groups: [team-a-devs], action: app.sync, resource: "applications:dev/api", connection: argo, want: denied}
-  - {user: x@example.com, groups: [admins], action: exec.create, resource: "exec:prod/web", connection: argo, want: allowed}
-  - {user: x@example.com, groups: [admins], action: extension.invoke, resource: "extensions:metrics", connection: argo, want: denied}
-  - {user: x@example.com, groups: [admins], action: gpgkey.create, resource: "gpgkeys:ABCD", connection: argo, want: allowed}
-  - {user: x@example.com, groups: [admins], action: writerepo.delete, resource: "write_repositories:https://github.com/acme/api", connection: argo, want: allowed}
-  - {user: dev@example.com, groups: [developers], action: app.get, resource: "projects:dev", connection: argo, want: invalid_request}
-  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:noslash", connection: argo, want: invalid_request}
-  - {user: dev@example.com, groups: [developers], action: app.get, resource: "things:dev/web", connection: argo, want: invalid_request}
-  - {user: dev@example.com, groups: [developers], action: project.get, resource: "projects:", connection: argo, want: invalid_request}
-  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:dev/we b", connection: argo, want: invalid_request}
-  - {user: dev@example.com, groups: [developers], action: app.frobnicate, resource: "applications:dev/web", connection: argo, want: unknown_action}
-  - {user: dev@example.com, groups: [developers], action: "app.action/apps/Deployment/", resource: "applications:dev/web", connection: argo, want: unknown_action}
-  - {user: sre@example.com, groups: [sre], action: "app.delete/apps/StatefulSet/default/db", resource: "applications:dev/web", connection: argo-legacy, want: allowed}
-  - {user: sre@example.com, groups: [sre], action: "app.delete/apps/StatefulSet/default/db", resource: "applications:prod/web", connection: argo-legacy, want: denied}
-  - {user: sre@example.com, groups: [sre], action: app.rollback, resource: "applications:dev/web", connection: argo-legacy, want: denied}
-  - {user: s@example.com, groups: [syncers], action: app.sync, resource: "applications:prod/web", connection: argo-legacy, want: allowed}
-  - {user: nobody@example.com, action: app.get, resource: "applications:prod/web", connection: argo-legacy, want: allowed}
-  - {user: nobody@example.com, action: app.sync, resource: "applications:prod/web", connection: argo-legacy, want: denied}
-  - {user: dana@example.com, action: project.update, resource: "projects:dev", connection: argo-users, want: unsupported}
-  - {user: dana@example.com, action: project.update, resource: "projects:dev", connection: argo-users-email, want: allowed}
-  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:dev/web", connection: argo-users, want: allowed}
-  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:staging/web", connection: argo-regex, want: allowed}
-  - {user: dev@example.com, groups: [developers], action: app.sync, resource: "applications:prod/web", connection: argo-regex, want: denied}
-  - {user: dev@example.com, groups: [developers], action: cluster.get, resource: "clusters:https://k8s-eu.example.com", connection: argo-regex, want: allowed}
-  - {user: dev@example.com, groups: [developers], action: cluster.get, resource: "clusters:https://k8s-eu-example.com", connection: argo-regex, want: denied}
-  - {user: b@example.com, groups: [bad], action: app.get, resource: "applications:dev/(", connection: argo-regex, want: denied}
-  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:dev/web", connection: argo-invalid, want: unsupported}
-  - {user: admin@example.com, action: app.get, resource: "applications:a/b", connection: argo-empty, want: denied}
-  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:dev/web", connection: argo-forbidden, want: credential_rejected}
-  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:dev/web", connection: argo-broken, want: upstream_error}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:dev/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows get applications on dev/web for groups developers, dev@example.com"}
+  - {user: dev@example.com, groups: [developers], action: logs.get, resource: "applications:dev/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows get logs on dev/web for groups developers, dev@example.com"}
+  - {user: dev@example.com, groups: [developers], action: app.delete, resource: "applications:dev/web", connection: argo, want: denied, reason: "denied: Argo CD policy has no rule allowing delete applications on dev/web for groups developers, dev@example.com"}
+  - {user: dev@example.com, groups: [developers], action: app.rollback, resource: "applications:dev/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows sync applications on dev/web for groups developers, dev@example.com"}
+  - {user: sre@example.com, groups: [sre], action: app.delete, resource: "applications:prod/web", connection: argo, want: denied, reason: "denied: Argo CD policy has no rule allowing delete applications on prod/web for groups sre, sre@example.com"}
+  - {user: sre@example.com, groups: [sre, developers], action: app.delete, resource: "applications:dev/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows delete applications on dev/web for groups developers, sre, sre@example.com"}
+  - {user: sre@example.com, groups: [sre], action: cluster.get, resource: "clusters:https://kubernetes.default.svc", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows get clusters on https://kubernetes.default.svc for groups sre, sre@example.com"}
+  - {user: sre@example.com, groups: [sre], action: repo.update, resource: "repositories:https://github.com/acme/api.git", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows update repositories on https://github.com/acme/api.git for groups sre, sre@example.com"}
+  - {user: sre@example.com, groups: [sre], action: repo.update, resource: "repositories:https://gitlab.com/acme/api.git", connection: argo, want: denied, reason: "denied: Argo CD policy has no rule allowing update repositories on https://gitlab.com/acme/api.git for groups sre, sre@example.com"}
+  - {user: sre@example.com, groups: [sre], action: "app.update/apps/Deployment/default/web", resource: "applications:dev/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows update/apps/Deployment/default/web applications on dev/web for groups sre, sre@example.com"}
+  - {user: sre@example.com, groups: [sre], action: "app.update/apps/StatefulSet/default/db", resource: "applications:dev/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows update/apps/StatefulSet/default/db applications on dev/web for groups sre, sre@example.com"}
+  - {user: sre@example.com, groups: [sre], action: "app.action/apps/Deployment/restart", resource: "applications:dev/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows action/apps/Deployment/restart applications on dev/web for groups sre, sre@example.com"}
+  - {user: sre@example.com, groups: [sre], action: "app.delete//Pod/default/web-0", resource: "applications:prod/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows delete//Pod/default/web-0 applications on prod/web for groups sre, sre@example.com"}
+  - {user: dev@example.com, groups: [developers], action: "app.delete//Pod/default/web-0", resource: "applications:dev/web", connection: argo, want: denied, reason: "denied: Argo CD policy has no rule allowing delete//Pod/default/web-0 applications on dev/web for groups developers, dev@example.com"}
+  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:broken/x", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows get applications on broken/x for groups sre, sre@example.com"}
+  - {user: dana@example.com, action: app.sync, resource: "applications:prod/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows sync applications on prod/web for groups dana@example.com"}
+  - {user: dana@example.com, action: app.sync, resource: "applications:prod/web", connection: argo-email, want: allowed, reason: "allowed: Argo CD policy allows sync applications on prod/web for dana@example.com (groups dana@example.com)"}
+  - {user: nobody@example.com, action: app.get, resource: "applications:dev/web", connection: argo, want: denied, reason: "denied: Argo CD policy has no rule allowing get applications on dev/web for groups nobody@example.com"}
+  - {user: nobody@example.com, action: app.get, resource: "applications:dev/web", connection: argo-email, want: denied, reason: "denied: Argo CD policy has no rule allowing get applications on dev/web for nobody@example.com (groups nobody@example.com)"}
+  - {user: a@example.com, groups: [team-a-devs], action: app.sync, resource: "applications:team-a/api", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows sync applications on team-a/api for groups team-a-devs, a@example.com"}
+  - {user: a@example.com, groups: [team-a-devs], action: project.get, resource: "projects:team-a", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows get projects on team-a for groups team-a-devs, a@example.com"}
+  - {user: a@example.com, groups: [team-a-devs], action: app.sync, resource: "applications:dev/api", connection: argo, want: denied, reason: "denied: Argo CD policy has no rule allowing sync applications on dev/api for groups team-a-devs, a@example.com"}
+  - {user: x@example.com, groups: [admins], action: exec.create, resource: "exec:prod/web", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows create exec on prod/web for groups admins, x@example.com"}
+  - {user: x@example.com, groups: [admins], action: extension.invoke, resource: "extensions:metrics", connection: argo, want: denied, reason: "denied: Argo CD policy has no rule allowing invoke extensions on metrics for groups admins, x@example.com"}
+  - {user: x@example.com, groups: [admins], action: gpgkey.create, resource: "gpgkeys:ABCD", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows create gpgkeys on ABCD for groups admins, x@example.com"}
+  - {user: x@example.com, groups: [admins], action: writerepo.delete, resource: "write_repositories:https://github.com/acme/api", connection: argo, want: allowed, reason: "allowed: Argo CD policy allows delete write-repositories on https://github.com/acme/api for groups admins, x@example.com"}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "projects:dev", connection: argo, want: invalid_request, reason: "invalid_request: action app.get applies to applications, but the resource is projects"}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:noslash", connection: argo, want: invalid_request, reason: "invalid_request: applications resources are <project>/<name>"}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "things:dev/web", connection: argo, want: invalid_request, reason: "invalid_request: resource type \"things\"; use one of applications, applicationsets, logs, exec, projects, clusters, repositories, write_repositories, certificates, accounts, gpgkeys, extensions"}
+  - {user: dev@example.com, groups: [developers], action: project.get, resource: "projects:", connection: argo, want: invalid_request, reason: "invalid_request: resource needs an id, e.g. applications:<project>/<name>"}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:dev/we b", connection: argo, want: invalid_request, reason: "invalid_request: resource id contains whitespace or control characters"}
+  - {user: dev@example.com, groups: [developers], action: app.frobnicate, resource: "applications:dev/web", connection: argo, want: unknown_action, reason: "unknown_action: integration argocd has no action \"app.frobnicate\""}
+  - {user: dev@example.com, groups: [developers], action: "app.action/apps/Deployment/", resource: "applications:dev/web", connection: argo, want: unknown_action, reason: "unknown_action: integration argocd has no action \"app.action/apps/Deployment/\""}
+  - {user: sre@example.com, groups: [sre], action: "app.delete/apps/StatefulSet/default/db", resource: "applications:dev/web", connection: argo-legacy, want: allowed, reason: "allowed: Argo CD policy allows delete applications on dev/web for groups sre"}
+  - {user: sre@example.com, groups: [sre], action: "app.delete/apps/StatefulSet/default/db", resource: "applications:prod/web", connection: argo-legacy, want: denied, reason: "denied: Argo CD policy has no rule allowing delete/apps/StatefulSet/default/db applications on prod/web for groups sre"}
+  - {user: sre@example.com, groups: [sre], action: app.rollback, resource: "applications:dev/web", connection: argo-legacy, want: denied, reason: "denied: Argo CD policy has no rule allowing rollback applications on dev/web for groups sre"}
+  - {user: s@example.com, groups: [syncers], action: app.sync, resource: "applications:prod/web", connection: argo-legacy, want: allowed, reason: "allowed: Argo CD policy allows sync applications on prod/web for groups syncers"}
+  - {user: nobody@example.com, action: app.get, resource: "applications:prod/web", connection: argo-legacy, want: allowed, reason: "allowed: Argo CD policy allows get applications on prod/web for a user with no groups"}
+  - {user: nobody@example.com, action: app.sync, resource: "applications:prod/web", connection: argo-legacy, want: denied, reason: "denied: Argo CD policy has no rule allowing sync applications on prod/web for a user with no groups"}
+  - {user: dana@example.com, action: project.update, resource: "projects:dev", connection: argo-users, want: unsupported, reason: "unsupported: no group rule allows update projects on dev, and the policy has user-level rules that cannot be evaluated with user_subject: none"}
+  - {user: dana@example.com, action: project.update, resource: "projects:dev", connection: argo-users-email, want: allowed, reason: "allowed: Argo CD policy allows update projects on dev for dana@example.com"}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:dev/web", connection: argo-users, want: allowed, reason: "allowed: Argo CD policy allows get applications on dev/web for groups developers"}
+  - {user: dev@example.com, groups: [developers], action: app.get, resource: "applications:staging/web", connection: argo-regex, want: allowed, reason: "allowed: Argo CD policy allows get applications on staging/web for groups developers"}
+  - {user: dev@example.com, groups: [developers], action: app.sync, resource: "applications:prod/web", connection: argo-regex, want: denied, reason: "denied: Argo CD policy has no rule allowing sync applications on prod/web for groups developers"}
+  - {user: dev@example.com, groups: [developers], action: cluster.get, resource: "clusters:https://k8s-eu.example.com", connection: argo-regex, want: allowed, reason: "allowed: Argo CD policy allows get clusters on https://k8s-eu.example.com for groups developers"}
+  - {user: dev@example.com, groups: [developers], action: cluster.get, resource: "clusters:https://k8s-eu-example.com", connection: argo-regex, want: denied, reason: "denied: Argo CD policy has no rule allowing get clusters on https://k8s-eu-example.com for groups developers"}
+  - {user: b@example.com, groups: [bad], action: app.get, resource: "applications:dev/(", connection: argo-regex, want: denied, reason: "denied: Argo CD policy has no rule allowing get applications on dev/( for groups bad"}
+  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:dev/web", connection: argo-invalid, want: unsupported, reason: "unsupported: Argo CD's argocd-rbac-cm is not a valid policy and cannot be evaluated: error parsing policy line \"p, role:x, applications, get, \\\"dev/*\\\"x, allow\": parse error on line 1, column 37: extraneous or missing \" in quoted-field"}
+  - {user: admin@example.com, action: app.get, resource: "applications:a/b", connection: argo-empty, want: denied, reason: "denied: Argo CD policy has no rule allowing get applications on a/b for admin@example.com"}
+  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:dev/web", connection: argo-forbidden, want: credential_rejected, reason: "credential_rejected: hallpass's ServiceAccount may not read /api/v1/namespaces/argocd/configmaps/argocd-rbac-cm (HTTP 403)"}
+  - {user: sre@example.com, groups: [sre], action: app.get, resource: "applications:dev/web", connection: argo-broken, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}

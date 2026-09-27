@@ -1,4 +1,4 @@
-"""Port of internal/server/server_test.go.
+"""Port of v0.5.0:internal/server/server_test.go.
 
 Go drives the handler with httptest.NewRecorder; here every request goes
 over a real socket to the server listening on 127.0.0.1."""
@@ -270,3 +270,111 @@ def test_shutdown_lets_requests_in_flight_finish(running: list[Running]) -> None
     stopper.join(5)
     t.join(5)
     assert got == [(200, {"decision": "allow", "reason": "allowed: ok"})]
+
+
+def test_empty_api_key_authorizes_nobody(running: list[Running]) -> None:
+    r = start(running, StubChecker(), secret.literal(""))
+    for auth in ("Bearer ", "Bearer", ""):
+        res, out = r.post(auth, '{"user":"a@x.com","connection":"c","action":"a","resource":"r:1"}', "")
+        assert res.status == 401 and out.get("decision") == "unknown", (auth, res.status, out)
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        "Transfer-Encoding: gzip, chunked\r\nContent-Length: 5\r\n",  # a coding this server does not decode
+        "Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n",  # stated twice
+        "Transfer-Encoding: chunked\r\nContent-Length: 4\r\n",  # both framings
+        "Content-Length: 5\r\nContent-Length: 5\r\n",  # two lengths
+    ],
+)
+def test_ambiguous_framing_is_refused(running: list[Running], head: str) -> None:
+    # A proxy in front could read these requests with another boundary than
+    # the server (request smuggling); the server refuses them and closes.
+    c = StubChecker()
+    r = start(running, c, secret.literal(KEY))
+    hidden = json.dumps({"user": "smuggled@x.com", "connection": "c", "action": "a", "resource": "r:1"}).encode()
+    smuggled = _post_head(f"Content-Length: {len(hidden)}\r\n") + hidden
+    # What a proxy that honours the chunked coding forwards as one request:
+    # an empty chunked body, then (to a server that reads it otherwise) a
+    # second request hidden behind it.
+    out = _raw(r, _post_head(head), b"0\r\n\r\n" + smuggled, close_after=True)
+    assert out.startswith(b"HTTP/1.1 400"), out[:200]
+    assert out.count(b"HTTP/1.1 ") == 1, out
+    assert c.last is None, f"the hidden request reached the engine: {c.last}"
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        ('{"user":"a@x.com","User":"b@x.com"}', 'duplicate field "User"'),
+        ('{"user":"a@x.com","user":"b@x.com"}', 'duplicate field "user"'),
+        ('{"u\u017fer":"b@x.com"}', "unknown field"),
+        ('{"groups":{}}', "wrong type for field groups"),
+    ],
+)
+def test_fields_match_ascii_case_only_and_once(running: list[Running], body: str, reason: str) -> None:
+    r = start(running, StubChecker(), secret.literal(KEY))
+    res, out = r.post("Bearer " + KEY, body, "")
+    assert res.status == 400 and reason in out.get("reason", ""), (res.status, out)
+
+
+def test_fields_match_regardless_of_ascii_case(running: list[Running]) -> None:
+    c = StubChecker()
+    r = start(running, c, secret.literal(KEY))
+    res, out = r.post("Bearer " + KEY, '{"USER":"a@x.com","Connection":"c","action":"a","resource":"r:1"}', "")
+    assert res.status == 200 and out["decision"] == "allow" and c.last is not None and c.last.connection == "c", (res.status, out)
+
+
+def _trickle(r: Running, parts: list[bytes], gap: float) -> tuple[bytes, float]:
+    """Send parts gap seconds apart; return what came back and when the
+    server closed (seconds since the first byte)."""
+    import socket
+    import time
+
+    s = socket.create_connection((r.host, r.port), timeout=10)
+    start = time.monotonic()
+    out = b""
+    try:
+        for p in parts:
+            try:
+                s.sendall(p)
+            except OSError:
+                break
+            time.sleep(gap)
+        s.settimeout(5)
+        while True:
+            try:
+                chunk = s.recv(65536)
+            except (TimeoutError, OSError):
+                break
+            if not chunk:
+                break
+            out += chunk
+    finally:
+        s.close()
+    return out, time.monotonic() - start
+
+
+def test_slow_headers_are_cut_off(running: list[Running], monkeypatch: pytest.MonkeyPatch) -> None:
+    # A client that sends a header line every so often cannot hold a
+    # connection past the header timeout.
+    monkeypatch.setattr(Server, "header_timeout", 0.5)
+    c = StubChecker()
+    r = start(running, c, secret.literal(KEY))
+    parts = [b"POST /check HTTP/1.1\r\n"] + [f"X-Slow-{i}: 1\r\n".encode() for i in range(20)]
+    out, took = _trickle(r, parts, 0.2)
+    assert c.last is None
+    assert took < 4.5, f"connection held {took:.1f}s"
+    assert b"HTTP/1.1 200" not in out, out[:200]
+
+
+def test_slow_body_is_cut_off(running: list[Running], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Server, "read_timeout", 0.8)
+    c = StubChecker()
+    r = start(running, c, secret.literal(KEY))
+    body = json.dumps({"user": "a@x.com", "connection": "c", "action": "a", "resource": "r:1"}).encode()
+    head = _post_head(f"Content-Length: {len(body)}\r\n")
+    _, took = _trickle(r, [head] + [body[i : i + 2] for i in range(0, len(body), 2)], 0.2)
+    assert c.last is None, "a request stretched past the read timeout was answered"
+    assert took < 6, f"connection held {took:.1f}s"

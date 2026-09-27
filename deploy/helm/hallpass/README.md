@@ -107,7 +107,7 @@ See [docs/integrations/kubernetes.md](../../../docs/integrations/kubernetes.md) 
 | `image.repository` | `ghcr.io/roee-hersh/hallpass` | Image |
 | `image.tag` | chart `appVersion` | Image tag |
 | `image.digest` | `""` | Pin by digest (`sha256:...`) instead of tag |
-| `image.pullPolicy` | `IfNotPresent` | |
+| `image.pullPolicy` | `""` | Empty leaves it to Kubernetes: `Always` for `:latest`, `IfNotPresent` for a version |
 | `imagePullSecrets` | `[]` | |
 | `replicaCount` | `1` | hallpass keeps no state, so more is fine |
 | `apiKey.existingSecret` | `""` | Secret holding the API key. Set this or `apiKey.value` |

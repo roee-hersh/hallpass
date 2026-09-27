@@ -570,6 +570,10 @@ class ZendeskConnection(Connection):
             return denied(f"{who} is deleted in Zendesk")
         if r.identity.attr("suspended") == "true":
             return denied(f"{who} is suspended in Zendesk")
+        if r.identity.attr("active") != "true" or r.identity.attr("suspended") != "false":
+            # A record that does not say the user is active and not
+            # suspended is not taken as either.
+            return unsupported(f"Zendesk did not say whether {who} is active and not suspended")
         g = self._grants_for(ctx, r.identity)
         res = t.action.resource
         if res == "account":

@@ -7,7 +7,7 @@ The cases file names a hallpass config file and a list of expected answers
 first. A case whose answer differs fails the test; the decision text is
 printed for every case so an unknown can be understood.
 
-Added over the Go test (test/live/live_test.go): a connection whose
+Added over the Go test (v0.5.0:test/live/live_test.go): a connection whose
 credential is not available here (an env: secret unset or empty, a file:
 secret missing, or a referenced connection that is itself not configured)
 is NOT CONFIGURED: it is left out of the engine, its probe and cases are

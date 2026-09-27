@@ -1,4 +1,4 @@
-"""Port of internal/integrations/microsoft365/microsoft365_test.go."""
+"""Port of v0.5.0:internal/integrations/microsoft365/microsoft365_test.go."""
 
 from __future__ import annotations
 

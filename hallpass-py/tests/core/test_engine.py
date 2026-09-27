@@ -1,4 +1,4 @@
-"""Port of internal/engine/engine_test.go."""
+"""Port of v0.5.0:internal/engine/engine_test.go."""
 
 from __future__ import annotations
 
@@ -352,12 +352,35 @@ def test_probe_and_connections() -> None:
     assert e.connection("c") is not None, "connection"
 
 
-@pytest.mark.parametrize("ok", ["a@b", "dana@example.com", "o'neil+x@ex.co.uk"])
+@pytest.mark.parametrize("ok", ["a@b", "dana@example.com", "o'neil+x@ex.co.uk", "jos\u00e9@example.com"])
 def test_validate_user_accepts(ok: str) -> None:
     validate_user(ok)
 
 
-@pytest.mark.parametrize("bad", ["", "a", "@b", "a@", "a b@c", "a@b@c", "a\n@b", "a" * 320 + "@b"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "a",
+        "@b",
+        "a@",
+        "a b@c",
+        "a@b@c",
+        "a\n@b",
+        "a" * 320 + "@b",
+        # C1 controls and Unicode separators and spaces (log-line forgery).
+        "a\u0085@b",
+        "a\u009b@b",
+        "a\u2028@b",
+        "a\u00a0@b",
+        # Letters that case-fold to ASCII ones: they only look like, or fold
+        # into, another user.
+        "\u212aelly@corp.com",
+        "\u0130admin@corp.com",
+        "adm\u0131n@corp.com",
+        "ro\u017fe@corp.com",
+    ],
+)
 def test_validate_user_rejects(bad: str) -> None:
     with pytest.raises(ValueError):
         validate_user(bad)
@@ -384,3 +407,30 @@ def test_build_errors() -> None:
     with pytest.raises(EngineError) as ei:
         build(background(), cfg, Options())
     assert 'connection "a" (failing)' in str(ei.value), str(ei.value)
+
+
+def test_group_names_may_hold_unicode_spaces() -> None:
+    # Directory group names such as Japanese ones use U+3000; controls and
+    # line separators are still refused.
+    c = Counting()
+    e, _ = build_engine(c, Options())
+    r = e.check(background(), groups_req("a@x.com", "\u958b\u767a\u3000\u30c1\u30fc\u30e0", "team\u00a0a"))
+    assert r.decision.outcome == Outcome.ALLOW, r
+    for bad in ("a\u2028b", "a\u0085b", "a\nb"):
+        r = e.check(background(), groups_req("a@x.com", bad))
+        assert r.decision.code == Code.INVALID_REQUEST, (bad, r)
+
+
+def test_identity_cache_keeps_non_ascii_case_variants_apart() -> None:
+    """ASCII case variants share an Identity (every integration matches
+    them alike); non-ASCII ones do not, because Unicode lowercasing and the
+    integrations' own folding differ and one of them may tell the two apart."""
+    c = Counting()
+    e, _ = build_engine(c, Options(identity_cache=15 * 60.0))
+    ctx = background()
+    e.check(ctx, groups_req("Dana@X.com"))
+    e.check(ctx, groups_req("dana@x.com"))
+    assert c.resolves.load() == 1, f"ASCII case variants resolved {c.resolves.load()} times, want 1"
+    e.check(ctx, groups_req("\u00c9mile@x.com"))
+    e.check(ctx, groups_req("\u00e9mile@x.com"))
+    assert c.resolves.load() == 3, f"non-ASCII case variants resolved {c.resolves.load() - 1} times, want 2"

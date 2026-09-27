@@ -175,10 +175,12 @@ def _new_logger(level: str, w: IO[str]) -> Logger:
     return Logger(JSONHandler(w, parse_level(level)))
 
 
-def _load(path: str, stderr: IO[str]) -> tuple[Config, Registry] | None:
+def _load(path: str, stderr: IO[str], *, require_api_key: bool = False) -> tuple[Config, Registry] | None:
+    """The config file. Only serve needs api_key; validate, probe and check
+    also take the file of an in-process engine, which has none."""
     reg = all_registry()
     try:
-        cfg = load_config(path, reg)
+        cfg = load_config(path, reg, require_api_key=require_api_key)
     except (ConfigError, ConfigErrors) as e:
         stderr.write(str(e) + "\n")
         return None
@@ -202,10 +204,17 @@ def serve(args: list[str], stderr: IO[str], stop: threading.Event | None = None,
     except ValueError as e:
         stderr.write(f'log level "{fs.values["log-level"]}": {e}\n')
         return 2
-    loaded = _load(fs.values["config"], stderr)
+    loaded = _load(fs.values["config"], stderr, require_api_key=True)
     if loaded is None:
         return 1
     cfg, _ = loaded
+    try:
+        # Read now as well as per request: a server whose key cannot be
+        # read would report healthy and refuse every check.
+        cfg.api_key.get()
+    except secretmod.SecretError as e:
+        stderr.write(f"api_key: {e}\n")
+        return 1
     if fs.values["listen"]:
         cfg.listen = fs.values["listen"]
     try:
@@ -282,11 +291,14 @@ def validate(args: list[str], stdout: IO[str], stderr: IO[str]) -> int:
     except EngineError as e:
         stderr.write(str(e) + "\n")
         return 1
-    try:
-        cfg.api_key.get()
-    except secretmod.SecretError as e:
-        stderr.write(f"api_key: {e}\n")
-        return 1
+    if cfg.api_key.is_zero():
+        stderr.write("note: no api_key; fine for Hallpass.from_config, but hallpass serve needs one\n")
+    else:
+        try:
+            cfg.api_key.get()
+        except secretmod.SecretError as e:
+            stderr.write(f"api_key: {e}\n")
+            return 1
     stdout.write(f"{fs.values['config']}: ok, {len(cfg.connections)} connection(s)\n")
     for c in cfg.connections:
         stdout.write(f"  {c.id:<24} {c.integration}\n")

@@ -1,4 +1,4 @@
-"""Port of internal/integrations/aws/aws_test.go."""
+"""Port of v0.5.0:internal/integrations/aws/aws_test.go."""
 
 from __future__ import annotations
 
@@ -160,6 +160,7 @@ class FakeAWS:
         self.eval_only = False
         self.eval_decision = ""  # overrides EvalDecision when resource-specific results are present
         self.page_split = False
+        self.first_result = ""  # an extra result for the same action, before the real one
         self.sim_err = ""  # IAM error code returned by SimulatePrincipalPolicy
         self.fail = ""  # "throttle" or "denied": every signed call fails
 
@@ -355,6 +356,11 @@ class FakeAWS:
                 )
                 w.write("".join(b))
                 return
+            if self.first_result != "":
+                b.append(
+                    f"<member><EvalActionName>{act}</EvalActionName><EvalDecision>{self.first_result}</EvalDecision>"
+                    f"<EvalResourceName>{res}</EvalResourceName></member>"
+                )
             eval_dec = dec
             if self.eval_decision != "" and not self.eval_only:
                 eval_dec = self.eval_decision
@@ -1183,6 +1189,19 @@ def test_assignment_rows_require_exact_account(setup: Setup) -> None:
         e.f.assignments["u-bob"] = [PS_RO]
         e.f.row_account = {PS_RO: ACCT}
     itest.expect_code(check(e, bob, "s3.read", BUCKET_KEY), Code.ALLOWED)
+
+
+def test_several_results_the_most_restrictive_stands(setup: Setup) -> None:
+    # Not expected for one resource, but when IAM returns several results
+    # for the action an explicit deny among them is never masked by a later
+    # allowed one.
+    e = setup()
+    itest.expect_code(check(e, dana, "s3.read", BUCKET_KEY), Code.ALLOWED)
+    with e.f.mu:
+        e.f.first_result = "explicitDeny"
+    d = check(e, dana, "s3.read", BUCKET_KEY)
+    itest.expect_code(d, Code.DENIED)
+    assert "explicitly deny" in d.text, d.text
 
 
 def test_simulate_xml_decoding() -> None:

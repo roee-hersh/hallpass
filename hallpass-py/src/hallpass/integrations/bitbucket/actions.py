@@ -1,5 +1,5 @@
 """The bitbucket action table, resource parsing and branch pattern matching
-(Go: internal/integrations/bitbucket/actions.go)."""
+(Go: v0.5.0:internal/integrations/bitbucket/actions.go)."""
 
 from __future__ import annotations
 

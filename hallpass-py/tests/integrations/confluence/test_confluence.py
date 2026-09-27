@@ -1,4 +1,4 @@
-"""Port of internal/integrations/confluence/confluence_test.go."""
+"""Port of v0.5.0:internal/integrations/confluence/confluence_test.go."""
 
 from __future__ import annotations
 
@@ -139,9 +139,16 @@ class FakeSite:
             write_json(w, 200, {"cloudId": CLOUD_ID})
             return
         # Jira side: the identity connection always uses basic auth.
-        if path == "/rest/api/3/user/search":
+        if path == "/rest/api/3/myself":
             if r.header.get("Authorization") != basic("jirabot@example.com", itest.CANARY + "jira"):
                 write_json(w, 401, {"errorMessages": ["unauthorized " + itest.CANARY]})
+                return
+            write_json(w, 200, {"accountId": "acc-jirabot", "displayName": "jira bot"})
+            return
+        if path == "/rest/api/3/user/search":
+            if r.header.get("Authorization") != basic("jirabot@example.com", itest.CANARY + "jira"):
+                # Atlassian answers an unaccepted credential as anonymous.
+                write_json(w, 200, [])
                 return
             q = r.q("query").lower()
             write_json(w, 200, [u for u in self.users if q in u["emailAddress"].lower()])

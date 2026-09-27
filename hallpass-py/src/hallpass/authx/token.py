@@ -6,7 +6,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from hallpass.core import evidence
 from hallpass.core.cache import PanicError, detach, is_panic_type
@@ -20,7 +20,7 @@ DEFAULT_FETCH_TIMEOUT = 30.0
 
 @dataclass(frozen=True)
 class Token:
-    value: str = ""
+    value: str = field(default="", repr=False)
     # Epoch seconds; None means unknown and the source's TTL applies.
     expiry: float | None = None
 

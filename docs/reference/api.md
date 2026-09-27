@@ -7,8 +7,11 @@ HTTP client. The in-process engine answers with the same decisions and codes, wi
 ## POST /check
 
 Send the configured `api_key` as a bearer token and a JSON body of at most 64 KiB. Unknown fields
-are rejected. `user` is an email of at most 320 bytes. `groups` holds at most 200 entries of at
-most 256 bytes each.
+are rejected, and so is a field given twice; names match regardless of ASCII case. The body is framed
+by one `Content-Length` or by `Transfer-Encoding: chunked`, never both or twice. `user` is an email
+of at most 320 bytes, with no whitespace or control characters (C1 and Unicode separators included)
+and none of the letters that case-fold to ASCII ones (`İ`, `ı`, `ſ`, the Kelvin sign). `groups` holds
+at most 200 entries of at most 256 bytes each.
 
 ```json
 {
@@ -35,6 +38,8 @@ most 256 bytes each.
 | Policy construct hallpass does not understand | 200 | unknown | `unsupported` |
 | Bad request, unknown connection or action | 400 | unknown | `invalid_request`, `unknown_connection`, `unknown_action` |
 | Bad or missing API key | 401 | unknown | `unauthorized` |
+| A method other than `POST` | 405 | unknown | `invalid_request` |
+| A body over 64 KiB | 413 | unknown | `invalid_request` |
 
 `deny` means the third-party system positively said no. Anything hallpass could not evaluate is
 `unknown`. Callers should treat `unknown` as deny.

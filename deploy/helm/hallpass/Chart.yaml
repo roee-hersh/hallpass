@@ -2,8 +2,10 @@ apiVersion: v2
 name: hallpass
 description: Permission checks for AI agents and bots, answered live by the system they act in.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+# The release sets both to the released version; from a clone the chart
+# deploys the latest published image.
+version: 0.0.0
+appVersion: "latest"
 home: https://github.com/roee-hersh/hallpass
 sources:
   - https://github.com/roee-hersh/hallpass

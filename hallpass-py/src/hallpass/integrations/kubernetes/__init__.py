@@ -161,6 +161,11 @@ class Connection(integ.Connection):
     def resolve_identity(self, ctx: Context, u: integ.User) -> integ.Identity:
         """A string transform; Kubernetes has no user directory."""
         name = self.username(u.email)
+        if name.startswith(RESERVED_GROUP_PREFIX):
+            # system:serviceaccount:..., system:kube-controller-manager and
+            # the like are Kubernetes' own identities; an email must never
+            # become one through the template.
+            raise errorf(Code.INVALID_REQUEST, f"user {go_quote(u.email)} maps to the reserved Kubernetes username {go_quote(name)}")
         groups: list[str] = []
         for g in u.groups:
             if self.prefix == "" and g.startswith(RESERVED_GROUP_PREFIX):

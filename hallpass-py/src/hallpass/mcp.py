@@ -180,6 +180,11 @@ class HallpassMiddleware:
             user = _claim(token, self._user_claim)
             if user is _MISSING:
                 return None, None, f"no user for this request: the request has an access token without a {self._user_claim!r} claim"
+            verified = _claim(token, "email_verified")
+            if self._user_claim == "email" and (verified is False or (isinstance(verified, str) and verified.strip().lower() == "false")):
+                # The provider says the address is not verified: whoever
+                # set it has not shown they own it.
+                return None, None, "no user for this request: the access token's email is not verified (email_verified is false)"
         if token is not None and not isinstance(user, str):
             return None, None, f"no user for this request: the access token's {self._user_claim!r} claim is not a string"
         groups: Any = None

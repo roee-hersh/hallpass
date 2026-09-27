@@ -1,4 +1,4 @@
-"""Port of test/differential/argocd_test.go: compares the Argo CD RBAC
+"""Port of v0.5.0:test/differential/argocd_test.go: compares the Argo CD RBAC
 evaluator with the real argocd CLI (`argocd admin settings rbac can`).
 Skips unless the argocd binary is on the PATH.
 

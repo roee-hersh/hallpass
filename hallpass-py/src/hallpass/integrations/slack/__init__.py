@@ -1,5 +1,5 @@
 """Slack: users, channels and user groups, read through the Web API with a
-bot token (Go: internal/integrations/slack)."""
+bot token (Go: v0.5.0:internal/integrations/slack)."""
 
 from __future__ import annotations
 

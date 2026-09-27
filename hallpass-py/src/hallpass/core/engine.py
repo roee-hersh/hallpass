@@ -31,7 +31,7 @@ from hallpass.core.decision import (
     unsupported,
 )
 from hallpass.core.declog import DecisionLog, Entry
-from hallpass.core.errors import as_error, go_lower
+from hallpass.core.errors import as_error
 from hallpass.core.integration import CheckRequest, Connection, Deps, Identity, Integration, ProbeResult, Settings, User
 from hallpass.core.log import Logger
 
@@ -344,6 +344,20 @@ _MAX_GROUPS = 200
 _MAX_GROUP = 256
 
 
+# Non-ASCII letters whose case mapping or simple case folding lands on an
+# ASCII letter: dotted and dotless I, long s and the Kelvin sign. In a user
+# string they only serve to look like, or fold into, another user.
+_FOLDS_TO_ASCII = frozenset("\u0130\u0131\u017f\u212a")
+
+
+def _is_space_or_control(ch: str) -> bool:
+    """ASCII space and controls, C1 controls, and Unicode line and paragraph
+    separators and other whitespace: none belongs in a user or group name
+    that ends up in log lines."""
+    o = ord(ch)
+    return o <= 0x20 or 0x7F <= o <= 0x9F or ch.isspace() or o in (0x2028, 0x2029, 0xFEFF)
+
+
 def validate_user(u: str) -> None:
     """Check the shape of the caller's user string; raise ValueError."""
     if not isinstance(u, str) or u == "":
@@ -351,8 +365,10 @@ def validate_user(u: str) -> None:
     if len(u.encode("utf-8", "surrogatepass")) > _MAX_EMAIL:
         raise ValueError(f"user is longer than {_MAX_EMAIL} bytes")
     for ch in u:
-        if ord(ch) <= 0x20 or ord(ch) == 0x7F:
+        if _is_space_or_control(ch):
             raise ValueError("user contains whitespace or a control character")
+        if ch in _FOLDS_TO_ASCII:
+            raise ValueError(f"user contains {ch!r} (U+{ord(ch):04X}), which case-folds to an ASCII letter")
     local, at, domain = u.partition("@")
     if not at or local == "" or domain == "" or "@" in domain:
         raise ValueError("user must be an email address")
@@ -367,7 +383,11 @@ def _validate_groups(gs: list[str]) -> None:
         if len(g.encode("utf-8", "surrogatepass")) > _MAX_GROUP:
             raise ValueError(f"group longer than {_MAX_GROUP} bytes")
         for ch in g:
-            if ord(ch) < 0x20 or ord(ch) == 0x7F:
+            # Directory group names may hold spaces, Unicode ones included
+            # (U+3000 in Japanese names); controls and line separators,
+            # which would forge log lines, never.
+            o = ord(ch)
+            if o < 0x20 or 0x7F <= o <= 0x9F or o in (0x2028, 0x2029):
                 raise ValueError("group contains a control character")
 
 
@@ -378,6 +398,11 @@ def _normalize_groups(gs: list[str]) -> list[str]:
 
 
 def _identity_key(conn_id: str, u: User) -> str:
-    """The connection, the lowercased email and the normalized groups:
-    integrations such as kubernetes embed the groups in the Identity."""
-    return "\x00".join([conn_id, go_lower(u.email), *u.groups])
+    """The connection, the email and the normalized groups: integrations
+    such as kubernetes embed the groups in the Identity. An ASCII email is
+    lowercased, as every integration matches ASCII emails regardless of
+    case; any other email is kept as given, because Unicode lowercasing and
+    the integrations' own folding differ, and two users that one of them
+    tells apart must never share an Identity."""
+    email = u.email.lower() if u.email.isascii() else u.email
+    return "\x00".join([conn_id, email, *u.groups])

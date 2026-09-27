@@ -2,7 +2,7 @@
 branch-permissions plugin. Permissions are listed per grant, so hallpass
 combines the direct, group, project, default, public and global grants
 itself into the user's effective level.
-(Go: internal/integrations/bitbucket/datacenter.go.)"""
+(Go: v0.5.0:internal/integrations/bitbucket/datacenter.go.)"""
 
 from __future__ import annotations
 

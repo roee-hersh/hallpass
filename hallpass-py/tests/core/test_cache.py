@@ -1,4 +1,4 @@
-"""Port of internal/cache/cache_test.go.
+"""Port of v0.5.0:internal/cache/cache_test.go.
 
 Goroutines are threads, channels threading.Event / queue.Queue. Go's
 Do returns (v, err); the do() helper below turns the raised exception back

@@ -1,4 +1,4 @@
-"""Port of internal/integrations/github/github_test.go."""
+"""Port of v0.5.0:internal/integrations/github/github_test.go."""
 
 from __future__ import annotations
 

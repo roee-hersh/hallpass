@@ -510,18 +510,25 @@ class VaultConnection(Connection):
             for k, v in a.metadata.items():
                 attrs["alias:" + a.mount_accessor + ":meta:" + k] = v
         policies: set[str] = set(ent.policies)
+        group_policies: set[str] = set()
         groups: list[str] = []
         seen: set[str] = set()
         for gid in [*ent.group_ids, *ent.inherited_group_ids]:
-            if gid == "" or gid in seen or not ID_RE.fullmatch(gid):
+            if gid == "" or gid in seen:
                 continue
+            if not ID_RE.fullmatch(gid):
+                # Skipping it would skip the group's policies, denies included.
+                raise errorf(Code.UPSTREAM_ERROR, f"entity {found_id} lists group id {go_quote(gid)}, which has an unexpected shape")
             seen.add(gid)
             g = self._group(ctx, gid)
             groups.append(gid)
             attrs["group:" + gid] = g.name
             policies.update(g.policies)
+            group_policies.update(g.policies)
         groups.sort()
         attrs["policies"] = ",".join(sorted(policies))
+        # Named only by groups, which may live in a parent namespace.
+        attrs["group_policies"] = ",".join(sorted(group_policies - set(ent.policies)))
         return Identity(id=found_id, display=email, attrs=attrs, groups=tuple(groups))
 
     def _group(self, ctx: Context, gid: str) -> _Group:
@@ -542,9 +549,10 @@ class VaultConnection(Connection):
 
     # -- policies --
 
-    def _policy(self, ctx: Context, name: str, tc: TemplateContext) -> tuple[list[Rule], bool]:
+    def _policy(self, ctx: Context, name: str, tc: TemplateContext, from_group: bool = False) -> tuple[list[Rule], bool]:
         """Read and parse one ACL policy, cached. A policy Vault does not
-        have contributes no rules (a token may name a missing policy)."""
+        have contributes no rules (a token may name a missing policy), except
+        one named only by a group under a namespace (see below)."""
         if not NAME_RE.fullmatch(name):
             raise errorf(Code.UPSTREAM_ERROR, f"policy name {go_quote(name)} has an unexpected shape")
 
@@ -574,6 +582,16 @@ class VaultConnection(Connection):
         try:
             src = self.policies.do(ctx, name, fill)
         except _MissingPolicy:
+            if self.namespace != "" and from_group:
+                # Under a namespace, a group may belong to a parent namespace
+                # and its policies with it: Vault answers 404 for those here,
+                # yet applies them to the entity. Skipping one could skip a
+                # deny. (The entity's own policies live in its namespace, so
+                # a 404 there is a policy Vault does not have either.)
+                raise errorf(
+                    Code.UNSUPPORTED,
+                    f"policy {name} is not readable in namespace {self.namespace} (it may belong to a parent namespace)",
+                ) from None
             return [], False
         try:
             rules = parse_policy(name, src, tc)
@@ -618,6 +636,8 @@ class VaultConnection(Connection):
         who = ident.display
         if ident.attr("disabled") == "true":
             return denied(f"entity {ident.attr('entity_name')} ({who}) is disabled")
+        if ident.attr("disabled") != "false":
+            return unsupported(f"Vault did not say whether entity {ident.attr('entity_name')} ({who}) is disabled")
         # The API path the request goes to.
         api_path = t.path
         if t.kind == "kv":
@@ -651,9 +671,10 @@ class VaultConnection(Connection):
         tc = template_context_of(ident)
         rules: list[Rule] = []
         read: list[str] = []
+        from_groups = set(ident.attr("group_policies").split(",")) - {""}
         for name in sorted(names):
             try:
-                rs, ok = self._policy(ctx, name, tc)
+                rs, ok = self._policy(ctx, name, tc, from_group=name in from_groups)
             except Exception as e:  # noqa: BLE001 - Go: integration.ToDecision(err)
                 return _decision_of(e)
             if ok:

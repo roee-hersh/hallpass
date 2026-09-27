@@ -4,8 +4,8 @@ The Python package lives in `hallpass-py/`; run these from there, in a virtual e
 Python 3.10 or later:
 
 ```sh
-pip install -e ".[crypto]" pytest pytest-timeout hypothesis ruff mypy types-PyYAML
-ruff format --check src tests && ruff check src tests
+pip install -e ".[crypto]" pytest pytest-timeout hypothesis ruff mypy types-PyYAML build
+ruff format --check src tests examples && ruff check src tests examples
 mypy --strict src/hallpass
 python -m pytest -q                        # unit, integration, harness and server tests
 ```

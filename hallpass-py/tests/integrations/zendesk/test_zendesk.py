@@ -1,4 +1,4 @@
-"""Port of internal/integrations/zendesk/zendesk_test.go."""
+"""Port of v0.5.0:internal/integrations/zendesk/zendesk_test.go."""
 
 from __future__ import annotations
 
@@ -62,8 +62,8 @@ class FakeUser:
     role: str
     role_type: int | None = None
     custom_role: int | None = None
-    active: bool = False
-    suspended: bool = False
+    active: bool | None = False
+    suspended: bool | None = False
     ticket_restriction: str | None = None
     only_private_comments: bool | None = None
     org_id: int | None = None
@@ -177,8 +177,8 @@ class Fake:
             "id": u.id,
             "email": u.email,
             "role": u.role,
-            "active": u.active,
-            "suspended": u.suspended,
+            **({} if u.active is None else {"active": u.active}),
+            **({} if u.suspended is None else {"suspended": u.suspended}),
             "name": itest.CANARY + " name",
             "notes": itest.CANARY,
             "url": f"https://example.zendesk.com/api/v2/users/{u.id}.json",
@@ -604,6 +604,17 @@ def test_action_account_admin_deny(setup: Setup) -> None:
 
 
 # --- identity ---------------------------------------------------------------
+
+
+def test_unknown_status_is_unsupported(setup: Setup) -> None:
+    # A record that does not say whether the user is active or suspended is
+    # not taken as active and not suspended.
+    for field_name in ("active", "suspended"):
+        _, f, c = setup()
+        with f.mu:
+            u = next(u for u in f.users if u.email == "alice@corp.example")
+            setattr(u, field_name, None)
+        expect(check(c, User(email="alice@example.com"), "account.admin", "account"), Code.UNSUPPORTED, "did not say whether")
 
 
 def test_identity(setup: Setup) -> None:

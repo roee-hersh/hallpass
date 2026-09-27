@@ -1,4 +1,4 @@
-"""Port of internal/declog/declog_test.go."""
+"""Port of v0.5.0:internal/declog/declog_test.go."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def test_open_file(tmp_path: Path) -> None:
     log = open_log(str(p))
     log.log(Entry(decision="unknown"))
     log.close()
-    assert '"decision":"unknown"' in p.read_text()
+    assert '"decision":"unknown"' in p.read_text(encoding="utf-8")
     for name in ["", "none", "stderr", "stdout"]:
         open_log(name)
     # Go: a nil *Logger's Log is a no-op; here the discarding log is.
@@ -104,7 +104,7 @@ def test_open_appends(tmp_path: Path) -> None:
     log = open_log(str(p))
     log.log(Entry(decision="allow"))
     log.close()
-    lines = p.read_text().splitlines()
+    lines = p.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "previous" and '"decision":"allow"' in lines[1]
     q = tmp_path / "new.log"
     open_log(str(q)).close()

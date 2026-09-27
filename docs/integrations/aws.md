@@ -105,8 +105,8 @@ by hallpass alone.
     identity_mode: identity_center                # identity_center (default), static_map, iam_user
     identity_center_role_arn: arn:aws:iam::999999999999:role/hallpass-identity-center-read
     identity_center_region: eu-west-1
-    identity_store_id: d-9367xxxxxx
-    sso_instance_arn: arn:aws:sso:::instance/ssoins-6987xxxxxxxxxxxx
+    identity_store_id: d-936712345a
+    sso_instance_arn: arn:aws:sso:::instance/ssoins-1234567890abcdef
     context_entries: "aws:MultiFactorAuthPresent=boolean:true;aws:SourceIp=ip:10.0.0.1"   # optional
     implicit_deny_as: deny                        # deny (default) or unknown
     session_name: hallpass                        # optional

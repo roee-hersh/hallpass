@@ -196,32 +196,32 @@ upstream:
   - {method: GET, path: /shape/services/data/v66.0/query, status: 400, json: [{message: no, errorCode: INVALID_TYPE}]}
   - {method: GET, path: /broken/services/data/v66.0/query, status: 500, body: oops}
 checks:
-  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", want: allowed}
-  - {user: dana@example.com, action: record.edit, resource: "record:001000000000001AAA", want: denied}
-  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-jwt, want: allowed}
-  - {user: dana@example.com, action: object.read, resource: "object:Account", want: allowed}
-  - {user: dana@example.com, action: object.edit, resource: "object:Account", want: denied}
-  - {user: dana@example.com, action: field.read, resource: "field:Account.Rating", want: allowed}
-  - {user: dana@example.com, action: field.edit, resource: "field:Account.Rating", want: denied}
-  - {user: dana@example.com, action: system.permission, resource: "permission:PermissionsApiEnabled", want: allowed}
-  - {user: dana@example.com, action: system.permission, resource: "permission:PermissionsViewSetup", want: invalid_request}
-  - {user: dana@example.com, action: permset.assigned, resource: "permset:acme__Sales_Ops", want: allowed}
-  - {user: dana@example.com, action: user.active, resource: "user:Dana@Example.com", want: allowed}
-  - {user: dana@example.com, action: user.active, resource: "record:005000000000001AAA", want: allowed}
-  - {user: dana@example.com, action: user.active, resource: "user:bob@example.com", want: invalid_request}
-  - {user: dana@example.com, action: record.read, resource: "record:001", want: invalid_request}
-  - {user: dana@example.com, action: object.read, resource: "object:Account' OR 1=1", want: invalid_request}
-  - {user: dana@example.com, action: field.read, resource: "field:Account", want: invalid_request}
-  - {user: dana@example.com, action: permset.assigned, resource: "permset:a__b__c", want: invalid_request}
-  - {user: dana@example.com, action: record.create, resource: "record:001000000000001AAA", want: unknown_action}
-  - {user: "o'neil@example.com", action: record.read, resource: "record:001000000000001AAA", connection: sf-empty, want: user_not_found}
-  - {user: nobody@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-empty, want: user_not_found}
-  - {user: nobody@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-byname, want: user_not_found}
-  - {user: amb@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-amb, want: user_ambiguous}
-  - {user: ian@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-inactive, want: denied}
-  - {user: fred@example.com, action: object.read, resource: "object:Account", connection: sf-frozen, want: denied}
-  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-forbidden, want: credential_rejected}
-  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-limit, want: upstream_rate_limited}
-  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-shape, want: unsupported}
-  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-broken, want: upstream_error}
-  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-badtoken, want: credential_rejected}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", want: allowed, reason: "allowed: dana@example.com has HasReadAccess on record 001000000000001AAA (max access level Read)"}
+  - {user: dana@example.com, action: record.edit, resource: "record:001000000000001AAA", want: denied, reason: "denied: dana@example.com lacks HasEditAccess on record 001000000000001AAA (max access level Read)"}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-jwt, want: allowed, reason: "allowed: dana@example.com has HasReadAccess on record 001000000000001AAA (max access level Read)"}
+  - {user: dana@example.com, action: object.read, resource: "object:Account", want: allowed, reason: "allowed: dana@example.com has PermissionsRead on Account through profile Sales"}
+  - {user: dana@example.com, action: object.edit, resource: "object:Account", want: denied, reason: "denied: dana@example.com lacks PermissionsEdit on Account across 1 assigned profile and permission sets"}
+  - {user: dana@example.com, action: field.read, resource: "field:Account.Rating", want: allowed, reason: "allowed: dana@example.com has PermissionsRead on Account.Rating through profile Sales"}
+  - {user: dana@example.com, action: field.edit, resource: "field:Account.Rating", want: denied, reason: "denied: dana@example.com lacks PermissionsEdit on Account.Rating across 1 assigned profile and permission sets"}
+  - {user: dana@example.com, action: system.permission, resource: "permission:PermissionsApiEnabled", want: allowed, reason: "allowed: dana@example.com holds PermissionsApiEnabled through profile Sales"}
+  - {user: dana@example.com, action: system.permission, resource: "permission:PermissionsViewSetup", want: invalid_request, reason: "invalid_request: PermissionsViewSetup is not a permission field of PermissionSet in this org"}
+  - {user: dana@example.com, action: permset.assigned, resource: "permset:acme__Sales_Ops", want: allowed, reason: "allowed: dana@example.com is assigned permission set acme__Sales_Ops"}
+  - {user: dana@example.com, action: user.active, resource: "user:Dana@Example.com", want: allowed, reason: "allowed: user dana@example.com is active and not frozen"}
+  - {user: dana@example.com, action: user.active, resource: "record:005000000000001AAA", want: allowed, reason: "allowed: user dana@example.com is active and not frozen"}
+  - {user: dana@example.com, action: user.active, resource: "user:bob@example.com", want: invalid_request, reason: "invalid_request: user:bob@example.com is not the requesting user; user.active answers about the requesting user"}
+  - {user: dana@example.com, action: record.read, resource: "record:001", want: invalid_request, reason: "invalid_request: \"001\" is not a Salesforce Id (15 or 18 alphanumeric characters)"}
+  - {user: dana@example.com, action: object.read, resource: "object:Account' OR 1=1", want: invalid_request, reason: "invalid_request: \"Account' OR 1=1\" is not an API name (letters, digits and underscores, starting with a letter, at most 80 characters)"}
+  - {user: dana@example.com, action: field.read, resource: "field:Account", want: invalid_request, reason: "invalid_request: field resource \"field:Account\" must be field:<Object>.<Field>"}
+  - {user: dana@example.com, action: permset.assigned, resource: "permset:a__b__c", want: invalid_request, reason: "invalid_request: permset resource \"permset:a__b__c\" must be permset:<ApiName> or permset:<ns>__<ApiName>"}
+  - {user: dana@example.com, action: record.create, resource: "record:001000000000001AAA", want: unknown_action, reason: "unknown_action: integration salesforce has no action \"record.create\""}
+  - {user: "o'neil@example.com", action: record.read, resource: "record:001000000000001AAA", connection: sf-empty, want: user_not_found, reason: "user_not_found: no Salesforce user has Email \"o'neil@example.com\""}
+  - {user: nobody@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-empty, want: user_not_found, reason: "user_not_found: no Salesforce user has Email \"nobody@example.com\""}
+  - {user: nobody@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-byname, want: user_not_found, reason: "user_not_found: no Salesforce user has Username \"nobody@example.com\""}
+  - {user: amb@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-amb, want: user_ambiguous, reason: "user_ambiguous: 2 Salesforce users have Username \"amb@example.com\""}
+  - {user: ian@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-inactive, want: denied, reason: "denied: user ian@example.com is inactive"}
+  - {user: fred@example.com, action: object.read, resource: "object:Account", connection: sf-frozen, want: denied, reason: "denied: user fred@example.com is frozen"}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-forbidden, want: credential_rejected, reason: "credential_rejected: the integration user may not query User (HTTP 403)"}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-limit, want: upstream_rate_limited, reason: "upstream_rate_limited: the org's API request allocation is exhausted"}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-shape, want: unsupported, reason: "unsupported: User cannot be queried in this org (INVALID_TYPE)"}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-broken, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: dana@example.com, action: record.read, resource: "record:001000000000001AAA", connection: sf-badtoken, want: credential_rejected, reason: "credential_rejected: the token endpoint rejected hallpass's credential (invalid_grant)"}

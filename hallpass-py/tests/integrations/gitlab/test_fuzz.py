@@ -1,4 +1,4 @@
-"""Port of internal/integrations/gitlab/fuzz_test.go: FuzzParseTarget as a
+"""Port of v0.5.0:internal/integrations/gitlab/fuzz_test.go: FuzzParseTarget as a
 Hypothesis property plus a replay of its seed corpus. The Go package has no
 testdata/fuzz directory, so the seeds are the f.Add calls."""
 

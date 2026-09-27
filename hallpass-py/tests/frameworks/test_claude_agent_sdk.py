@@ -9,7 +9,7 @@ them. hallpass is the in-process engine. One test checks against a real HTTP
 upstream (PagerDuty against the test harness's TLS server), and the live test
 lets Claude drive the same session.
 
-Also here: the tests of examples/agent/claude_agent_sdk_tool.py, ported to
+Also here: the tests of the former examples/agent/claude_agent_sdk_tool.py (v0.5.0), ported to
 ``hallpass.guarded`` on an SDK MCP tool handler.
 """
 
@@ -496,7 +496,7 @@ def test_real_vault(vault: str, tmp_path: pathlib.Path) -> None:
     assert outs[2][1] and f"hallpass refused this call: {ADMIN} may not secret.write on kv:secret/other/db in vault: deny" in outs[2][0]
 
 
-# -- examples/agent/claude_agent_sdk_tool.py, ported: guarded on the handler -------
+# -- the former examples/agent/claude_agent_sdk_tool.py, ported: guarded on the handler
 
 
 def _guarded_server(hp: Hallpass) -> tuple[Any, Any]:

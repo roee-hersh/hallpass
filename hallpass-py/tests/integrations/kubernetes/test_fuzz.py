@@ -1,4 +1,4 @@
-"""Port of internal/integrations/kubernetes/fuzz_test.go (FuzzBuildAttributes)
+"""Port of v0.5.0:internal/integrations/kubernetes/fuzz_test.go (FuzzBuildAttributes)
 as a Hypothesis property test plus its seed corpus. The Go package has no
 testdata/fuzz directory, so the f.Add seeds are the whole corpus."""
 

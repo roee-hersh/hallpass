@@ -1,4 +1,4 @@
-"""Port of test/contract/key_test.go (Go: testRSAKey)."""
+"""Port of v0.5.0:test/contract/key_test.go (Go: testRSAKey)."""
 
 from __future__ import annotations
 
