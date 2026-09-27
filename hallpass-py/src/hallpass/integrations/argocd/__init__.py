@@ -290,7 +290,12 @@ class Connection(integ.Connection):
             # fine-grained one.
             acts = [req.top_act, req.act]
         for act in acts:
-            if enf.enforce_claims(subject, groups, req.res, act, req.obj):
+            try:
+                ok = enf.enforce_claims(subject, groups, req.res, act, req.obj)
+            except rbac.UnsupportedPattern as e:
+                # Skipping the rule could skip a deny.
+                return unsupported(f"Argo CD's policy has a rule hallpass cannot evaluate: {e}")
+            if ok:
                 return allowed(f"Argo CD policy allows {act} {req.res} on {req.obj} for {who(subject, groups)}")
         if subject == "" and b.user_level:
             return unsupported(

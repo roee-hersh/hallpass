@@ -324,3 +324,57 @@ def test_fields_match_regardless_of_ascii_case(running: list[Running]) -> None:
     r = start(running, c, secret.literal(KEY))
     res, out = r.post("Bearer " + KEY, '{"USER":"a@x.com","Connection":"c","action":"a","resource":"r:1"}', "")
     assert res.status == 200 and out["decision"] == "allow" and c.last is not None and c.last.connection == "c", (res.status, out)
+
+
+def _trickle(r: Running, parts: list[bytes], gap: float) -> tuple[bytes, float]:
+    """Send parts gap seconds apart; return what came back and when the
+    server closed (seconds since the first byte)."""
+    import socket
+    import time
+
+    s = socket.create_connection((r.host, r.port), timeout=10)
+    start = time.monotonic()
+    out = b""
+    try:
+        for p in parts:
+            try:
+                s.sendall(p)
+            except OSError:
+                break
+            time.sleep(gap)
+        s.settimeout(5)
+        while True:
+            try:
+                chunk = s.recv(65536)
+            except (TimeoutError, OSError):
+                break
+            if not chunk:
+                break
+            out += chunk
+    finally:
+        s.close()
+    return out, time.monotonic() - start
+
+
+def test_slow_headers_are_cut_off(running: list[Running], monkeypatch: pytest.MonkeyPatch) -> None:
+    # A client that sends a header line every so often cannot hold a
+    # connection past the header timeout.
+    monkeypatch.setattr(Server, "header_timeout", 0.5)
+    c = StubChecker()
+    r = start(running, c, secret.literal(KEY))
+    parts = [b"POST /check HTTP/1.1\r\n"] + [f"X-Slow-{i}: 1\r\n".encode() for i in range(20)]
+    out, took = _trickle(r, parts, 0.2)
+    assert c.last is None
+    assert took < 4.5, f"connection held {took:.1f}s"
+    assert b"HTTP/1.1 200" not in out, out[:200]
+
+
+def test_slow_body_is_cut_off(running: list[Running], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Server, "read_timeout", 0.8)
+    c = StubChecker()
+    r = start(running, c, secret.literal(KEY))
+    body = json.dumps({"user": "a@x.com", "connection": "c", "action": "a", "resource": "r:1"}).encode()
+    head = _post_head(f"Content-Length: {len(body)}\r\n")
+    _, took = _trickle(r, [head] + [body[i : i + 2] for i in range(0, len(body), 2)], 0.2)
+    assert c.last is None, "a request stretched past the read timeout was answered"
+    assert took < 6, f"connection held {took:.1f}s"

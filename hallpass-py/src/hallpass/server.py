@@ -125,8 +125,73 @@ def _decode(body: bytes) -> dict[str, Any]:
     return out
 
 
+def _client_ip(addr: str) -> str:
+    """The client's address as Go logs it: an IPv4 client of the dual-stack
+    listener is a.b.c.d, not ::ffff:a.b.c.d."""
+    if addr.startswith("::ffff:") and "." in addr:
+        return addr[len("::ffff:") :]
+    return addr
+
+
+class _DeadlineReader:
+    """The request stream, with a deadline for everything read from it: a
+    client that sends one byte at a time cannot stretch a request past it,
+    since every socket read waits only for what is left."""
+
+    def __init__(self, f: Any, sock: socket.socket) -> None:
+        self._f = f
+        self._sock = sock
+        self.deadline: float | None = None
+
+    def _arm(self) -> None:
+        if self.deadline is not None:
+            left = self.deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("request read deadline exceeded")
+            self._sock.settimeout(left)
+
+    def wait_first_byte(self) -> bool:
+        """Block until the next request starts (False at EOF)."""
+        return bool(self._f.peek(1))
+
+    def readline(self, limit: int = -1) -> bytes:
+        out = bytearray()
+        while limit < 0 or len(out) < limit:
+            self._arm()
+            data = self._f.peek(1)
+            if not data:
+                break
+            want = len(data) if limit < 0 else min(len(data), limit - len(out))
+            i = data.find(b"\n", 0, want)
+            out += self._f.read(i + 1 if i >= 0 else want)
+            if i >= 0:
+                break
+        return bytes(out)
+
+    def read(self, n: int = -1) -> bytes:
+        out = bytearray()
+        while n < 0 or len(out) < n:
+            self._arm()
+            chunk = self._f.read1(65536 if n < 0 else n - len(out))
+            if not chunk:
+                break
+            out += chunk
+        return bytes(out)
+
+    def close(self) -> None:
+        self._f.close()
+
+
 class Server:
     """The HTTP handler and its listener."""
+
+    # As the Go server: the request line and headers must arrive within
+    # header_timeout of the request's first byte, and the whole request
+    # within read_timeout; an idle keep-alive connection waits
+    # idle_timeout for the next one.
+    header_timeout = 5.0
+    read_timeout = 15.0
+    idle_timeout = 15.0
 
     def __init__(self, checker: Checker, api_key: Secret, logger: Logger | None = None) -> None:
         self.checker = checker
@@ -189,8 +254,36 @@ class Server:
             server_version = "hallpass"
             sys_version = ""
             protocol_version = "HTTP/1.1"
-            # Bounds reading the request line, headers and body.
-            timeout = 15
+            # The socket timeout while waiting for a request; reads within
+            # one are bounded by _DeadlineReader.
+            timeout = server.idle_timeout
+
+            def setup(self) -> None:
+                super().setup()
+                self.rfile = _DeadlineReader(self.rfile, self.connection)  # type: ignore[assignment]
+
+            def handle_one_request(self) -> None:
+                r: _DeadlineReader = self.rfile  # type: ignore[assignment]
+                r.deadline = None
+                self.connection.settimeout(server.idle_timeout)
+                try:
+                    if not r.wait_first_byte():
+                        self.close_connection = True
+                        return
+                except (TimeoutError, OSError):
+                    self.close_connection = True
+                    return
+                start = time.monotonic()
+                self._read_deadline = start + server.read_timeout
+                r.deadline = start + server.header_timeout
+                super().handle_one_request()
+
+            def parse_request(self) -> bool:
+                ok = super().parse_request()
+                # The headers are in: the body has what is left of the
+                # request's read timeout.
+                self.rfile.deadline = self._read_deadline  # type: ignore[attr-defined]
+                return ok
 
             def log_message(self, format: str, *args: Any) -> None:
                 pass
@@ -226,7 +319,9 @@ class Server:
                         return
                     if path == "/check":
                         body, too_large = self._body()
-                        status, headers, out = server.handle_check(self.command, self.headers.get("Authorization", ""), body, self.client_address[0], too_large)
+                        status, headers, out = server.handle_check(
+                            self.command, self.headers.get("Authorization", ""), body, _client_ip(self.client_address[0]), too_large
+                        )
                         if too_large:
                             self.close_connection = True
                         self._send(status, headers, out)
@@ -252,7 +347,7 @@ class Server:
                         path=path,
                         status=status,
                         duration_ms=int((time.monotonic() - start) * 1000),
-                        remote=self.client_address[0],
+                        remote=_client_ip(self.client_address[0]),
                     )
 
             def _length(self) -> int | None:
@@ -364,11 +459,11 @@ class Server:
                 httpd = _DualStackServer(("::", int(port or 0)), handler)
             except OSError:
                 # No IPv6 on this host: every IPv4 address.
-                httpd = ThreadingHTTPServer(("0.0.0.0", int(port or 0)), handler)
+                httpd = _TCPServer(("0.0.0.0", int(port or 0)), handler)
         elif ":" in host:
             httpd = _V6Server((host, int(port or 0)), handler)
         else:
-            httpd = ThreadingHTTPServer((host, int(port or 0)), handler)
+            httpd = _TCPServer((host, int(port or 0)), handler)
         httpd.daemon_threads = True
         self._httpd = httpd
         bound = httpd.server_address
@@ -400,11 +495,16 @@ class Server:
         self._httpd.server_close()
 
 
-class _V6Server(ThreadingHTTPServer):
+class _TCPServer(ThreadingHTTPServer):
+    # The kernel's accept queue, as Go listens (socketserver's default is 5).
+    request_queue_size = socket.SOMAXCONN
+
+
+class _V6Server(_TCPServer):
     address_family = socket.AF_INET6
 
 
-class _DualStackServer(ThreadingHTTPServer):
+class _DualStackServer(_TCPServer):
     """ ":8080" listens on every address, IPv4 and IPv6, as Go does."""
 
     address_family = socket.AF_INET6

@@ -22,9 +22,10 @@ Unicode general categories (``\\pL``, ``\\p{Lu}``, ``\\PN``, ``\\p{^N}``,
 ``\\p{Any}``) are expanded into ranges from Python's Unicode database, whose
 version may trail Go's by a release.
 
-Not supported (rejected, so such a pattern never matches): Unicode scripts
-such as ``\\p{Greek}``, ``\\C``, the U (ungreedy) flag, negated POSIX classes
-inside a larger bracket expression.
+Not supported (RE2Unsupported, which the enforcer answers as unknown rather
+than as a pattern that never matches): Unicode scripts such as
+``\\p{Greek}``, the U (ungreedy) flag, negated POSIX classes inside a larger
+bracket expression. ``\\C``, which Go rejects, never matches.
 """
 
 from __future__ import annotations
@@ -34,11 +35,17 @@ import sys
 import threading
 import unicodedata
 
-__all__ = ["RE2Error", "compile_re2", "translate"]
+__all__ = ["RE2Error", "RE2Unsupported", "compile_re2", "translate"]
 
 
 class RE2Error(ValueError):
     pass
+
+
+class RE2Unsupported(RE2Error):
+    """A pattern Go may well accept but this translation cannot express.
+    Unlike an invalid pattern, it must not be read as "never matches": in a
+    deny rule that would skip the deny."""
 
 
 _WORD = "0-9A-Za-z_"
@@ -184,6 +191,9 @@ def _unicode_class(p: str, i: int) -> tuple[str, int]:
         name = p[j]
         j += 1
     if name != "Any" and name not in _CATEGORIES:
+        if name[:1].isascii() and name[:1].isupper() and name.replace("_", "").isalnum():
+            # A Unicode script such as Greek or Han, which Go knows.
+            raise RE2Unsupported(f"Unicode script class \\p{{{name}}} is not supported")
         raise RE2Error("invalid or unsupported character class range")
     body = _class_body(_ranges_of(name), negate)
     if body == "":
@@ -263,7 +273,7 @@ def _bracket(p: str, i: int) -> tuple[str, int]:
                     j = end + 2
                     continue
                 if name.startswith("^") and name[1:] in _POSIX:
-                    raise RE2Error("negated POSIX class not supported")
+                    raise RE2Unsupported("negated POSIX class inside a bracket expression is not supported")
                 raise RE2Error("invalid character class range")
         if c == "\\":
             if p.startswith("\\Q", j):
@@ -313,7 +323,7 @@ def translate(p: str) -> str:
                 out.append("[" + t + "]")
                 continue
             if i + 1 < n and p[i + 1] == "C":
-                raise RE2Error("unsupported escape")
+                raise RE2Error("invalid escape sequence")
             t, i = _escape(p, i, False)
             out.append(t)
             continue
@@ -335,8 +345,10 @@ def translate(p: str) -> str:
                     i += 3
                     continue
                 m = _FLAGS.match(p, i)
-                if not m or m.group(1) in ("", "-") or m.group(1).endswith("-") or "U" in m.group(1):
+                if not m or m.group(1) in ("", "-") or m.group(1).endswith("-"):
                     raise RE2Error("invalid or unsupported Perl syntax")
+                if "U" in m.group(1):
+                    raise RE2Unsupported("the U (ungreedy) flag is not supported")
                 flags = m.group(1)
                 if m.group(2) == ":":
                     out.append(f"(?{flags}:")
