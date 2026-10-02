@@ -45,8 +45,8 @@ the `pypi` job creates the project. `PUBLISH_PYPI` must be `true`.
 
 1. Publish the first version of `toolpass-client` by hand from a release's
    `toolpass-client-node.tgz`: `npm publish toolpass-client-node.tgz --access public --otp=<code>`
-   (the account needs two-factor authentication). Until then, set `PUBLISH_NPM` to `false`, or
-   the release's `npm` job fails.
+   (the account needs two-factor authentication). Until then, the release's `npm` job finds no
+   `toolpass-client` on npm and skips, with a note in the run's summary.
 2. On npmjs.com, `toolpass-client` → Settings → Trusted publishing: GitHub Actions, owner
    `roee-hersh`, repository `toolpass`, workflow `release.yaml`, environment `npm`.
 3. Set the Actions variable `PUBLISH_NPM` to `true`. The workflow authenticates with its OpenID
