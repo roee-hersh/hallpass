@@ -67,9 +67,10 @@ def test_validators(dana):
     def no_dashes(v: str) -> bool:
         return not v.startswith("-")
 
-    def positive(v: int) -> None:
+    def positive(v: int) -> bool:
         if v <= 0:
             raise ValueError("must be positive")
+        return True
 
     @tools.tool(effect="write", validate={"ref": no_dashes, "n": positive})
     def checkout(ref: str, n: int = 1) -> str:

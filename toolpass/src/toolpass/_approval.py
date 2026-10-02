@@ -19,6 +19,7 @@ import hashlib
 import json
 import threading
 import time
+import unicodedata
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
@@ -56,7 +57,7 @@ class ApprovalRequest:
             "needs approval because: " + "; ".join(self.reasons),
         ]
         if self.preview:
-            lines.append("preview:\n" + self.preview)
+            lines.append("preview:\n" + visible(self.preview))
         return "\n".join(lines)
 
 
@@ -81,6 +82,18 @@ def _plain(value: object, depth: int = 0) -> object:
     return {"repr": f"{type(value).__qualname__}:{value!r}"}
 
 
+def visible(text: str) -> str:
+    """``text`` with control, format (bidi, zero-width) and unassigned
+    characters spelled as escapes, so a person reads what is really there."""
+    out = []
+    for ch in text:
+        if ch in "\n\t" or unicodedata.category(ch) not in ("Cc", "Cf", "Co", "Cn", "Zl", "Zp"):
+            out.append(ch)
+        else:
+            out.append(f"\\u{ord(ch):04x}" if ord(ch) <= 0xFFFF else f"\\U{ord(ch):08x}")
+    return "".join(out)
+
+
 def _shown(value: object, depth: int = 0) -> object:
     """``value`` as JSON-safe data for a person to read."""
     if value is None or isinstance(value, (bool, int, float, str)):
@@ -88,7 +101,13 @@ def _shown(value: object, depth: int = 0) -> object:
     if depth > 20:
         return repr(value)
     if isinstance(value, Mapping):
-        return {k if isinstance(k, str) else repr(k): _shown(v, depth + 1) for k, v in value.items()}
+        shown: dict[str, object] = {}
+        for k, v in value.items():
+            label = k if isinstance(k, str) else f"<{type(k).__name__}> {k!r}"
+            while label in shown:  # two keys that read alike: show both, never drop one
+                label += " (again)"
+            shown[label] = _shown(v, depth + 1)
+        return shown
     if isinstance(value, (list, tuple)):
         return [_shown(v, depth + 1) for v in value]
     return repr(value)
@@ -142,8 +161,17 @@ class ApprovalQueue:
             else:
                 verdict = None
         if notify:
+            failed: Exception | None = None
             for listen in list(self._listeners):
-                listen(request)
+                try:
+                    listen(request)
+                except Exception as e:  # every listener still hears of it
+                    failed = failed or e
+            if failed is not None:
+                # Nobody may have seen it: forget it, so the retry asks again.
+                with self._lock:
+                    self._entries.pop(request.id, None)
+                raise failed
         return verdict
 
     def on_request(self, listener: Callable[[ApprovalRequest], None]) -> None:

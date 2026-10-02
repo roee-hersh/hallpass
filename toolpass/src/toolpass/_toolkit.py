@@ -44,6 +44,8 @@ from toolpass._approval import ApprovalQueue, ApprovalRequest, Approver
 from toolpass._audit import AuditEvent, AuditSink, log_audit, shorten
 from toolpass._checks import ArgumentError, Scope, ScopeRule, Validator, check_arguments, hints
 from toolpass._session import Session, current_session
+from toolpass._walk import mentions as walk_mentions
+from toolpass._walk import strings
 
 log = logging.getLogger("toolpass")
 
@@ -72,9 +74,10 @@ class ToolRefused(Exception):
 
 
 class ToolError(Exception):
-    """The tool's body raised, and its message mentioned the injected
-    credential. The message here is the original with the secret redacted;
-    ``original`` keeps the exception for the application's own logs."""
+    """The tool's body raised, and its message either mentioned the injected
+    credential (redacted here) or came from a tool whose output is untrusted
+    (recorded and fenced here). ``original`` keeps the exception for the
+    application's own logs."""
 
     def __init__(self, tool: str, message: str, original: BaseException) -> None:
         self.tool, self.original = tool, original
@@ -271,9 +274,24 @@ def _redact(value: Any, secrets_: list[str], depth: int = 0) -> Any:
         return make(items) if callable(make) else tuple(items)
     if isinstance(value, (set, frozenset)):
         return type(value)(_redact(v, secrets_, depth + 1) for v in value)
-    if _mentions(str(value), secrets_) or _mentions(repr(value), secrets_):
-        return _redact_text(str(value), secrets_)
-    return value
+    if not (walk_mentions(value, secrets_) or _mentions(repr(value), secrets_)):
+        return value
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        try:
+            changes = {f.name: _redact(getattr(value, f.name), secrets_, depth + 1) for f in dataclasses.fields(value) if f.init}
+            copy = dataclasses.replace(value, **changes)
+        except Exception:
+            copy = None
+        if copy is not None and not walk_mentions(copy, secrets_) and not _mentions(repr(copy), secrets_):
+            return copy
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):  # a pydantic model: its fields as data, redacted
+        try:
+            return _redact(model_dump(), secrets_, depth + 1)
+        except Exception:
+            pass
+    # Anything else that mentions the secret becomes its redacted text.
+    return _redact_text(str(value), secrets_) if not walk_mentions(_redact_text(str(value), secrets_), secrets_) else "[REDACTED]"
 
 
 def _as_decision(result: Any) -> AuthDecision:
@@ -433,6 +451,9 @@ class Toolkit:
     ) -> ToolSpec:
         if effect not in EFFECTS:
             raise ValueError(f"effect must be one of {', '.join(EFFECTS)}, not {effect!r}")
+        if inspect.isgeneratorfunction(fn) or inspect.isasyncgenfunction(fn):
+            # Its body would run after the checks' bookkeeping, unredacted and unrecorded.
+            raise TypeError(f"{getattr(fn, '__name__', fn)}: generator tools are not supported; return the full result instead")
         tool_name = name or getattr(fn, "__name__", None) or type(fn).__name__
         sig = inspect.signature(fn)
         resolved, unresolved = hints(fn if inspect.isfunction(fn) or inspect.ismethod(fn) else type(fn).__call__)
@@ -589,7 +610,7 @@ class Toolkit:
             try:
                 decision = _as_decision((yield _Ext(spec.authorize, (call,), {}, blocking=True)))
             except Exception as e:
-                raise ToolRefused(spec.name, "authorization_error", f"authorization could not be decided ({type(e).__name__}: {e})") from None
+                raise ToolRefused(spec.name, "authorization_error", f"authorization could not be decided ({type(e).__name__})") from None
             ev.authorization = decision.reason or ("allow" if decision.allowed else "deny")
             if not decision.allowed:
                 raise ToolRefused(spec.name, "not_authorized", f"{session.user} may not run {spec.name}: {decision.reason or 'denied'}")
@@ -656,15 +677,30 @@ class Toolkit:
             result = yield _Ext(spec.fn, bound.args, call_kwargs, body=True)
         except BaseException as e:
             ev.outcome, ev.code, ev.reason = "raised", None, type(e).__name__
-            if hidden and isinstance(e, Exception) and (_mentions(str(e), hidden) or _mentions(repr(e.args), hidden)):
-                raise ToolError(spec.name, _redact_text(f"{type(e).__name__}: {e}", hidden), e) from None
+            if not isinstance(e, Exception):
+                raise
+            text = f"{type(e).__name__}: {e}"
+            leaked = bool(hidden) and (_mentions(str(e), hidden) or _mentions(repr(e.args), hidden))
+            if spec.untrusted_output:
+                # The error text may carry what the tool fetched; frameworks hand it to the model.
+                session._record_untrusted([text, *strings(e.args)])
+            if leaked or (spec.untrusted_output and self.fence_untrusted):
+                message = _redact_text(text, hidden) if hidden else text
+                if spec.untrusted_output and self.fence_untrusted:
+                    message = fence(message, spec.name)
+                raise ToolError(spec.name, message, e) from None
             raise
-        if hidden:
-            result = _redact(result, hidden)
-        if spec.untrusted_output:
-            session._record_untrusted(result)
-            if self.fence_untrusted and isinstance(result, str):
-                result = fence(result, spec.name)
+        try:
+            if hidden:
+                result = _redact(result, hidden)
+            if spec.untrusted_output:
+                session._record_untrusted(result)
+                if self.fence_untrusted and isinstance(result, str):
+                    result = fence(result, spec.name)
+        except BaseException as e:
+            # The body ran; its result is not returned unredacted or unrecorded.
+            ev.outcome, ev.code, ev.reason = "raised", None, f"after the body: {type(e).__name__}"
+            raise
         ev.outcome = "ran"
         return result
 

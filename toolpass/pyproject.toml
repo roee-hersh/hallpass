@@ -61,6 +61,7 @@ ignore = ["A001", "A002", "N818", "RUF012", "SIM105", "SIM108", "UP007", "B904"]
 # Fail closed: any failure in a hook (authorizer, approver, credentials) refuses the call.
 "src/toolpass/_toolkit.py" = ["BLE001"]
 "src/toolpass/_checks.py" = ["BLE001"]
-"src/toolpass/_untrusted.py" = ["BLE001"]
+"src/toolpass/_approval.py" = ["BLE001"]
+"src/toolpass/_walk.py" = ["BLE001"]
 # The tests exercise typing.Optional on purpose.
 "tests/**" = ["BLE", "B011", "N802", "SIM", "UP045"]

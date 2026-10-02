@@ -21,7 +21,8 @@ from typing import Any, Union
 # compiled regular expression (must match the whole value), or a predicate.
 ScopeRule = Union[str, Sequence[str], "re.Pattern[str]", Callable[[Any], bool]]
 
-# A validator returns False or raises ValueError (or TypeError) to reject.
+# A validator returns True (or any truthy value, such as a re.Match) to accept;
+# it returns anything falsy (False, None) or raises to reject.
 Validator = Callable[[Any], object]
 
 
@@ -218,7 +219,7 @@ def check_arguments(
             raise ArgumentError("invalid_arguments", name, f"{name} is not valid: {e}") from None
         except Exception as e:  # a validator that cannot decide rejects
             raise ArgumentError("invalid_arguments", name, f"{name} could not be validated ({type(e).__name__})") from None
-        if ok is False:
+        if not ok:  # False, None (re.fullmatch failing), 0, "": all reject
             raise ArgumentError("invalid_arguments", name, f"{name}={_short(arguments.get(name))} is not valid")
 
 

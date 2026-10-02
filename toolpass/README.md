@@ -116,11 +116,17 @@ A refused call raises `ToolRefused` with a `code` (`out_of_scope`, `not_authoriz
 `untrusted_input`, `approval_pending`, ...) and a message written for the model. Most frameworks pass
 the exception's text back to the model. Where a framework hides it, `Toolkit(on_refuse=str)`
 returns the message as the tool's result instead. A check that itself fails unexpectedly (a
-validator that raises, a session source that is down) refuses with `check_error`.
+scope predicate that crashes, a session source that is down) refuses with `check_error` or the
+check's own code.
 
-An exception from the tool's own body passes through unchanged, unless its message contains the
-injected credential: then it is raised as `ToolError`, with the secret redacted from the message and
-the original exception kept on `.original` for your own logs.
+An exception from the tool's own body passes through unchanged, with two exceptions. If its message
+contains the injected credential, or the tool is marked `untrusted_output` (its error text may
+carry what it fetched), it is raised as `ToolError`: the secret redacted, the untrusted text
+recorded and fenced, and the original exception kept on `.original` for your own logs.
+
+A validator accepts by returning `True` (or any truthy value, such as a `re.Match`) and rejects by
+returning anything falsy (`False`, `None`) or raising. Generator tools are not supported: return
+the whole result.
 
 ## Permission checks with hallpass
 
