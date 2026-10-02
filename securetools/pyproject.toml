@@ -55,5 +55,7 @@ ignore = ["A001", "A002", "N818", "RUF012", "SIM105", "SIM108", "UP007", "B904"]
 [tool.ruff.lint.per-file-ignores]
 # Fail closed: any failure in a hook (authorizer, approver, credentials) refuses the call.
 "src/securetools/_toolkit.py" = ["BLE001"]
+"src/securetools/_checks.py" = ["BLE001"]
+"src/securetools/_untrusted.py" = ["BLE001"]
 # The tests exercise typing.Optional on purpose.
 "tests/**" = ["BLE", "B011", "N802", "SIM", "UP045"]

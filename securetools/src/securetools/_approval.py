@@ -19,7 +19,7 @@ import hashlib
 import json
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,8 +32,8 @@ Approver = Callable[["ApprovalRequest"], bool | None]
 class ApprovalRequest:
     """A call waiting for a person to approve it.
 
-    ``id`` is derived from the session, the tool and the arguments, so the
-    model retrying the same call refers to the same request. ``reasons`` says
+    ``id`` is derived from the session, the tool, the arguments and the
+    reasons, so the model retrying the same call refers to the same request. ``reasons`` says
     why approval is needed; ``preview`` is the tool's own description of what
     the call will change, when it has one.
     """
@@ -45,13 +45,13 @@ class ApprovalRequest:
 
     @staticmethod
     def make(call: Call, reasons: tuple[str, ...], preview: str | None) -> ApprovalRequest:
-        return ApprovalRequest(_key(call), call, reasons, preview)
+        return ApprovalRequest(_key(call, reasons), call, reasons, preview)
 
     def describe(self) -> str:
         """A few lines for a person deciding: who, what, why, and the preview."""
         lines = [
             f"{self.call.session.user} asked the agent to run {self.call.tool} ({self.call.effect})",
-            "arguments: " + json.dumps(dict(self.call.arguments), default=repr, ensure_ascii=False),
+            "arguments: " + json.dumps({str(k): _plain(v) for k, v in self.call.arguments.items()}, ensure_ascii=False),
             "needs approval because: " + "; ".join(self.reasons),
         ]
         if self.preview:
@@ -59,13 +59,27 @@ class ApprovalRequest:
         return "\n".join(lines)
 
 
-def _key(call: Call) -> str:
-    canonical = json.dumps(
-        {"session": call.session.id, "tool": call.tool, "arguments": dict(call.arguments)},
-        sort_keys=True,
-        default=repr,
-        ensure_ascii=False,
-    )
+def _plain(value: object, depth: int = 0) -> object:
+    """``value`` as JSON-safe data with a stable order: mappings become
+    sorted [key, value] pairs, keys of any type are spelled with their type."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if depth > 20:
+        return repr(value)
+    if isinstance(value, Mapping):
+        pairs = [[f"{type(k).__name__}:{k!r}", _plain(v, depth + 1)] for k, v in value.items()]
+        return sorted(pairs, key=lambda kv: str(kv[0]))
+    if isinstance(value, (list, tuple)):
+        return [_plain(v, depth + 1) for v in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted((_plain(v, depth + 1) for v in value), key=repr)
+    return repr(value)
+
+
+def _key(call: Call, reasons: tuple[str, ...]) -> str:
+    # The reasons are part of the key: an approval given for one reason does
+    # not cover the same call once a new reason (exfiltration) applies.
+    canonical = json.dumps([call.session.id, call.tool, _plain(dict(call.arguments)), sorted(reasons)], ensure_ascii=False)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 

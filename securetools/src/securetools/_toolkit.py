@@ -40,7 +40,7 @@ import types
 from collections.abc import Callable, Generator, Mapping
 from typing import Any, Literal, NamedTuple, TypeVar, Union, cast
 
-from securetools._approval import ApprovalRequest, Approver
+from securetools._approval import ApprovalQueue, ApprovalRequest, Approver
 from securetools._audit import AuditEvent, AuditSink, log_audit, shorten
 from securetools._checks import ArgumentError, Scope, ScopeRule, Validator, check_arguments, hints
 from securetools._session import Session, current_session
@@ -60,7 +60,8 @@ class ToolRefused(Exception):
     ``out_of_scope``, ``limit_reached``, ``not_authorized``,
     ``authorization_error``, ``untrusted_input``, ``exfiltration_risk``,
     ``approval_unavailable``, ``approval_error``, ``preview_error``,
-    ``approval_pending``, ``approval_rejected`` or ``credential_error``.
+    ``approval_pending``, ``approval_rejected``, ``credential_error`` or
+    ``check_error`` (a check itself failed unexpectedly).
     The message is written for the model: it says what happened without
     revealing credentials.
     """
@@ -68,6 +69,16 @@ class ToolRefused(Exception):
     def __init__(self, tool: str, code: str, reason: str) -> None:
         self.tool, self.code, self.reason = tool, code, reason
         super().__init__(f"{tool} refused ({code}): {reason}")
+
+
+class ToolError(Exception):
+    """The tool's body raised, and its message mentioned the injected
+    credential. The message here is the original with the secret redacted;
+    ``original`` keeps the exception for the application's own logs."""
+
+    def __init__(self, tool: str, message: str, original: BaseException) -> None:
+        self.tool, self.original = tool, original
+        super().__init__(message)
 
 
 class ApprovalPending(ToolRefused):
@@ -129,6 +140,7 @@ class ToolSpec:
     sends_out: bool
     credential: str | None
     is_async: bool
+    variadic: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
 
 def spec_of(tool: Callable[..., Any]) -> ToolSpec | None:
@@ -145,6 +157,7 @@ class _Ext(NamedTuple):
     args: tuple[Any, ...]
     kwargs: dict[str, Any]
     body: bool = False
+    blocking: bool = False
 
 
 _Steps = Generator[_Ext, Any, Any]
@@ -188,10 +201,10 @@ async def _drive_async(steps: _Steps) -> Any:
             return stop.value
         send, throw = None, None
         try:
-            if ext.body or _is_async(ext.fn):
-                result = ext.fn(*ext.args, **ext.kwargs)
-            else:  # a blocking hook (a hallpass check over the network) stays off the event loop
+            if ext.blocking and not _is_async(ext.fn):  # a hallpass check over the network stays off the event loop
                 result = await asyncio.to_thread(ext.fn, *ext.args, **ext.kwargs)
+            else:
+                result = ext.fn(*ext.args, **ext.kwargs)
             if inspect.isawaitable(result):
                 result = await result
             send = result
@@ -226,6 +239,20 @@ def _as_decision(result: Any) -> AuthDecision:
     if result is True or result is False:
         return AuthDecision(result)
     raise TypeError(f"an authorizer must answer AuthDecision, True or False, not {type(result).__name__}")
+
+
+@dataclasses.dataclass
+class _State:
+    """What one call has done so far, for the cleanup around it."""
+
+    session: Session | None = None
+    taken: list[tuple[str, int]] = dataclasses.field(default_factory=list)
+    body_started: bool = False
+
+    def release(self) -> None:
+        if self.taken and self.session is not None:
+            self.session._release(self.taken)
+            self.taken = []
 
 
 class Toolkit:
@@ -363,9 +390,12 @@ class Toolkit:
     ) -> ToolSpec:
         if effect not in EFFECTS:
             raise ValueError(f"effect must be one of {', '.join(EFFECTS)}, not {effect!r}")
-        tool_name = name or getattr(fn, "__name__", None) or "tool"
+        tool_name = name or getattr(fn, "__name__", None) or type(fn).__name__
         sig = inspect.signature(fn)
-        resolved = hints(fn)
+        resolved, unresolved = hints(fn if inspect.isfunction(fn) or inspect.ismethod(fn) else type(fn).__call__)
+        unchecked = [n for n in unresolved if n in sig.parameters and n != "credential"]
+        if unchecked:
+            log.warning("securetools: %s: cannot resolve the type hint of %s; those arguments are not type-checked", tool_name, ", ".join(unchecked))
         params = []
         for p in sig.parameters.values():
             if p.name == "credential":
@@ -410,7 +440,10 @@ class Toolkit:
             reads_private=reads_private,
             sends_out=sends_out,
             credential=credential,
-            is_async=inspect.iscoroutinefunction(fn),
+            is_async=_is_async(fn),
+            variadic=types.MappingProxyType(
+                {p.name: "*" if p.kind is inspect.Parameter.VAR_POSITIONAL else "**" for p in params if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+            ),
         )
 
     # The pipeline. A generator, so the same checks drive sync and async tools.
@@ -442,132 +475,155 @@ class Toolkit:
         raise LookupError("no credentials source")
 
     def _steps(self, spec: ToolSpec, args: tuple[Any, ...], kwargs: dict[str, Any]) -> _Steps:
+        """The audit event and the refusal around the checks and the body."""
         started = time.perf_counter()
         ev = AuditEvent.start(spec.name, spec.effect)
-        taken: list[tuple[str, int]] = []
-        session: Session | None = None
+        state = _State()
         try:
-            session = self._session()
-            if session is None:
-                raise ToolRefused(spec.name, "no_session", "no session is active; the application must make one current for the user it authenticated")
-            ev.session, ev.user = session.id, session.user
-
-            # 2. Arguments.
-            try:
-                bound = spec.signature.bind(*args, **kwargs)
-            except TypeError as e:
-                raise ToolRefused(spec.name, "invalid_arguments", str(e)) from None
-            bound.apply_defaults()
-            arguments: Mapping[str, Any] = types.MappingProxyType(dict(bound.arguments))
-            if self.audit_arguments:
-                ev.arguments = shorten(arguments)
-            call = Call(spec.name, spec.effect, session, arguments)
-            try:
-                check_arguments(arguments, spec.types, spec.validators)
-                if spec.scope is not None:
-                    spec.scope.check(arguments)
-            except ArgumentError as e:
-                raise ToolRefused(spec.name, e.code, str(e)) from None
-
-            # 3. Limits, taken now and given back if a later check refuses.
-            caps = self._caps(spec)
-            exhausted = session._reserve(caps)
-            if exhausted is not None:
-                raise ToolRefused(spec.name, "limit_reached", f"this session reached its limit for {exhausted}")
-            taken = caps
-
-            # 4. Authorization.
-            if spec.authorize is not None:
-                try:
-                    decision = _as_decision((yield _Ext(spec.authorize, (call,), {})))
-                except Exception as e:
-                    raise ToolRefused(spec.name, "authorization_error", f"authorization could not be decided ({type(e).__name__}: {e})") from None
-                ev.authorization = decision.reason or ("allow" if decision.allowed else "deny")
-                if not decision.allowed:
-                    raise ToolRefused(spec.name, "not_authorized", f"{session.user} may not run {spec.name}: {decision.reason or 'denied'}")
-
-            # 5-7. Untrusted input, exfiltration, approval.
-            reasons: list[str] = []
-            if spec.approve is True:
-                reasons.append("this tool always needs approval")
-            elif callable(spec.approve):
-                try:
-                    needed = yield _Ext(spec.approve, (call,), {})
-                except Exception as e:
-                    raise ToolRefused(spec.name, "approval_error", f"the approval rule failed ({type(e).__name__})") from None
-                if needed is not False:  # anything but a plain "no" asks a person
-                    reasons.append("this call matches the tool's approval rule")
-            if spec.check_untrusted and session._carries_untrusted(arguments.values()):
-                message = "an argument repeats content from an untrusted source seen in this session, so the call may have been injected"
-                if self.on_untrusted_input == "refuse":
-                    raise ToolRefused(spec.name, "untrusted_input", message)
-                reasons.append(message)
-            if spec.sends_out and self.exfiltration != "off" and session.read_private and session.saw_untrusted:
-                message = "this session has read private data and seen untrusted content, and this tool sends data out"
-                if self.exfiltration == "refuse":
-                    raise ToolRefused(spec.name, "exfiltration_risk", message)
-                reasons.append(message)
-            if reasons:
-                ev.approval_reasons = reasons
-                if self.approver is None:
-                    raise ToolRefused(spec.name, "approval_unavailable", f"this call needs approval ({'; '.join(reasons)}) and no approver is configured")
-                preview = None
-                if spec.preview is not None:
-                    try:
-                        shown = yield _Ext(spec.preview, (call,), {})
-                    except Exception as e:
-                        raise ToolRefused(spec.name, "preview_error", f"the preview failed ({type(e).__name__})") from None
-                    preview = None if shown is None else str(shown)
-                request = ApprovalRequest.make(call, tuple(reasons), preview)
-                ev.approval = request.id
-                try:
-                    verdict = yield _Ext(self.approver, (request,), {})
-                except Exception as e:
-                    raise ToolRefused(spec.name, "approval_error", f"the approver failed ({type(e).__name__})") from None
-                if verdict is None:
-                    raise ApprovalPending(spec.name, request)
-                if verdict is not True:
-                    raise ToolRefused(spec.name, "approval_rejected", f"approval {request.id} was rejected")
-
-            # 8. The credential, only after every check passed.
-            call_kwargs = dict(bound.kwargs)
-            secret: Any = None
-            if spec.credential is not None:
-                try:
-                    secret = yield _Ext(self._credential, (spec.credential, call), {})
-                except Exception as e:
-                    # The exception's text could carry the secret or its location; only its type is shown.
-                    raise ToolRefused(spec.name, "credential_error", f"credential {spec.credential!r} is unavailable ({type(e).__name__})") from None
-                call_kwargs["credential"] = secret
-
-            # 9. The body.
-            session._mark(untrusted=spec.untrusted_output, private=spec.reads_private)
-            try:
-                result = yield _Ext(spec.fn, bound.args, call_kwargs, body=True)
-            except BaseException as e:
-                ev.outcome, ev.code, ev.reason = "raised", None, type(e).__name__
-                raise
-            if isinstance(secret, str) and len(secret) >= 8:
-                result = _redact(result, secret)
-            if spec.untrusted_output:
-                session._record_untrusted(result)
-                if self.fence_untrusted and isinstance(result, str):
-                    result = fence(result, spec.name)
-            ev.outcome = "ran"
-            return result
+            return (yield from self._pipeline(spec, args, kwargs, ev, state))
         except ToolRefused as refused:
-            if ev.outcome == "raised":  # the body itself raised it (a nested tool); not this call's refusal
+            if state.body_started:  # raised by the body (a nested tool): not this call's refusal
                 raise
-            if taken and session is not None:
-                session._release(taken)
-            ev.outcome = "pending" if isinstance(refused, ApprovalPending) else "refused"
-            ev.code, ev.reason = refused.code, refused.reason
-            if self.on_refuse is not None:
-                return self.on_refuse(refused)
+            return self._refuse(refused, ev, state)
+        except Exception as e:
+            if state.body_started:
+                raise
+            # A check itself failed (a validator, the session source, ...). Fail closed.
+            failed = ToolRefused(spec.name, "check_error", f"a check failed unexpectedly ({type(e).__name__})")
+            failed.__cause__ = e
+            return self._refuse(failed, ev, state)
+        except BaseException as e:  # cancelled or interrupted
+            if not state.body_started:
+                state.release()
+                ev.outcome, ev.code, ev.reason = "cancelled", None, type(e).__name__
             raise
         finally:
             ev.duration_ms = round((time.perf_counter() - started) * 1000, 3)
             self._emit(ev)
+
+    def _refuse(self, refused: ToolRefused, ev: AuditEvent, state: _State) -> Any:
+        state.release()
+        ev.outcome = "pending" if isinstance(refused, ApprovalPending) else "refused"
+        ev.code, ev.reason = refused.code, refused.reason
+        if self.on_refuse is not None:
+            return self.on_refuse(refused)
+        raise refused
+
+    def _pipeline(self, spec: ToolSpec, args: tuple[Any, ...], kwargs: dict[str, Any], ev: AuditEvent, state: _State) -> _Steps:
+        # 1. Session.
+        session = self._session()
+        if session is None:
+            raise ToolRefused(spec.name, "no_session", "no session is active; the application must make one current for the user it authenticated")
+        state.session = session
+        ev.session, ev.user = session.id, session.user
+
+        # 2. Arguments.
+        try:
+            bound = spec.signature.bind(*args, **kwargs)
+        except TypeError as e:
+            raise ToolRefused(spec.name, "invalid_arguments", str(e)) from None
+        bound.apply_defaults()
+        arguments: Mapping[str, Any] = types.MappingProxyType(dict(bound.arguments))
+        if self.audit_arguments:
+            ev.arguments = shorten(arguments)
+        call = Call(spec.name, spec.effect, session, arguments)
+        try:
+            check_arguments(arguments, spec.types, spec.validators, spec.variadic)
+            if spec.scope is not None:
+                spec.scope.check(arguments)
+        except ArgumentError as e:
+            raise ToolRefused(spec.name, e.code, str(e)) from None
+
+        # 3. Limits, taken now and given back if the call does not reach its body.
+        caps = self._caps(spec)
+        exhausted = session._reserve(caps)
+        if exhausted is not None:
+            raise ToolRefused(spec.name, "limit_reached", f"this session reached its limit for {exhausted}")
+        state.taken = caps
+
+        # 4. Authorization.
+        if spec.authorize is not None:
+            try:
+                decision = _as_decision((yield _Ext(spec.authorize, (call,), {}, blocking=True)))
+            except Exception as e:
+                raise ToolRefused(spec.name, "authorization_error", f"authorization could not be decided ({type(e).__name__}: {e})") from None
+            ev.authorization = decision.reason or ("allow" if decision.allowed else "deny")
+            if not decision.allowed:
+                raise ToolRefused(spec.name, "not_authorized", f"{session.user} may not run {spec.name}: {decision.reason or 'denied'}")
+
+        # 5-7. Untrusted input, exfiltration, approval.
+        reasons: list[str] = []
+        if spec.approve is True:
+            reasons.append("this tool always needs approval")
+        elif callable(spec.approve):
+            try:
+                needed = yield _Ext(spec.approve, (call,), {})
+            except Exception as e:
+                raise ToolRefused(spec.name, "approval_error", f"the approval rule failed ({type(e).__name__})") from None
+            if needed is not False:  # anything but a plain "no" asks a person
+                reasons.append("this call matches the tool's approval rule")
+        if spec.check_untrusted and session._carries_untrusted(arguments.values()):
+            message = "an argument repeats content from an untrusted source seen in this session, so the call may have been injected"
+            if self.on_untrusted_input == "refuse":
+                raise ToolRefused(spec.name, "untrusted_input", message)
+            reasons.append(message)
+        if spec.sends_out and self.exfiltration != "off" and session.read_private and session.saw_untrusted:
+            message = "this session has read private data and seen untrusted content, and this tool sends data out"
+            if self.exfiltration == "refuse":
+                raise ToolRefused(spec.name, "exfiltration_risk", message)
+            reasons.append(message)
+        if reasons:
+            ev.approval_reasons = reasons
+            if self.approver is None:
+                raise ToolRefused(spec.name, "approval_unavailable", f"this call needs approval ({'; '.join(reasons)}) and no approver is configured")
+            preview = None
+            if spec.preview is not None:
+                try:
+                    shown = yield _Ext(spec.preview, (call,), {})
+                except Exception as e:
+                    raise ToolRefused(spec.name, "preview_error", f"the preview failed ({type(e).__name__})") from None
+                preview = None if shown is None else str(shown)
+            request = ApprovalRequest.make(call, tuple(reasons), preview)
+            ev.approval = request.id
+            try:
+                verdict = yield _Ext(self.approver, (request,), {}, blocking=not isinstance(self.approver, ApprovalQueue))
+            except Exception as e:
+                raise ToolRefused(spec.name, "approval_error", f"the approver failed ({type(e).__name__})") from None
+            if verdict is None:
+                raise ApprovalPending(spec.name, request)
+            if verdict is not True:
+                raise ToolRefused(spec.name, "approval_rejected", f"approval {request.id} was rejected")
+
+        # 8. The credential, only after every check passed.
+        call_kwargs = dict(bound.kwargs)
+        secret: Any = None
+        if spec.credential is not None:
+            try:
+                secret = yield _Ext(self._credential, (spec.credential, call), {}, blocking=not isinstance(self.credentials, Mapping))
+            except Exception as e:
+                # The exception's text could carry the secret or its location; only its type is shown.
+                raise ToolRefused(spec.name, "credential_error", f"credential {spec.credential!r} is unavailable ({type(e).__name__})") from None
+            call_kwargs["credential"] = secret
+        redact = isinstance(secret, str) and len(secret) >= 8
+
+        # 9. The body.
+        session._mark(untrusted=spec.untrusted_output, private=spec.reads_private)
+        state.body_started = True
+        try:
+            result = yield _Ext(spec.fn, bound.args, call_kwargs, body=True)
+        except BaseException as e:
+            ev.outcome, ev.code, ev.reason = "raised", None, type(e).__name__
+            if redact and isinstance(e, Exception) and (secret in str(e) or secret in repr(e.args)):
+                raise ToolError(spec.name, _redact(f"{type(e).__name__}: {e}", secret), e) from None
+            raise
+        if redact:
+            result = _redact(result, secret)
+        if spec.untrusted_output:
+            session._record_untrusted(result)
+            if self.fence_untrusted and isinstance(result, str):
+                result = fence(result, spec.name)
+        ev.outcome = "ran"
+        return result
 
     def _emit(self, ev: AuditEvent) -> None:
         if self.audit is None:

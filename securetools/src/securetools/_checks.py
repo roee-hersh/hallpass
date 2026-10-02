@@ -90,13 +90,26 @@ def type_matches(value: Any, hint: Any) -> bool:
     return True
 
 
-def hints(fn: Callable[..., Any]) -> dict[str, Any]:
-    """The function's resolved type hints, or its raw annotations when they
-    cannot be resolved (unresolvable ones are then skipped as strings)."""
+def hints(fn: Callable[..., Any]) -> tuple[dict[str, Any], list[str]]:
+    """The function's resolved type hints, and the names whose hint could not
+    be resolved. Resolution falls back to one annotation at a time, so one
+    unresolvable hint leaves only its own argument unchecked."""
     try:
-        return typing.get_type_hints(fn, include_extras=True)
-    except Exception:  # noqa: BLE001 - any failure to resolve means "use the raw annotations"
-        return dict(getattr(fn, "__annotations__", {}))
+        return typing.get_type_hints(fn, include_extras=True), []
+    except Exception:
+        pass
+    globalns = getattr(fn, "__globals__", {})
+    resolved: dict[str, Any] = {}
+    unresolved: list[str] = []
+    for name, ann in dict(getattr(fn, "__annotations__", None) or {}).items():
+        if isinstance(ann, str):
+            try:
+                # The developer's own annotation, evaluated as typing.get_type_hints would.
+                ann = eval(ann, globalns, {})
+            except Exception:
+                unresolved.append(name)
+        resolved[name] = ann
+    return resolved, unresolved
 
 
 # Scope
@@ -170,10 +183,13 @@ class Scope:
     def check(self, arguments: Mapping[str, Any]) -> None:
         for name, allowed in self._rules.items():
             value = arguments.get(name)
-            if isinstance(value, (list, tuple, set, frozenset)):
-                ok = all(allowed(v) for v in value)
-            else:
-                ok = bool(allowed(value))
+            try:
+                if isinstance(value, (list, tuple, set, frozenset)):
+                    ok = all(allowed(v) for v in value)
+                else:
+                    ok = bool(allowed(value))
+            except Exception:  # a rule that cannot decide keeps the value out
+                ok = False
             if not ok:
                 raise ArgumentError("out_of_scope", name, f"{name}={_short(value)} is outside this tool's scope")
 
@@ -182,17 +198,26 @@ def check_arguments(
     arguments: Mapping[str, Any],
     types_by_name: Mapping[str, Any],
     validators: Mapping[str, Validator],
+    variadic: Mapping[str, str] | None = None,
 ) -> None:
-    """Types first, then validators. Raises ``ArgumentError``."""
+    """Types first, then validators. Raises ``ArgumentError``. ``variadic``
+    names the ``*args`` ("*") and ``**kwargs`` ("**") parameters, whose hint
+    applies to each item."""
+    variadic = variadic or {}
     for name, value in arguments.items():
         hint = types_by_name.get(name, Any)
-        if not type_matches(value, hint):
-            raise ArgumentError("invalid_arguments", name, f"{name} must be {_hint_name(hint)}, got {type(value).__name__}")
+        kind = variadic.get(name)
+        items = value if kind == "*" else value.values() if kind == "**" else (value,)
+        for item in items:
+            if not type_matches(item, hint):
+                raise ArgumentError("invalid_arguments", name, f"{name} must be {_hint_name(hint)}, got {type(item).__name__}")
     for name, validate in validators.items():
         try:
             ok = validate(arguments.get(name))
         except (ValueError, TypeError) as e:
             raise ArgumentError("invalid_arguments", name, f"{name} is not valid: {e}") from None
+        except Exception as e:  # a validator that cannot decide rejects
+            raise ArgumentError("invalid_arguments", name, f"{name} could not be validated ({type(e).__name__})") from None
         if ok is False:
             raise ArgumentError("invalid_arguments", name, f"{name}={_short(arguments.get(name))} is not valid")
 

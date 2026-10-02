@@ -60,7 +60,7 @@ too.
 
 1. **Session.** No current session means no call.
 2. **Arguments.** Types, then validators, then scope rules.
-3. **Limits.** One slot is taken from each cap, and given back if a later step refuses.
+3. **Limits.** One slot is taken from each cap, and given back if the call never reaches its body.
 4. **Authorization.** Only an explicit allow lets the call through.
 5. **Untrusted input.** Arguments repeating six or more consecutive words of untrusted output
    are refused (or sent for approval, with `on_untrusted_input="approve"`).
@@ -115,7 +115,12 @@ instead, for example a prompt in a CLI.
 A refused call raises `ToolRefused` with a `code` (`out_of_scope`, `not_authorized`,
 `untrusted_input`, `approval_pending`, ...) and a message written for the model. Most frameworks pass
 the exception's text back to the model. Where a framework hides it, `Toolkit(on_refuse=str)`
-returns the message as the tool's result instead.
+returns the message as the tool's result instead. A check that itself fails unexpectedly (a
+validator that raises, a session source that is down) refuses with `check_error`.
+
+An exception from the tool's own body passes through unchanged, unless its message contains the
+injected credential: then it is raised as `ToolError`, with the secret redacted from the message and
+the original exception kept on `.original` for your own logs.
 
 ## Authorization with hallpass
 

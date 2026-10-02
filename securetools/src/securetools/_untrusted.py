@@ -18,6 +18,7 @@ on the words and covers that gap for data leaving the system.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import re
 import unicodedata
@@ -42,8 +43,10 @@ def _grams(ws: list[str], n: int) -> Iterator[bytes]:
 
 
 def strings(value: object, depth: int = 0) -> Iterator[str]:
-    """Every string inside ``value``: itself, or the keys, values and items of
-    mappings and sequences, to a bounded depth. Bytes are decoded leniently."""
+    """Every string inside ``value``: itself, the keys, values and items of
+    mappings and sequences, the fields of dataclasses and pydantic models, or
+    the text of any other object, to a bounded depth. Bytes are decoded
+    leniently."""
     if depth > 20:
         return
     if isinstance(value, str):
@@ -57,6 +60,22 @@ def strings(value: object, depth: int = 0) -> Iterator[str]:
     elif isinstance(value, (list, tuple, set, frozenset)):
         for item in value:
             yield from strings(item, depth + 1)
+    elif value is None or isinstance(value, (bool, int, float)):
+        return
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        for f in dataclasses.fields(value):
+            yield from strings(getattr(value, f.name, None), depth + 1)
+    elif callable(model_dump := getattr(value, "model_dump", None)):  # a pydantic model
+        try:
+            dumped = model_dump()
+        except Exception:
+            dumped = None
+        if dumped is not None:
+            yield from strings(dumped, depth + 1)
+        else:
+            yield str(value)
+    else:  # any other object: its text, so nothing untrusted goes unrecorded
+        yield str(value)
 
 
 class UntrustedText:
