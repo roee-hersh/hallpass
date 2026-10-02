@@ -44,7 +44,7 @@ For example, an ops agent with one read tool and one write tool:
 ```python
 from toolpass.strands import ToolpassAuthorization, Rule
 
-toolpass = ToolpassAuthorization(tp, {
+guard = ToolpassAuthorization(tp, {
     # service_health has no rule: it reads with a read-only account and runs unchecked
     "open_config_pr": Rule("github-main", "repo.push", "repo:{owner}/{repo}", fresh=True),
 })
@@ -77,7 +77,7 @@ current_user: ContextVar[str] = ContextVar("current_user")
 @app.post("/chat")
 async def chat(body: ChatIn, user: User = Depends(authenticated_user)):  # your auth
     current_user.set(user.email)
-    agent = Agent(tools=tools, interventions=[toolpass])          # one agent per request
+    agent = Agent(tools=tools, interventions=[guard])          # one agent per request
     result = await agent.invoke_async(body.message, invocation_state={"user_id": user.email})
     return {"reply": str(result)}
 ```
@@ -107,7 +107,7 @@ server that cannot be reached) stops the call before the tool runs.
 the tools need no decorator. This is the usual choice; the recipes below show each framework.
 
 ```python
-toolpass = ToolpassAuthorization(tp, {
+guard = ToolpassAuthorization(tp, {
     "delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True),
     "close_issue": ("jira-main", "TRANSITION_ISSUES", "issue:{key}"),  # a tuple works too
 })
@@ -202,11 +202,11 @@ names another key):
 ```python
 from toolpass.strands import ToolpassAuthorization, Rule
 
-toolpass = ToolpassAuthorization(tp, {
+guard = ToolpassAuthorization(tp, {
     "open_config_pr": Rule("github-main", "repo.push", "repo:{owner}/{repo}", fresh=True),
     "delete_issue": ("jira-main", "DELETE_ISSUES", "issue:{key}"),
 })
-agent = Agent(tools=tools, interventions=[toolpass])
+agent = Agent(tools=tools, interventions=[guard])
 agent(body.message, invocation_state={"user_id": user.email})  # from your auth, per request
 ```
 
@@ -222,12 +222,12 @@ from toolpass.langchain import ToolpassMiddleware, Rule
 class Context:
     user_id: str
 
-toolpass = ToolpassMiddleware(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)})
-agent = create_agent(model, tools=tools, middleware=[toolpass], context_schema=Context)
+guard = ToolpassMiddleware(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)})
+agent = create_agent(model, tools=tools, middleware=[guard], context_schema=Context)
 agent.invoke({"messages": [...]}, context=Context(user_id=user.email))
 ```
 
-For a LangGraph graph you assemble yourself, `toolpass.tool_node(tools)` is a `ToolNode` with the
+For a LangGraph graph you assemble yourself, `guard.tool_node(tools)` is a `ToolNode` with the
 same check.
 
 **MCP servers** (`toolpass[mcp]`, the official `mcp` SDK v2 and its `MCPServer`). Server
@@ -288,10 +288,10 @@ call, built-in or MCP. Rules use Claude Code's tool names: `mcp__<server>__<tool
 ```python
 from toolpass.claude_agent_sdk import ToolpassHooks, Rule
 
-toolpass = ToolpassHooks(tp, {
+guard = ToolpassHooks(tp, {
     "mcp__ops__delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True),
 }, user=current_user)
-options = toolpass.apply(ClaudeAgentOptions(mcp_servers={"ops": server}, allowed_tools=[...]))
+options = guard.apply(ClaudeAgentOptions(mcp_servers={"ops": server}, allowed_tools=[...]))
 
 current_user.set(user.email)  # before query() or client.connect()
 async for message in query(prompt=prompt, options=options): ...
@@ -308,13 +308,13 @@ and to its LLM sub-agents. The user is the session's `user_id`, which you pass t
 ```python
 from toolpass.google_adk import ToolpassCallbacks, Rule
 
-toolpass = ToolpassCallbacks(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)})
-agent = toolpass.apply(LlmAgent(name="ops", model=..., tools=[get_issue, delete_issue]))
+guard = ToolpassCallbacks(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)})
+agent = guard.apply(LlmAgent(name="ops", model=..., tools=[get_issue, delete_issue]))
 runner = InMemoryRunner(agent=agent)
 session = await runner.session_service.create_session(app_name=runner.app_name, user_id=user.email)
 ```
 
-`toolpass.plugin()` is the same check as an `App` plugin, for every agent at once; plugins run
+`guard.plugin()` is the same check as an `App` plugin, for every agent at once; plugins run
 before an agent's own callbacks, so do not combine it with callbacks that edit tool arguments.
 
 **CrewAI** (`toolpass[crewai]`). A pair of `before_tool_call` and `after_tool_call` hooks. CrewAI
@@ -344,8 +344,8 @@ from toolpass.pydantic_ai import ToolpassAuthorization, Rule
 class Deps:
     user: str
 
-toolpass = ToolpassAuthorization(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)})
-agent = Agent(model, deps_type=Deps, tools=[delete_issue, read_issue], capabilities=[toolpass])
+guard = ToolpassAuthorization(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)})
+agent = Agent(model, deps_type=Deps, tools=[delete_issue, read_issue], capabilities=[guard])
 agent.run_sync(prompt, deps=Deps(user=user.email))
 ```
 
@@ -360,9 +360,9 @@ runs in a copy of the caller's context, so set a `ContextVar` before `agent.run`
 ```python
 from toolpass.llamaindex import ToolpassAuthorization, Rule
 
-toolpass = ToolpassAuthorization(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)},
+guard = ToolpassAuthorization(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)},
                                  user=current_user)
-agent = FunctionAgent(tools=toolpass.wrap([delete_issue, read_issue]), llm=llm)
+agent = FunctionAgent(tools=guard.wrap([delete_issue, read_issue]), llm=llm)
 
 current_user.set(user.email)  # before agent.run
 await agent.run(prompt)

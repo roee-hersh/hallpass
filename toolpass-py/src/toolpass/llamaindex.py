@@ -11,11 +11,11 @@ in one go:
     from toolpass import Toolpass
     from toolpass.llamaindex import ToolpassAuthorization, Rule
 
-    toolpass = ToolpassAuthorization(Toolpass.from_config("toolpass.yaml"), {
+    guard = ToolpassAuthorization(Toolpass.from_config("toolpass.yaml"), {
         "delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True),
         "read_issue": ("jira-main", "BROWSE_PROJECTS", "issue:{key}"),
     }, user=current_user)
-    agent = FunctionAgent(tools=toolpass.wrap([delete_issue, read_issue]), llm=llm)
+    agent = FunctionAgent(tools=guard.wrap([delete_issue, read_issue]), llm=llm)
 
     current_user.set(user.email)  # from your auth, before agent.run
     await agent.run(prompt)

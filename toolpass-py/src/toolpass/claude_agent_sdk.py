@@ -13,10 +13,10 @@ the reason to Claude as the tool's error result, and the session goes on.
     from toolpass.claude_agent_sdk import ToolpassHooks, Rule
 
     current_user: ContextVar[str] = ContextVar("current_user")
-    toolpass = ToolpassHooks(Toolpass.from_config("toolpass.yaml"), {
+    guard = ToolpassHooks(Toolpass.from_config("toolpass.yaml"), {
         "mcp__ops__delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True),
     }, user=current_user)
-    options = toolpass.apply(ClaudeAgentOptions(mcp_servers={"ops": server}, allowed_tools=[...]))
+    options = guard.apply(ClaudeAgentOptions(mcp_servers={"ops": server}, allowed_tools=[...]))
 
     current_user.set(user.email)  # from your auth, before query() or client.connect()
     async for message in query(prompt=prompt, options=options): ...

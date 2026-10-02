@@ -25,7 +25,7 @@ from toolpass.strands import Rule, ToolpassAuthorization
 
 tp = Toolpass(connections=[{"id": "demo", "integration": "fake", "users": "dana@example.com", "admins": "admin@example.com"}])
 
-toolpass = ToolpassAuthorization(tp, {"write_thing": Rule("demo", "thing.write", "thing:{thing_id}")})
+guard = ToolpassAuthorization(tp, {"write_thing": Rule("demo", "thing.write", "thing:{thing_id}")})
 
 
 @tool(context=True)
@@ -43,7 +43,7 @@ def write_thing(thing_id: str, content: str, tool_context: ToolContext) -> str:
 def main() -> None:
     # Demo only: the command line stands in for the user your login authenticated.
     user = sys.argv[1] if len(sys.argv) > 1 else "dana@example.com"
-    agent = Agent(model=AnthropicModel(model_id="claude-haiku-4-5", max_tokens=1024), tools=[write_thing], interventions=[toolpass])
+    agent = Agent(model=AnthropicModel(model_id="claude-haiku-4-5", max_tokens=1024), tools=[write_thing], interventions=[guard])
     agent("Write 'hello' to thing 1.", invocation_state={"user_id": user})
 
 

@@ -12,14 +12,15 @@ by hand, or skips them. toolpass is a decorator that adds those checks to a plai
 function:
 
 ```python
-from toolpass import ApprovalQueue, Session, Toolkit, Toolpass, permission_check
+import toolpass
+from toolpass import ApprovalQueue, Session, Toolpass, permission_check, secured_tool
 
 tp = Toolpass.from_config("toolpass.yaml")          # permission checks; see below
 approvals = ApprovalQueue()
-tools = Toolkit(approver=approvals, credentials={"github-bot": github_token}, limits={"destructive": 3})
+toolpass.configure(approver=approvals, credentials={"github-bot": github_token}, limits={"destructive": 3})
 
 
-@tools.tool(
+@secured_tool(
     effect="write",
     scope={"repo": "acme/gitops-*"},                 # the tool itself can touch nothing else
     authorize=permission_check(tp, "github-acme", "pull_request.create", "repo:{repo}"),
@@ -36,7 +37,23 @@ with Session("dana@example.com").active():           # the user your app authent
 
 The decorated function keeps its signature (minus the injected `credential`), so LangChain,
 Pydantic AI, CrewAI, the OpenAI Agents SDK or your own loop can put their own `@tool` on top. No
-adapter is needed.
+adapter is needed. Or let `secured_tool` apply it: `as_tool=` takes the framework's decorator and
+returns that framework's tool, with every check inside.
+
+```python
+from langchain_core.tools import tool
+
+@secured_tool(effect="read", untrusted_output=True, as_tool=tool)
+def read_email(id: str) -> str: ...
+```
+
+Some frameworks hide a tool's exception from the model (the OpenAI Agents SDK's `function_tool`
+answers "An error occurred while running the tool"). There, `toolpass.configure(on_refuse=str)` makes
+a refusal the tool's result, so the model can tell the user why.
+
+`toolpass.configure(...)` sets up the default behind `secured_tool`; tools declared earlier pick the
+settings up at call time. A program that needs two sets of settings makes `Toolkit(...)` objects
+and uses their `secured_tool`.
 
 ## What a tool can declare
 
@@ -81,13 +98,13 @@ out. Tools already declare which of these they are, so the toolkit tracks the fi
 session and guards the third:
 
 ```python
-@tools.tool(effect="read", reads_private=True)
+@secured_tool(effect="read", reads_private=True)
 def read_customers() -> str: ...
 
-@tools.tool(effect="read", untrusted_output=True)
+@secured_tool(effect="read", untrusted_output=True)
 def read_email(id: str) -> str: ...
 
-@tools.tool(effect="write", sends_out=True)
+@secured_tool(effect="write", sends_out=True)
 def post_slack(channel: str, text: str) -> str: ...
 ```
 
@@ -278,8 +295,8 @@ without a rule runs unchecked, unless `strict=True`.
 ```python
 from toolpass.strands import ToolpassAuthorization, Rule
 
-toolpass = ToolpassAuthorization(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)})
-agent = Agent(tools=tools, interventions=[toolpass])
+guard = ToolpassAuthorization(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True)})
+agent = Agent(tools=tools, interventions=[guard])
 agent(prompt, invocation_state={"user_id": user.email})
 ```
 
@@ -288,10 +305,10 @@ agent(prompt, invocation_state={"user_id": user.email})
 ```python
 from toolpass.langchain import ToolpassMiddleware, Rule
 
-toolpass = ToolpassMiddleware(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}")})
-agent = create_agent(model, tools=tools, middleware=[toolpass], context_schema=Context)
+guard = ToolpassMiddleware(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}")})
+agent = create_agent(model, tools=tools, middleware=[guard], context_schema=Context)
 agent.invoke({"messages": [...]}, context=Context(user_id=user.email))
-# a graph you build yourself: toolpass.tool_node(tools) is a checked ToolNode
+# a graph you build yourself: guard.tool_node(tools) is a checked ToolNode
 ```
 
 **MCP servers** (the `mcp` SDK v2): server middleware; the user from the access token's `email`
@@ -317,8 +334,8 @@ await Runner.run(agent, prompt, context=RequestContext(user_id=user.email))
 ```python
 from toolpass.claude_agent_sdk import ToolpassHooks, Rule
 
-toolpass = ToolpassHooks(tp, {"mcp__ops__delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}")}, user=current_user)
-options = toolpass.apply(ClaudeAgentOptions(mcp_servers={"ops": server}))
+guard = ToolpassHooks(tp, {"mcp__ops__delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}")}, user=current_user)
+options = guard.apply(ClaudeAgentOptions(mcp_servers={"ops": server}))
 ```
 
 **Google ADK**: tool callbacks (or `.plugin()` for an `App`); the user is the session's `user_id`.
@@ -353,8 +370,8 @@ agent.run_sync(prompt, deps=Deps(user=user.email))
 ```python
 from toolpass.llamaindex import ToolpassAuthorization, Rule
 
-toolpass = ToolpassAuthorization(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}")}, user=current_user)
-agent = FunctionAgent(tools=toolpass.wrap(tools), llm=llm)
+guard = ToolpassAuthorization(tp, {"delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}")}, user=current_user)
+agent = FunctionAgent(tools=guard.wrap(tools), llm=llm)
 ```
 
 Complete, runnable examples:

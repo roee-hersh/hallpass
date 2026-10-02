@@ -30,7 +30,7 @@ from toolpass.claude_agent_sdk import Rule, ToolpassHooks
 tp = Toolpass(connections=[{"id": "demo", "integration": "fake", "users": "dana@example.com", "admins": "admin@example.com"}])
 current_user: ContextVar[str] = ContextVar("current_user")
 
-toolpass = ToolpassHooks(tp, {"mcp__demo__write_thing": Rule("demo", "thing.write", "thing:{thing_id}")}, user=current_user)
+guard = ToolpassHooks(tp, {"mcp__demo__write_thing": Rule("demo", "thing.write", "thing:{thing_id}")}, user=current_user)
 
 
 @tool("write_thing", "Write content to a thing in the demo system.", {"thing_id": str, "content": str})
@@ -43,7 +43,7 @@ async def write_thing(args: dict[str, Any]) -> dict[str, Any]:
 async def main() -> None:
     # Demo only: the command line stands in for the user your login authenticated.
     current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
-    options = toolpass.apply(
+    options = guard.apply(
         ClaudeAgentOptions(
             model="claude-haiku-4-5",
             mcp_servers={"demo": create_sdk_mcp_server("demo", tools=[write_thing])},

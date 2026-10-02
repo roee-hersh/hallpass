@@ -30,7 +30,7 @@ from toolpass.llamaindex import Rule, ToolpassAuthorization
 tp = Toolpass(connections=[{"id": "demo", "integration": "fake", "users": "dana@example.com", "admins": "admin@example.com"}])
 current_user: ContextVar[str] = ContextVar("current_user")
 
-toolpass = ToolpassAuthorization(tp, {"write_thing": Rule("demo", "thing.write", "thing:{thing_id}")}, user=current_user)
+guard = ToolpassAuthorization(tp, {"write_thing": Rule("demo", "thing.write", "thing:{thing_id}")}, user=current_user)
 
 
 def write_thing(thing_id: str, content: str) -> str:
@@ -43,7 +43,7 @@ async def main() -> None:
     # Demo only: the command line stands in for the user your login authenticated.
     current_user.set(sys.argv[1] if len(sys.argv) > 1 else "dana@example.com")
     agent = FunctionAgent(
-        tools=toolpass.wrap([write_thing]),
+        tools=guard.wrap([write_thing]),
         llm=Anthropic(model="claude-sonnet-5", max_tokens=1024),
         system_prompt="You write things for the user. If a tool refuses, say why.",
     )

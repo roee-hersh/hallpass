@@ -1,13 +1,15 @@
-"""The toolkit: secure tools and the fixed order of checks around every call.
+"""The toolkit: secured tools and the fixed order of checks around every call.
 
     tools = Toolkit(approver=ApprovalQueue(), credentials={"github-bot": token})
 
-    @tools.tool(effect="write", scope={"repo": "acme/gitops-*"}, credential="github-bot")
+    @tools.secured_tool(effect="write", scope={"repo": "acme/gitops-*"}, credential="github-bot")
     def open_pr(repo: str, title: str, *, credential: str) -> str: ...
 
-The decorated function is still an ordinary function with the original
-signature, minus the injected ``credential``, so any agent framework's own
-``@tool`` can sit on top of it. On every call, in this order:
+(``toolpass.secured_tool`` is the same on a default toolkit set up by
+``toolpass.configure``.) The decorated function is still an ordinary
+function with the original signature, minus the injected ``credential``, so
+any agent framework's own ``@tool`` can sit on top of it, or be applied
+through ``as_tool=``. On every call, in this order:
 
 1. the session: the user comes from the application, never from the model;
 2. the arguments: types, validators, then scope rules;
@@ -39,7 +41,7 @@ import secrets
 import time
 import types
 from collections.abc import Callable, Generator, Mapping
-from typing import Any, Literal, NamedTuple, TypeVar, Union, cast
+from typing import Any, Literal, NamedTuple, TypeVar, Union, cast, overload
 
 from toolpass._approval import ApprovalRequest, Approver
 from toolpass._audit import AuditEvent, AuditSink, log_audit, shorten
@@ -352,6 +354,34 @@ class Toolkit:
         session: SessionSource | None = None,
         on_refuse: Callable[[ToolRefused], Any] | None = None,
     ) -> None:
+        self._lenient = False  # the module-level default may be configured after its tools are declared
+        self._configure(
+            approver=approver,
+            credentials=credentials,
+            audit=audit,
+            limits=limits,
+            on_untrusted_input=on_untrusted_input,
+            exfiltration=exfiltration,
+            fence_untrusted=fence_untrusted,
+            audit_arguments=audit_arguments,
+            session=session,
+            on_refuse=on_refuse,
+        )
+
+    def _configure(
+        self,
+        *,
+        approver: Approver | None = None,
+        credentials: CredentialSource | None = None,
+        audit: AuditSink | None = log_audit,
+        limits: Mapping[str, int] | None = None,
+        on_untrusted_input: Literal["refuse", "approve"] = "refuse",
+        exfiltration: Literal["approve", "refuse", "off"] = "approve",
+        fence_untrusted: bool = True,
+        audit_arguments: bool = True,
+        session: SessionSource | None = None,
+        on_refuse: Callable[[ToolRefused], Any] | None = None,
+    ) -> None:
         if on_untrusted_input not in ("refuse", "approve"):
             raise ValueError("on_untrusted_input must be 'refuse' or 'approve'")
         if exfiltration not in ("approve", "refuse", "off"):
@@ -372,6 +402,7 @@ class Toolkit:
         self.session_source = session
         self.on_refuse = on_refuse
 
+    @overload
     def tool(
         self,
         *,
@@ -388,8 +419,48 @@ class Toolkit:
         sends_out: bool = False,
         credential: str | None = None,
         name: str | None = None,
-    ) -> Callable[[F], F]:
-        """Declare a secure tool.
+        as_tool: None = None,
+    ) -> Callable[[F], F]: ...
+
+    @overload
+    def tool(
+        self,
+        *,
+        effect: Effect,
+        authorize: Authorizer | None = None,
+        scope: Mapping[str, ScopeRule] | None = None,
+        validate: Mapping[str, Validator] | None = None,
+        limit: int | None = None,
+        approve: ApproveRule = False,
+        preview: Callable[[Call], Any] | None = None,
+        untrusted_inputs: Literal["check", "ignore"] | None = None,
+        untrusted_output: bool = False,
+        reads_private: bool = False,
+        sends_out: bool = False,
+        credential: str | None = None,
+        name: str | None = None,
+        as_tool: Callable[[Callable[..., Any]], Any],
+    ) -> Callable[[F], Any]: ...
+
+    def tool(
+        self,
+        *,
+        effect: Effect,
+        authorize: Authorizer | None = None,
+        scope: Mapping[str, ScopeRule] | None = None,
+        validate: Mapping[str, Validator] | None = None,
+        limit: int | None = None,
+        approve: ApproveRule = False,
+        preview: Callable[[Call], Any] | None = None,
+        untrusted_inputs: Literal["check", "ignore"] | None = None,
+        untrusted_output: bool = False,
+        reads_private: bool = False,
+        sends_out: bool = False,
+        credential: str | None = None,
+        name: str | None = None,
+        as_tool: Callable[[Callable[..., Any]], Any] | None = None,
+    ) -> Callable[[F], Any]:
+        """Declare a secured tool. ``secured_tool`` is the same method.
 
         ``effect`` is ``read``, ``write`` or ``destructive``. ``authorize``
         decides whether the session's user may make this call. ``scope`` maps
@@ -404,10 +475,13 @@ class Toolkit:
         ``reads_private`` marks it as reading private data; ``sends_out``
         marks it as able to send data outside (a message, an HTTP request).
         ``credential`` names a secret injected as the keyword-only parameter
-        ``credential``, which the model never sees.
+        ``credential``, which the model never sees. ``as_tool`` is an agent
+        framework's own tool decorator (LangChain's ``tool``, the OpenAI
+        Agents SDK's ``function_tool``, ...), applied on top: the result is
+        that framework's tool, with every check inside it.
         """
 
-        def decorate(fn: F) -> F:
+        def decorate(fn: F) -> Any:
             spec = self._spec(
                 fn, effect, authorize, scope, validate, limit, approve, preview, untrusted_inputs, untrusted_output, reads_private, sends_out, credential, name
             )
@@ -435,9 +509,13 @@ class Toolkit:
             wrapper.__annotations__ = {k: v for k, v in spec.types.items() if k != "credential"}
             delattr(wrapper, "__wrapped__")
             setattr(wrapper, "__toolpass__", spec)  # noqa: B010
+            if as_tool is not None:
+                return as_tool(wrapper)
             return cast(F, wrapper)
 
         return decorate
+
+    secured_tool = tool
 
     def _spec(
         self,
@@ -479,7 +557,7 @@ class Toolkit:
         if credential is not None:
             if "credential" not in sig.parameters:
                 raise TypeError(f"{tool_name}: credential={credential!r} needs a keyword-only parameter named 'credential'")
-            if self.credentials is None:
+            if self.credentials is None and not self._lenient:
                 raise TypeError(f"{tool_name}: credential={credential!r} but the toolkit has no credentials source")
         exposed = sig.replace(parameters=params, return_annotation=resolved.get("return", sig.return_annotation))
         names = {p.name for p in params}

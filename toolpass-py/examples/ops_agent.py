@@ -52,27 +52,27 @@ def build(approvals: ApprovalQueue, audit: Callable[[AuditEvent], None], authori
         audit=audit,
     )
 
-    @tools.tool(effect="read")
+    @tools.secured_tool(effect="read")
     def service_health(service: str) -> str:
         """Errors, restarts and node status for a service."""
         return f"{service}: 0.2% errors, 0 restarts in 1h, nodes healthy"
 
-    @tools.tool(effect="read", untrusted_output=True)
+    @tools.secured_tool(effect="read", untrusted_output=True)
     def read_email(id: str) -> str:
         """Read an email from the shared ops inbox."""
         return INJECTED_EMAIL
 
-    @tools.tool(effect="read", reads_private=True)
+    @tools.secured_tool(effect="read", reads_private=True)
     def customer_tickets(service: str) -> str:
         """Open customer tickets about a service, with customer names."""
         return "Alice Cohen (acme-corp): checkout slow; Bob Levi (globex): timeouts since 09:00"
 
-    @tools.tool(effect="write", sends_out=True, scope={"channel": ["#ops", "#incidents"]})
+    @tools.secured_tool(effect="write", sends_out=True, scope={"channel": ["#ops", "#incidents"]})
     def post_slack(channel: str, text: str) -> str:
         """Post a message to Slack."""
         return f"posted to {channel}"
 
-    @tools.tool(
+    @tools.secured_tool(
         effect="write",
         scope={"repo": "acme/gitops-*"},
         authorize=authorize,
@@ -84,7 +84,7 @@ def build(approvals: ApprovalQueue, audit: Callable[[AuditEvent], None], authori
         """Open a pull request against a GitOps repository."""
         return f"opened PR #482 in {repo}: {title}"
 
-    @tools.tool(effect="destructive", scope={"repo": "acme/gitops-*", "branch": "feature/*"})
+    @tools.secured_tool(effect="destructive", scope={"repo": "acme/gitops-*", "branch": "feature/*"})
     def delete_branch(repo: str, branch: str, reason: str) -> str:
         """Delete a feature branch."""
         return f"deleted {branch} in {repo}"

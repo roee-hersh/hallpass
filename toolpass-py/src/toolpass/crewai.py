@@ -9,7 +9,7 @@ makes (native function calling and the text ReAct loop alike) and its
     from toolpass import Toolpass
     from toolpass.crewai import ToolpassHooks, Rule
 
-    toolpass = ToolpassHooks(Toolpass.from_config("toolpass.yaml"), {
+    guard = ToolpassHooks(Toolpass.from_config("toolpass.yaml"), {
         "delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True),
         "read_issue": ("jira-main", "BROWSE_PROJECTS", "issue:{key}"),
     }).register()

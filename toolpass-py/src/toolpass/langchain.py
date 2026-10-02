@@ -15,10 +15,10 @@ before the tool runs (``wrap_tool_call`` / ``awrap_tool_call``):
     class Context:
         user_id: str
 
-    toolpass = ToolpassMiddleware(Toolpass.from_config("toolpass.yaml"), {
+    guard = ToolpassMiddleware(Toolpass.from_config("toolpass.yaml"), {
         "delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True),
     })
-    agent = create_agent(model, tools=tools, middleware=[toolpass], context_schema=Context)
+    agent = create_agent(model, tools=tools, middleware=[guard], context_schema=Context)
     agent.invoke({"messages": [...]}, context=Context(user_id=user.email))  # from your auth
 
 The user comes from the run's runtime context (``context=``), which the
@@ -27,7 +27,7 @@ application passes and the model cannot write: the attribute or key named
 source is used instead: a string, a zero-argument callable or a
 ``ContextVar`` the application sets for the session.
 
-For a LangGraph graph you assemble yourself, ``toolpass.tool_node(tools)``
+For a LangGraph graph you assemble yourself, ``guard.tool_node(tools)``
 is a ``ToolNode`` with the same check. ``toolpass.guarded`` also works on a
 plain function under ``@tool``, for a per-tool check instead.
 """

@@ -30,7 +30,7 @@ from toolpass.openai_agents import Rule, ToolpassGuardrails
 
 tp = Toolpass(connections=[{"id": "demo", "integration": "fake", "users": "dana@example.com", "admins": "admin@example.com"}])
 
-toolpass = ToolpassGuardrails(tp, {"write_thing": Rule("demo", "thing.write", "thing:{thing_id}")})
+guard = ToolpassGuardrails(tp, {"write_thing": Rule("demo", "thing.write", "thing:{thing_id}")})
 
 
 @dataclass
@@ -50,7 +50,7 @@ async def main() -> None:
     user = sys.argv[1] if len(sys.argv) > 1 else "dana@example.com"
     set_tracing_disabled(True)  # traces go to OpenAI by default
     claude = AsyncOpenAI(base_url="https://api.anthropic.com/v1/", api_key=os.environ["ANTHROPIC_API_KEY"])
-    agent = toolpass.apply(
+    agent = guard.apply(
         Agent(
             name="demo",
             instructions="You write things for the user.",

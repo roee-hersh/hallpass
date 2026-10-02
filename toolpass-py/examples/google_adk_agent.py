@@ -31,7 +31,7 @@ from toolpass.google_adk import Rule, ToolpassCallbacks
 
 tp = Toolpass(connections=[{"id": "demo", "integration": "fake", "users": "dana@example.com", "admins": "admin@example.com"}])
 
-toolpass = ToolpassCallbacks(tp, {"write_thing": Rule("demo", "thing.write", "thing:{thing_id}")})
+guard = ToolpassCallbacks(tp, {"write_thing": Rule("demo", "thing.write", "thing:{thing_id}")})
 
 
 def write_thing(thing_id: str, content: str, tool_context: ToolContext) -> str:
@@ -44,7 +44,7 @@ async def main() -> None:
     # Demo only: the command line stands in for the user your login authenticated.
     user = sys.argv[1] if len(sys.argv) > 1 else "dana@example.com"
     agent = LlmAgent(name="demo", model=AnthropicLlm(model="claude-haiku-4-5"), instruction="You write things for the user.", tools=[write_thing])
-    runner = InMemoryRunner(agent=toolpass.apply(agent), app_name="demo")
+    runner = InMemoryRunner(agent=guard.apply(agent), app_name="demo")
     session = await runner.session_service.create_session(app_name="demo", user_id=user)
     message = types.Content(role="user", parts=[types.Part(text="Write 'hello' to thing 1.")])
     async for event in runner.run_async(user_id=user, session_id=session.id, new_message=message):

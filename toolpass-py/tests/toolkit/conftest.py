@@ -28,3 +28,13 @@ def dana() -> Iterator[Session]:
     session = Session("dana@example.com")
     with session.active():
         yield session
+
+
+@pytest.fixture(autouse=True)
+def _fresh_default_toolkit() -> Iterator[None]:
+    """Each test starts with the module-level secured_tool unconfigured."""
+    import toolpass
+
+    toolpass.configure(audit=None)
+    yield
+    toolpass.configure(audit=None)

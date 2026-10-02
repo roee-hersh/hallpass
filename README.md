@@ -12,27 +12,31 @@ post to Slack. Most teams rebuild the same safety checks around each tool by han
 toolpass is one decorator on a plain Python function:
 
 ```python
-from toolpass import ApprovalQueue, Session, Toolkit
+import toolpass
+from toolpass import ApprovalQueue, Session, secured_tool
+from langchain_core.tools import tool       # or any framework's tool decorator
 
-tools = Toolkit(approver=ApprovalQueue(), credentials={"github-bot": token}, limits={"destructive": 3})
+toolpass.configure(approver=ApprovalQueue(), credentials={"github-bot": token}, limits={"destructive": 3})
 
 
-@tools.tool(
+@secured_tool(
     effect="write",
-    scope={"repo": "acme/gitops-*"},      # the tool can touch nothing else, whoever asks
-    approve=True,                          # a person confirms this exact call, out of band
-    credential="github-bot",               # injected after every check; the model never sees it
+    scope={"repo": "acme/gitops-*"},       # the tool can touch nothing else, whoever asks
+    approve=True,                           # a person confirms this exact call, out of band
+    credential="github-bot",                # injected after every check; the model never sees it
+    as_tool=tool,                           # hand the framework a real tool, checks inside
 )
 def open_gitops_pr(repo: str, title: str, change: str, *, credential: str) -> str:
     ...
 
 
-with Session("dana@example.com").active():  # the user your app authenticated, never the model
+with Session("dana@example.com").active():   # the user your app authenticated, never the model
     agent.run(prompt)
 ```
 
-The function keeps its signature, so LangChain, Pydantic AI, CrewAI, the OpenAI Agents SDK or your
-own loop puts its own `@tool` on top. No adapter needed.
+`as_tool` takes any framework's decorator: LangChain's `tool`, the OpenAI Agents SDK's
+`function_tool`, Pydantic AI's `Tool`, CrewAI's, or your own. Leave it out and you get a plain
+function with the same signature (minus `credential`), for any framework's `@tool` or your own loop.
 
 ## What it stops
 
@@ -84,9 +88,9 @@ the lethal trifecta: access to private data, exposure to untrusted content, and 
 out. Your tools already say which they are:
 
 ```python
-@tools.tool(effect="read", reads_private=True)       # read customer records
-@tools.tool(effect="read", untrusted_output=True)    # read an email
-@tools.tool(effect="write", sends_out=True)          # post to Slack
+@secured_tool(effect="read", reads_private=True)       # read customer records
+@secured_tool(effect="read", untrusted_output=True)    # read an email
+@secured_tool(effect="write", sends_out=True)          # post to Slack
 ```
 
 After the first two have run in a session, the third waits for a person. It works from which tools
@@ -104,7 +108,7 @@ from toolpass import Toolpass, permission_check
 
 tp = Toolpass.from_config("toolpass.yaml")   # or Toolpass.remote(url, key) to keep lookup credentials out of the agent
 
-@tools.tool(effect="destructive", authorize=permission_check(tp, "jira-main", "DELETE_ISSUES", "issue:{key}"))
+@secured_tool(effect="destructive", authorize=permission_check(tp, "jira-main", "DELETE_ISSUES", "issue:{key}"))
 def delete_issue(key: str) -> str: ...
 ```
 

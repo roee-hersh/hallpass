@@ -13,10 +13,10 @@ an ``on_tool_error_callback`` that log the write after an allowed tool ran:
     from toolpass import Toolpass
     from toolpass.google_adk import ToolpassCallbacks, Rule
 
-    toolpass = ToolpassCallbacks(Toolpass.from_config("toolpass.yaml"), {
+    guard = ToolpassCallbacks(Toolpass.from_config("toolpass.yaml"), {
         "delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True),
     })
-    agent = toolpass.apply(LlmAgent(name="ops", model=..., tools=[get_issue, delete_issue]))
+    agent = guard.apply(LlmAgent(name="ops", model=..., tools=[get_issue, delete_issue]))
     runner = InMemoryRunner(agent=agent)
     session = await runner.session_service.create_session(app_name=runner.app_name, user_id=user.email)
     async for event in runner.run_async(user_id=user.email, session_id=session.id, new_message=...): ...
@@ -200,7 +200,7 @@ class ToolpassCallbacks:
 
 
 class ToolpassPlugin(BasePlugin):
-    """``ToolpassCallbacks`` as a plugin: ``App(..., plugins=[toolpass.plugin()])``.
+    """``ToolpassCallbacks`` as a plugin: ``App(..., plugins=[guard.plugin()])``.
 
     Plugin callbacks run before an agent's own. An agent callback that edits
     the arguments does so after toolpass checked them, and one that answers

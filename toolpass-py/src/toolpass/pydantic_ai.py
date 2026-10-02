@@ -15,11 +15,11 @@ after Pydantic AI validated the arguments and before the tool runs:
     class Deps:
         user: str  # from your auth, never from the model
 
-    toolpass = ToolpassAuthorization(Toolpass.from_config("toolpass.yaml"), {
+    guard = ToolpassAuthorization(Toolpass.from_config("toolpass.yaml"), {
         "delete_issue": Rule("jira-main", "DELETE_ISSUES", "issue:{key}", fresh=True),
         "read_issue": ("jira-main", "BROWSE_PROJECTS", "issue:{key}"),
     })
-    agent = Agent(model, deps_type=Deps, tools=[delete_issue, read_issue], capabilities=[toolpass])
+    agent = Agent(model, deps_type=Deps, tools=[delete_issue, read_issue], capabilities=[guard])
     agent.run_sync(prompt, deps=Deps(user=user.email))
 
 The user comes from ``RunContext.deps``, which the application passes to

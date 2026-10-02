@@ -8,11 +8,11 @@ before the tool runs, and composes with Strands' other interventions:
     from toolpass import Toolpass
     from toolpass.strands import ToolpassAuthorization, Rule
 
-    toolpass = ToolpassAuthorization(Toolpass.from_config("toolpass.yaml"), {
+    guard = ToolpassAuthorization(Toolpass.from_config("toolpass.yaml"), {
         "open_config_pr": Rule("github-main", "repo.push", "repo:{owner}/{repo}", fresh=True),
         "delete_issue": ("jira-main", "DELETE_ISSUES", "issue:{key}"),
     })
-    agent = Agent(tools=tools, interventions=[toolpass])
+    agent = Agent(tools=tools, interventions=[guard])
     agent(prompt, invocation_state={"user_id": user.email})  # from your auth
 
 The user comes from ``invocation_state``, which the application passes and
