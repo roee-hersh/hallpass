@@ -3,8 +3,8 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
-name = "securetools"
-version = "0.1.0.dev0"
+name = "toolpass"
+version = "0.1.0"
 description = "Secure-by-default tools for AI agents: authorization, scope limits, approval, untrusted-data and exfiltration guards, credential injection and audit, under any agent framework."
 readme = "README.md"
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ requires-python = ">=3.10"
 dependencies = []
 keywords = ["ai-agents", "security", "prompt-injection", "authorization", "llm", "tools"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
@@ -25,14 +25,19 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-# User authorization answered live by the system that owns the resource.
-hallpass = ["hallpass>=0.6"]
+# Permission checks answered live by the system that owns the resource (the hallpass engine).
+permissions = ["hallpass>=0.6"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/securetools"]
+packages = ["src/toolpass"]
+
+[project.urls]
+Homepage = "https://github.com/roee-hersh/hallpass"
+Source = "https://github.com/roee-hersh/hallpass/tree/main/toolpass"
+Issues = "https://github.com/roee-hersh/hallpass/issues"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/securetools", "tests", "examples", "README.md", "LICENSE"]
+include = ["src/toolpass", "tests", "examples", "README.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -54,8 +59,8 @@ ignore = ["A001", "A002", "N818", "RUF012", "SIM105", "SIM108", "UP007", "B904"]
 
 [tool.ruff.lint.per-file-ignores]
 # Fail closed: any failure in a hook (authorizer, approver, credentials) refuses the call.
-"src/securetools/_toolkit.py" = ["BLE001"]
-"src/securetools/_checks.py" = ["BLE001"]
-"src/securetools/_untrusted.py" = ["BLE001"]
+"src/toolpass/_toolkit.py" = ["BLE001"]
+"src/toolpass/_checks.py" = ["BLE001"]
+"src/toolpass/_untrusted.py" = ["BLE001"]
 # The tests exercise typing.Optional on purpose.
 "tests/**" = ["BLE", "B011", "N802", "SIM", "UP045"]

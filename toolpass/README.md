@@ -1,17 +1,17 @@
-# securetools
+# toolpass
 
-**Secure-by-default tools for AI agents, under any agent framework.**
+**A pass for every tool call: secure-by-default tools for AI agents, under any agent framework.**
 
-> Prototype. The name is a placeholder and the API will change.
+> Alpha. The API may still change.
 
 Teams write custom tools for their own agents: open a pull request against the GitOps repository,
 scale a deployment, read customer records, post to Slack. Those tools usually run with one service
 credential for everyone who talks to the agent, and every team rebuilds the same safety checks
-by hand, or skips them. securetools is a decorator that adds those checks to a plain Python
+by hand, or skips them. toolpass is a decorator that adds those checks to a plain Python
 function:
 
 ```python
-from securetools import ApprovalQueue, Session, Toolkit, hallpass_check
+from toolpass import ApprovalQueue, Session, Toolkit, hallpass_check
 
 approvals = ApprovalQueue()
 tools = Toolkit(approver=approvals, credentials={"github-bot": github_token}, limits={"destructive": 3})
@@ -122,9 +122,9 @@ An exception from the tool's own body passes through unchanged, unless its messa
 injected credential: then it is raised as `ToolError`, with the secret redacted from the message and
 the original exception kept on `.original` for your own logs.
 
-## Authorization with hallpass
+## Permission checks with hallpass
 
-`hallpass_check` asks [hallpass](../README.md) whether the session's user may perform the action,
+`hallpass_check` asks [hallpass](../docs/permission-checks.md), the permission engine in this repository, whether the session's user may perform the action,
 live, in the system that owns the resource (GitHub, Jira, Kubernetes, AWS, and 17 more). It works
 with `Hallpass.from_config(...)` in-process or `Hallpass.remote(...)` against a hallpass server.
 Any callable that returns `AuthDecision`, `True` or `False` can be the authorizer instead.
@@ -151,7 +151,7 @@ Any callable that returns `AuthDecision`, `True` or `False` can be the authorize
 ## Run the example and the tests
 
 ```sh
-pip install -e ".[hallpass]" pytest pytest-timeout
+pip install -e ".[permissions]" pytest pytest-timeout
 python examples/ops_agent.py
 python -m pytest -q
 ```

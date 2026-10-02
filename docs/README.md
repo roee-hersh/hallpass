@@ -1,5 +1,9 @@
 # hallpass documentation
 
+These pages cover hallpass, the permission engine inside [toolpass](../README.md). For toolpass
+itself (scope limits, approval, the untrusted-input and exfiltration guards, credential injection),
+see [the toolpass package README](../toolpass/README.md).
+
 hallpass answers one question before your agent acts for someone: *may this user do this action on
 this resource in this system?* It asks the system itself, live, and answers `allow`, `deny` or
 `unknown`. It is a Python package: the engine runs in your agent's process, or as a server that
@@ -7,6 +11,8 @@ agents in any language call.
 
 ## Get started
 
+- [Permission checks](permission-checks.md): what hallpass is, how it differs from policy engines
+  and OAuth, and its security model.
 - [Quickstart](quickstart.md): install hallpass, ask a question, guard an agent tool, and run it as
   a server, in five minutes.
 

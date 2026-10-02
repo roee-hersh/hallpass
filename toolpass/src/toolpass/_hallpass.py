@@ -8,14 +8,14 @@ the system that owns the resource.
     def open_pr(repo: str, title: str) -> str: ...
 
 Works with anything that has hallpass's ``check`` method, in-process or
-remote; securetools does not import hallpass itself.
+remote; toolpass does not import hallpass itself.
 """
 
 from __future__ import annotations
 
 from typing import Any, Protocol
 
-from securetools._toolkit import AuthDecision, Call
+from toolpass._toolkit import AuthDecision, Call
 
 
 class _Checker(Protocol):

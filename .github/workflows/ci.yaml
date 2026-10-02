@@ -53,8 +53,8 @@ jobs:
           mkdir /tmp/wheel && cp -r tests pyproject.toml /tmp/wheel/
           (cd /tmp/wheel && HALLPASS_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m pytest -q -p no:cacheprovider --rootdir /tmp/wheel tests)
 
-  securetools:
-    # The securetools prototype: lint, types and its suite, with hallpass
+  toolpass:
+    # The toolpass prototype: lint, types and its suite, with hallpass
     # and the framework packages its tests use, on the oldest and newest
     # Python; then once more with nothing optional installed.
     strategy:
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: securetools
+        working-directory: toolpass
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,7 +76,7 @@ jobs:
           ruff format --check src tests examples
           ruff check src tests examples
       - name: types
-        run: mypy --strict src/securetools
+        run: mypy --strict src/toolpass
       - run: python -m pytest -q
       - name: without optional packages
         run: |

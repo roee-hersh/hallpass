@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from securetools import ApprovalPending, ApprovalQueue, Session, Toolkit, ToolRefused, approve_all
+from toolpass import ApprovalPending, ApprovalQueue, Session, Toolkit, ToolRefused, approve_all
 
 
 def trifecta(**kw):

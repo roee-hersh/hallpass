@@ -23,7 +23,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from securetools._toolkit import Call
+    from toolpass._toolkit import Call
 
 Approver = Callable[["ApprovalRequest"], bool | None]
 

@@ -1,6 +1,6 @@
 """One audit event per tool call, whatever its outcome.
 
-The default sink logs each event as one JSON line on the ``securetools``
+The default sink logs each event as one JSON line on the ``toolpass``
 logger at INFO. Pass ``audit=`` to the toolkit to send events elsewhere.
 Credentials never appear in an event; argument values are shortened.
 """
@@ -14,7 +14,7 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
-log = logging.getLogger("securetools")
+log = logging.getLogger("toolpass")
 
 _MAX_VALUE = 200
 
@@ -54,7 +54,7 @@ AuditSink = Callable[[AuditEvent], None]
 
 
 def log_audit(event: AuditEvent) -> None:
-    """The default sink: one JSON line on the ``securetools`` logger."""
+    """The default sink: one JSON line on the ``toolpass`` logger."""
     log.info(json.dumps(event.to_dict(), default=repr, ensure_ascii=False))
 
 

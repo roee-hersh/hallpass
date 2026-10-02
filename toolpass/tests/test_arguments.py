@@ -7,8 +7,8 @@ from typing import Annotated, Any, Literal, Optional
 
 import pytest
 
-from securetools import Toolkit, ToolRefused
-from securetools._checks import type_matches
+from toolpass import Toolkit, ToolRefused
+from toolpass._checks import type_matches
 
 
 @pytest.mark.parametrize(

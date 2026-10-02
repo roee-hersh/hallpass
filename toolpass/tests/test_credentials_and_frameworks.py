@@ -9,7 +9,7 @@ import typing
 
 import pytest
 
-from securetools import Session, Toolkit, ToolRefused
+from toolpass import Session, Toolkit, ToolRefused
 
 TOKEN = "ghp_supersecrettoken1234567890"
 
@@ -173,4 +173,4 @@ def test_pydantic_validate_call_sees_the_public_signature(dana):
         return n
 
     validated = pydantic.validate_call(act)
-    assert validated(n="3") == 3  # pydantic coerces, then securetools checks the int
+    assert validated(n="3") == 3  # pydantic coerces, then toolpass checks the int

@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from securetools import AuditEvent, Session
+from toolpass import AuditEvent, Session
 
 
 class Events(list[AuditEvent]):

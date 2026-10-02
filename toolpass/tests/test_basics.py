@@ -9,7 +9,7 @@ import typing
 
 import pytest
 
-from securetools import Session, Toolkit, ToolRefused, current_session, spec_of
+from toolpass import Session, Toolkit, ToolRefused, current_session, spec_of
 
 
 def test_no_session_refuses(events):
@@ -216,7 +216,7 @@ def test_default_audit_logs_json(dana, caplog):
     def look(q: str) -> str:
         return "ok"
 
-    with caplog.at_level(logging.INFO, logger="securetools"):
+    with caplog.at_level(logging.INFO, logger="toolpass"):
         look("x" * 500)
     line = json.loads(caplog.records[-1].getMessage())
     assert line["tool"] == "look" and line["outcome"] == "ran"

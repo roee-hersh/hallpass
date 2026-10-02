@@ -40,12 +40,12 @@ import types
 from collections.abc import Callable, Generator, Mapping
 from typing import Any, Literal, NamedTuple, TypeVar, Union, cast
 
-from securetools._approval import ApprovalQueue, ApprovalRequest, Approver
-from securetools._audit import AuditEvent, AuditSink, log_audit, shorten
-from securetools._checks import ArgumentError, Scope, ScopeRule, Validator, check_arguments, hints
-from securetools._session import Session, current_session
+from toolpass._approval import ApprovalQueue, ApprovalRequest, Approver
+from toolpass._audit import AuditEvent, AuditSink, log_audit, shorten
+from toolpass._checks import ArgumentError, Scope, ScopeRule, Validator, check_arguments, hints
+from toolpass._session import Session, current_session
 
-log = logging.getLogger("securetools")
+log = logging.getLogger("toolpass")
 
 Effect = Literal["read", "write", "destructive"]
 EFFECTS: tuple[str, ...] = ("read", "write", "destructive")
@@ -145,7 +145,7 @@ class ToolSpec:
 
 def spec_of(tool: Callable[..., Any]) -> ToolSpec | None:
     """The declaration behind a secure tool, or None for any other callable."""
-    spec = getattr(tool, "__securetools__", None)
+    spec = getattr(tool, "__toolpass__", None)
     return spec if isinstance(spec, ToolSpec) else None
 
 
@@ -409,7 +409,7 @@ class Toolkit:
             setattr(wrapper, "__signature__", spec.signature)  # noqa: B010
             wrapper.__annotations__ = {k: v for k, v in spec.types.items() if k != "credential"}
             delattr(wrapper, "__wrapped__")
-            setattr(wrapper, "__securetools__", spec)  # noqa: B010
+            setattr(wrapper, "__toolpass__", spec)  # noqa: B010
             return cast(F, wrapper)
 
         return decorate
@@ -438,7 +438,7 @@ class Toolkit:
         resolved, unresolved = hints(fn if inspect.isfunction(fn) or inspect.ismethod(fn) else type(fn).__call__)
         unchecked = [n for n in unresolved if n in sig.parameters and n != "credential"]
         if unchecked:
-            log.warning("securetools: %s: cannot resolve the type hint of %s; those arguments are not type-checked", tool_name, ", ".join(unchecked))
+            log.warning("toolpass: %s: cannot resolve the type hint of %s; those arguments are not type-checked", tool_name, ", ".join(unchecked))
         params = []
         for p in sig.parameters.values():
             if p.name == "credential":
@@ -674,4 +674,4 @@ class Toolkit:
         try:
             self.audit(ev)
         except Exception:  # a broken sink must not change the call's outcome
-            log.exception("securetools: the audit sink failed for %s", json.dumps(ev.to_dict(), default=repr))
+            log.exception("toolpass: the audit sink failed for %s", json.dumps(ev.to_dict(), default=repr))

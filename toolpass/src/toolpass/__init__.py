@@ -1,6 +1,6 @@
-"""securetools: secure-by-default tools for AI agents, under any framework.
+"""toolpass: a pass for every tool call. Secure-by-default tools for AI agents, under any framework.
 
-    from securetools import Toolkit, Session, ApprovalQueue
+    from toolpass import Toolkit, Session, ApprovalQueue
 
     tools = Toolkit(approver=ApprovalQueue(), credentials={"github-bot": token}, limits={"destructive": 3})
 
@@ -13,12 +13,12 @@
 See ``Toolkit`` for the order of checks around every call.
 """
 
-from securetools._approval import ApprovalQueue, ApprovalRequest, Approver, approve_all
-from securetools._audit import AuditEvent, AuditSink, log_audit
-from securetools._checks import ScopeRule, Validator
-from securetools._hallpass import hallpass_check
-from securetools._session import Session, current_session
-from securetools._toolkit import (
+from toolpass._approval import ApprovalQueue, ApprovalRequest, Approver, approve_all
+from toolpass._audit import AuditEvent, AuditSink, log_audit
+from toolpass._checks import ScopeRule, Validator
+from toolpass._hallpass import hallpass_check
+from toolpass._session import Session, current_session
+from toolpass._toolkit import (
     EFFECTS,
     ApprovalPending,
     AuthDecision,
@@ -34,7 +34,7 @@ from securetools._toolkit import (
     spec_of,
 )
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0"
 
 __all__ = [
     "EFFECTS",

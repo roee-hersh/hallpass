@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from securetools import AuthDecision, Session, Toolkit, ToolRefused, hallpass_check
+from toolpass import AuthDecision, Session, Toolkit, ToolRefused, hallpass_check
 
 # Limits
 

@@ -1,9 +1,9 @@
 """A scripted ops-agent session: every protection, no network, no model.
 
 The calls below are the ones a model would make; the script plays the model
-so the run is the same every time. Run it from the securetools directory:
+so the run is the same every time. Run it from the toolpass directory:
 
-    pip install -e ".[hallpass]"
+    pip install -e ".[permissions]"
     python examples/ops_agent.py
 
 With hallpass installed, authorization uses hallpass's `demo` connection
@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from securetools import ApprovalPending, ApprovalQueue, AuditEvent, AuthDecision, Call, Session, Toolkit, ToolRefused, hallpass_check
+from toolpass import ApprovalPending, ApprovalQueue, AuditEvent, AuthDecision, Call, Session, Toolkit, ToolRefused, hallpass_check
 
 HALLPASS_CONFIG = Path(__file__).resolve().parents[2] / "examples" / "hallpass.yaml"
 

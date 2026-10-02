@@ -6,8 +6,8 @@ import re
 
 import pytest
 
-from securetools import ApprovalQueue, Session, Toolkit, ToolRefused
-from securetools._untrusted import UntrustedText, words
+from toolpass import ApprovalQueue, Session, Toolkit, ToolRefused
+from toolpass._untrusted import UntrustedText, words
 
 
 def fullwidth(text: str) -> str:

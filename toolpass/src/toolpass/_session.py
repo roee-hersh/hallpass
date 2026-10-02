@@ -15,9 +15,9 @@ import threading
 import uuid
 from collections.abc import Iterable, Iterator, Sequence
 
-from securetools._untrusted import DEFAULT_CAPACITY, DEFAULT_NGRAM, UntrustedText
+from toolpass._untrusted import DEFAULT_CAPACITY, DEFAULT_NGRAM, UntrustedText
 
-_current: contextvars.ContextVar[Session] = contextvars.ContextVar("securetools_session")
+_current: contextvars.ContextVar[Session] = contextvars.ContextVar("toolpass_session")
 
 
 class Session:
