@@ -298,3 +298,68 @@ def test_custom_blocking_approver_runs_off_the_loop():
     assert asyncio.run(main()) == "ran"
     assert where == [False]
     assert approve_all  # exported for demos
+
+
+def test_redaction_covers_bytes_containers_objects_and_pair_credentials(dana):
+    import collections
+
+    token = "ghp_0123456789abcdefSECRET"
+    R = collections.namedtuple("R", "out code")
+
+    @dataclasses.dataclass
+    class Resp:
+        body: str
+
+    tools = Toolkit(audit=None, credentials={"pair": ("ci-bot", token), "plain": token})
+
+    @tools.tool(effect="read", credential="plain")
+    def many(*, credential: str) -> dict:
+        return {
+            "bytes": f"x {credential}".encode(),
+            "set": {credential, "a"},
+            "named": R(out=credential, code=0),
+            "object": Resp(body=f"Bearer {credential}"),
+        }
+
+    out = many()
+    assert out["bytes"] == b"x [REDACTED]"
+    assert out["set"] == {"[REDACTED]", "a"}
+    assert isinstance(out["named"], R) and out["named"].out == "[REDACTED]"
+    assert token not in str(out["object"]) and "[REDACTED]" in out["object"]
+
+    @tools.tool(effect="read", credential="pair")
+    def login(*, credential: tuple) -> str:
+        raise RuntimeError(f"auth failed for {credential!r}")
+
+    with pytest.raises(ToolError) as e:
+        login()
+    assert token not in str(e.value)
+
+
+def test_approval_keys_tell_a_list_of_pairs_from_a_dict(dana):
+    queue = ApprovalQueue()
+    tools = Toolkit(audit=None, approver=queue)
+
+    @tools.tool(effect="write", approve=True)
+    def run(spec) -> str:  # untyped on purpose
+        return "ran"
+
+    with pytest.raises(ApprovalPending) as listed:
+        run([["str:'cmd'", "ls"]])
+    queue.approve(listed.value.request.id)
+    with pytest.raises(ApprovalPending) as mapped:
+        run({"cmd": "ls"})
+    assert mapped.value.request.id != listed.value.request.id
+
+
+def test_describe_escapes_invisible_characters(dana):
+    queue = ApprovalQueue()
+    tools = Toolkit(audit=None, approver=queue)
+
+    @tools.tool(effect="write", approve=True)
+    def rename(name: str) -> str:
+        return "ok"
+
+    with pytest.raises(ApprovalPending) as e:
+        rename("invoice‮gpj.exe")
+    assert "\\u202e" in e.value.request.describe()

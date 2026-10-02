@@ -138,6 +138,11 @@ Any callable that returns `AuthDecision`, `True` or `False` can be the authorize
 - **Only string output is fenced.** Structured output is recorded as untrusted but returned as is.
 - **Sessions live in memory.** Counts, flags and the approval queue do not survive a restart or
   span processes yet.
+- **Redaction matches the credential's literal text.** An encoded or split echo of it (base64, a
+  hex dump) is not caught, and strings shorter than 8 characters are never redacted.
+- **`hallpass_check` puts argument values into the resource string as they are.** Give such
+  arguments a scope rule or validator, so a value carrying `?`, `@` or `#` cannot make hallpass
+  check a different resource from the one the tool acts on.
 - **Check and action are not atomic.** Authorization is checked, then the body runs; a permission
   revoked in between is not noticed.
 - **Session state reaches worker threads only through context.** Frameworks that run tools in

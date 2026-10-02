@@ -51,7 +51,8 @@ class ApprovalRequest:
         """A few lines for a person deciding: who, what, why, and the preview."""
         lines = [
             f"{self.call.session.user} asked the agent to run {self.call.tool} ({self.call.effect})",
-            "arguments: " + json.dumps({str(k): _plain(v) for k, v in self.call.arguments.items()}, ensure_ascii=False),
+            # ASCII escapes keep bidi and invisible characters visible to the person deciding.
+            "arguments: " + json.dumps(_shown(dict(self.call.arguments)), ensure_ascii=True),
             "needs approval because: " + "; ".join(self.reasons),
         ]
         if self.preview:
@@ -60,19 +61,36 @@ class ApprovalRequest:
 
 
 def _plain(value: object, depth: int = 0) -> object:
-    """``value`` as JSON-safe data with a stable order: mappings become
-    sorted [key, value] pairs, keys of any type are spelled with their type."""
+    """``value`` as JSON-safe data with a stable order, for the approval key.
+    Every container is tagged with its kind, so a list of pairs and a dict
+    never spell the same key; mapping keys of any type are spelled with
+    their type."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if depth > 20:
+        return {"repr": repr(value)}
+    if isinstance(value, Mapping):
+        pairs = [[f"{type(k).__name__}:{k!r}", _plain(v, depth + 1)] for k, v in value.items()]
+        return {"mapping": sorted(pairs, key=lambda kv: str(kv[0]))}
+    if isinstance(value, (list, tuple)):
+        return {type(value).__name__: [_plain(v, depth + 1) for v in value]}
+    if isinstance(value, (set, frozenset)):
+        return {"set": sorted((_plain(v, depth + 1) for v in value), key=repr)}
+    if isinstance(value, (bytes, bytearray)):
+        return {"bytes": bytes(value).hex()}
+    return {"repr": f"{type(value).__qualname__}:{value!r}"}
+
+
+def _shown(value: object, depth: int = 0) -> object:
+    """``value`` as JSON-safe data for a person to read."""
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if depth > 20:
         return repr(value)
     if isinstance(value, Mapping):
-        pairs = [[f"{type(k).__name__}:{k!r}", _plain(v, depth + 1)] for k, v in value.items()]
-        return sorted(pairs, key=lambda kv: str(kv[0]))
+        return {k if isinstance(k, str) else repr(k): _shown(v, depth + 1) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_plain(v, depth + 1) for v in value]
-    if isinstance(value, (set, frozenset)):
-        return sorted((_plain(v, depth + 1) for v in value), key=repr)
+        return [_shown(v, depth + 1) for v in value]
     return repr(value)
 
 
