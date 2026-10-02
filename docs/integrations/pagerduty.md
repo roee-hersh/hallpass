@@ -1,6 +1,6 @@
 # pagerduty
 
-One connection is one PagerDuty account. hallpass authenticates with a read-only REST API key, finds
+One connection is one PagerDuty account. toolpass authenticates with a read-only REST API key, finds
 the user by email, reads the user's base role and, when the object asked about belongs to teams, the
 user's role on each of those teams. Base roles set account-wide access; a team role adds access to the
 team's incidents, services, escalation policies and schedules. Nothing is written.
@@ -9,9 +9,9 @@ team's incidents, services, escalation policies and schedules. Nothing is writte
 
 A **General Access REST API key** created with "Read-only API Key" checked (Integrations, API Access
 Keys). General access keys see every object in the account, so no team membership is needed for
-hallpass itself. A personal user key would be limited to that user's own visibility; do not use one.
+toolpass itself. A personal user key would be limited to that user's own visibility; do not use one.
 
-`hallpass probe` lists the account's abilities and warns when `teams` or advanced permissions are
+`toolpass probe` lists the account's abilities and warns when `teams` or advanced permissions are
 missing, and always reminds that it cannot tell a read-only key from a full one.
 
 ## Connection
@@ -89,14 +89,14 @@ exists).
 
 ## Decisions
 
-| Situation | hallpass answers |
+| Situation | toolpass answers |
 |---|---|
 | the base role grants the action account-wide | allow, naming the role |
 | a responder or manager team role (incident actions, overrides, maintenance) or a manager team role (configuration) on one of the object's teams | allow, naming the team role |
 | a stakeholder role | deny |
 | no team role, a team observer role, or an object without teams | deny |
 | `limited_user` asking `service.maintenance` without a responder or manager team role on the service's teams | unknown (`unsupported`): whether a base Responder may set maintenance windows account-wide is not documented |
-| a base role hallpass does not know | unknown (`unsupported`) |
+| a base role toolpass does not know | unknown (`unsupported`) |
 | no user with the email | deny (`user_not_found`) |
 | several users | unknown (`user_ambiguous`) |
 | the object, or one of its teams, answers 404 (error 2100) | unknown (`resource_not_visible`) |
@@ -115,7 +115,7 @@ Only the numeric error code is read from an error body; messages are never copie
   floor.
 - Whether advanced permissions (team roles) are in effect on the account's plan; the probe warns when
   no such ability is reported.
-- Incident state: hallpass says whether the user may act, not whether the incident can still be
+- Incident state: toolpass says whether the user may act, not whether the incident can still be
   acknowledged.
 
 ## Unverified
@@ -127,7 +127,7 @@ API, so they are documented here:
   addresses is assumed, and results are compared exactly either way.
 - Whether a base Responder may create maintenance windows account-wide (answered `unknown`), and
   whether a team responder may act on every incident of the team's services or only on incidents
-  assigned to them (hallpass takes the former, per the Advanced Permissions page).
+  assigned to them (toolpass takes the former, per the Advanced Permissions page).
 - The ability names `advanced_permissions` / `permissions_teams` the probe looks for.
 
 ## Test
@@ -135,4 +135,4 @@ API, so they are documented here:
 Unit tests run against a fake that serves users, team members (paged), incidents with expanded
 services, services, escalation policies, schedules, teams and abilities, validating every request
 against PagerDuty's OpenAPI description (`pagerduty` in `test/specs/fetch.sh`). There is no live
-test; after configuring, run `hallpass probe` and one check for a user you know is allowed.
+test; after configuring, run `toolpass probe` and one check for a user you know is allowed.

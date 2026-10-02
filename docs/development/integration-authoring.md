@@ -2,15 +2,15 @@
 
 An *integration* is one product (github, jira). A *connection* is one configured system of that
 product. This page is the contract every integration package follows. Paths are under
-`hallpass-py/`. `src/hallpass/integrations/fake.py` and `src/hallpass/integrations/pagerduty/` are
+`toolpass-py/`. `src/toolpass/integrations/fake.py` and `src/toolpass/integrations/pagerduty/` are
 the reference implementations.
 
 ## Package layout
 
 ```
-src/hallpass/integrations/<name>/__init__.py    exports INTEGRATION
-src/hallpass/integrations/<name>/<name>.py      the Integration and Connection classes
-src/hallpass/integrations/<name>/actions.py     action table, resource parsing
+src/toolpass/integrations/<name>/__init__.py    exports INTEGRATION
+src/toolpass/integrations/<name>/<name>.py      the Integration and Connection classes
+src/toolpass/integrations/<name>/actions.py     action table, resource parsing
 tests/integrations/<name>/test_<name>.py        tests against a fake upstream
 tests/integrations/<name>/test_fuzz.py          property tests of the resource parser
 docs/integrations/<name>.md
@@ -18,11 +18,11 @@ docs/integrations/<name>.md
 
 The package name equals the integration name (`googleworkspace`, `microsoft365`). The package
 exposes one instance as `INTEGRATION`, and registration is one line: its name in `NAMES` in
-`src/hallpass/integrations/__init__.py`. Integrations use only the standard library and hallpass's
-own modules; signing with a private key goes through `hallpass.authx`, which imports
+`src/toolpass/integrations/__init__.py`. Integrations use only the standard library and toolpass's
+own modules; signing with a private key goes through `toolpass.authx`, which imports
 `cryptography` (the `crypto` extra) only when it is needed.
 
-## The classes (`hallpass.core.integration`)
+## The classes (`toolpass.core.integration`)
 
 ```python
 class Integration(ABC):
@@ -41,7 +41,7 @@ class Connection(ABC):
 - `new` must not touch the network. Build the transport with `d.http_client(s)` and wrap it in
   `httpx.Client(http=..., base=..., auth=..., logger=d.logger)`. Read secrets at call time, in the
   `auth` function, through `s.secret("credential").get_string()`, never in `new` (files rotate).
-  Raise `ValueError` from `new` for a setting that cannot work; `hallpass validate` reports it.
+  Raise `ValueError` from `new` for a setting that cannot work; `toolpass validate` reports it.
 - `fields`: use `url_field`, `credential_field` and `connection_ref_field`; set `default`, `enum`
   and `validate` on a `Field` where sensible. Secret fields are `secret=True` and arrive as `env:`
   or `file:` references (`Settings.secret(name)`); the rest are strings (`Settings.get`,
@@ -55,12 +55,12 @@ A minimal integration, for a made-up API:
 ```python
 import re
 
-from hallpass.core import jsonx
-from hallpass.core.catalog import Action
-from hallpass.core.decision import Code, allowed, denied, errorf, unknown_decision, user_ambiguous, user_not_found, wrap_error
-from hallpass.core.integration import Connection, Identity, Integration, ProbeResult, credential_field, url_field
-from hallpass.core.secret import SecretError
-from hallpass.net import httpx
+from toolpass.core import jsonx
+from toolpass.core.catalog import Action
+from toolpass.core.decision import Code, allowed, denied, errorf, unknown_decision, user_ambiguous, user_not_found, wrap_error
+from toolpass.core.integration import Connection, Identity, Integration, ProbeResult, credential_field, url_field
+from toolpass.core.secret import SecretError
+from toolpass.net import httpx
 
 _PROJECT_KEY = re.compile(r"[A-Z][A-Z0-9]{1,9}")
 
@@ -112,7 +112,7 @@ class AcmeConnection(Connection):
             _, body = self.api.get_json(ctx, path)
         except Exception as e:
             if httpx.status(e) == 404:
-                return unknown_decision(Code.RESOURCE_NOT_VISIBLE, f"project {r.resource.id} does not exist or hallpass cannot see it")
+                return unknown_decision(Code.RESOURCE_NOT_VISIBLE, f"project {r.resource.id} does not exist or toolpass cannot see it")
             raise httpx.classify(e) from e
         role = jsonx.s(jsonx.obj(body), "role")
         if role in ("admin", "maintainer"):
@@ -130,13 +130,13 @@ class AcmeConnection(Connection):
 INTEGRATION = Acme()  # in the package's __init__.py
 ```
 
-The real integrations are fully typed (`mypy --strict` runs on `src/hallpass`); the types are left
+The real integrations are fully typed (`mypy --strict` runs on `src/toolpass`); the types are left
 out here for space.
 
 ## Decisions
 
-`deny` only when the third-party system positively says no. Everything hallpass could not evaluate
-is `unknown` with a code from `hallpass.core.decision.Code`:
+`deny` only when the third-party system positively says no. Everything toolpass could not evaluate
+is `unknown` with a code from `toolpass.core.decision.Code`:
 
 | Situation | Return or raise |
 |---|---|
@@ -144,9 +144,9 @@ is `unknown` with a code from `hallpass.core.decision.Code`:
 | positively refused | `return denied("...")` |
 | no account for the email | `raise user_not_found(...)` from `resolve_identity` |
 | several accounts | `raise user_ambiguous(...)` |
-| hallpass's credential rejected (401, or 403 where it means "hallpass lacks the right") | `raise wrap_error(Code.CREDENTIAL_REJECTED, err, "...")` |
+| toolpass's credential rejected (401, or 403 where it means "toolpass lacks the right") | `raise wrap_error(Code.CREDENTIAL_REJECTED, err, "...")` |
 | resource not visible / not found (404 that may mean "no access") | `return unknown_decision(Code.RESOURCE_NOT_VISIBLE, ...)` |
-| a policy construct hallpass does not model | `return unsupported(...)` |
+| a policy construct toolpass does not model | `return unsupported(...)` |
 | bad resource shape for this integration | `raise errorf(Code.INVALID_REQUEST, ...)` |
 | transport, 5xx, 429, timeout | `raise httpx.classify(err) from err` |
 
@@ -157,14 +157,14 @@ body. Keep it one sentence.
 
 ## Upstream JSON
 
-Read decoded bodies with `hallpass.core.jsonx`: `jsonx.obj(v)`, and `jsonx.s`, `i`, `b`, `arr`,
+Read decoded bodies with `toolpass.core.jsonx`: `jsonx.obj(v)`, and `jsonx.s`, `i`, `b`, `arr`,
 `o` and `strs` for a key. A missing key or `null` is the zero value; a value of the wrong type
 raises `jsonx.DecodeError`, so a malformed answer is `upstream_error`, never a silently wrong
 decision. Do not index decoded JSON directly.
 
 ## Resources
 
-`type:id`, parsed by `hallpass.core.catalog.parse_resource` into `r.resource.type` and
+`type:id`, parsed by `toolpass.core.catalog.parse_resource` into `r.resource.type` and
 `r.resource.id` (and query parameters, for forms such as `namespace:payments?name=api`). The
 integration validates the type and id with strict regular expressions (`fullmatch`) before putting
 either into a URL path (`httpx.path_escape`), a query, a GraphQL variable, a JQL or SOQL string, or
@@ -176,19 +176,19 @@ anything else. Git hosts use `catalog.split_branch` for `@branch`.
 and redaction. Use `get_json`, `post_json`, `do`, `paginate` and `next_link` (which refuses a next
 page on another host, so the credential never travels there). Bodies are never logged. Use
 `httpx.status(err)` to branch on 403 and 404, and `httpx.classify(err)` for everything else. Every
-call takes the `ctx` hallpass passed in: it carries the connection's timeout and cancellation.
+call takes the `ctx` toolpass passed in: it carries the connection's timeout and cancellation.
 
 Every response the client completes during `resolve_identity` and `check` is recorded as evidence on
 the decision (method, path, status, and the `ETag` or the body's SHA-256) and written to the
 decision log by the engine; an integration does nothing for this. Calls made from the client's
 `auth` function or by an `authx` token source are not recorded. A lookup an integration caches in a
-`hallpass.core.cache.TTL` (role definitions, policies) is replayed, marked `cached`, on every check
+`toolpass.core.cache.TTL` (role definitions, policies) is replayed, marked `cached`, on every check
 the entry serves, and is looked up again for a check with `"fresh": true`
-(`hallpass.core.evidence.fresh(ctx)`). Keep such lookups in a `TTL` rather than a hand-rolled dict
+(`toolpass.core.evidence.fresh(ctx)`). Keep such lookups in a `TTL` rather than a hand-rolled dict
 so both hold. A map read from a local file (`role_map_file`, `user_map_file`) is configuration, not
 upstream state, and keeps its own re-read schedule.
 
-## Auth (`hallpass.authx`)
+## Auth (`toolpass.authx`)
 
 `authx.token.TokenSource` caches a token and refreshes it 5 minutes before expiry.
 `authx.jwt.sign_jwt` signs RS256 and PS256 with `kid` and `x5t#S256` headers.
@@ -212,17 +212,17 @@ Use the harness in `tests/harness` (`from tests import harness as itest`):
   timeout.
 - `srv.use_spec(spec_from_env("<name>"), SpecOptions(...))` (from `tests.harness.spec`) validates
   every request against the vendor's published API description (OpenAPI, Google discovery,
-  botocore or GraphQL SDL) when `HALLPASS_SPECS_DIR` holds `<name>.spec`; `test/specs/fetch.sh`
+  botocore or GraphQL SDL) when `TOOLPASS_SPECS_DIR` holds `<name>.spec`; `test/specs/fetch.sh`
   downloads them. A wrong path, method, missing required parameter or body field fails the test.
   Use `strip_prefix` for gateway prefixes, `ignore_paths` for endpoints the description lacks (say
   why in a comment), and `allow_query` and `optional_params` for parameters newer or older than the
   description.
 
 ```python
-from hallpass.core.context import background
-from hallpass.core.decision import Code
-from hallpass.core.integration import User
-from hallpass.integrations.acme import Acme
+from toolpass.core.context import background
+from toolpass.core.decision import Code
+from toolpass.core.integration import User
+from toolpass.integrations.acme import Acme
 from tests import harness as itest
 from tests.harness.spec import SpecOptions, spec_from_env
 

@@ -1,0 +1,122 @@
+# The datadog integration: role permissions, legacy restricted_roles,
+# restriction policies, user states and upstream failures, against a static
+# fake of the v1 and v2 APIs.
+connections:
+  - id: dd
+    integration: datadog
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    api_key: env:DD_API_KEY
+    credential: env:DD_APP_KEY
+  - id: dd-broken
+    integration: datadog
+    url: "{{url}}/broken"
+    ca_file: "{{ca_file}}"
+    api_key: env:DD_API_KEY
+    credential: env:DD_APP_KEY
+  - id: dd-forbidden
+    integration: datadog
+    url: "{{url}}/forbidden"
+    ca_file: "{{ca_file}}"
+    api_key: env:DD_API_KEY
+    credential: env:DD_APP_KEY
+env:
+  DD_API_KEY: parity-datadog-api-key
+  DD_APP_KEY: parity-datadog-app-key
+upstream:
+  - method: GET
+    path: /api/v2/users
+    json:
+      data:
+        - {id: d1d1d1d1-0000-0000-0000-000000000001, type: users, attributes: {email: dana@example.com, handle: Dana@Example.com, status: Active, disabled: false}, relationships: {roles: {data: [{id: 22222222-2222-2222-2222-222222222222, type: roles}]}}}
+        - {id: b0b0b0b0-0000-0000-0000-000000000002, type: users, attributes: {email: bob@example.com, handle: bob@example.com, status: Active, disabled: false}, relationships: {roles: {data: [{id: 11111111-1111-1111-1111-111111111111, type: roles}]}}}
+        - {id: 0ff00000-0000-0000-0000-000000000004, type: users, attributes: {email: off@example.com, handle: off@example.com, status: Disabled, disabled: true}, relationships: {roles: {data: [{id: 22222222-2222-2222-2222-222222222222, type: roles}]}}}
+        - {id: 0ff00000-0000-0000-0000-000000000005, type: users, attributes: {email: pending@example.com, handle: pending, status: Pending, disabled: false}, relationships: {roles: {data: [{id: 22222222-2222-2222-2222-222222222222, type: roles}]}}}
+        - {id: 0ff00000-0000-0000-0000-000000000006, type: users, attributes: {email: nostatus@example.com, handle: nostatus, status: Active}, relationships: {roles: {data: [{id: 22222222-2222-2222-2222-222222222222, type: roles}]}}}
+        - {id: 0ff00000-0000-0000-0000-000000000007, type: users, attributes: {email: lost@example.com, handle: lost, status: Active, disabled: false}, relationships: {roles: {data: [{id: 55555555-5555-5555-5555-555555555555, type: roles}]}}}
+        - {id: dup1, type: users, attributes: {email: dup@example.com, handle: d1, status: Active, disabled: false}}
+        - {id: dup2, type: users, attributes: {email: DUP@example.com, handle: d2, status: Active, disabled: false}}
+        - {id: eeeeeeee-0000-0000-0000-000000000008, type: users, attributes: {email: dana@example.com.au, handle: dana2, status: Active, disabled: false}}
+      meta: {page: {total_count: 9, total_filtered_count: 9}}
+  - method: GET
+    path: /api/v2/roles/22222222-2222-2222-2222-222222222222/permissions
+    json:
+      data:
+        - {id: p1, type: permissions, attributes: {name: monitors_read}}
+        - {id: p2, type: permissions, attributes: {name: monitors_write}}
+        - {id: p3, type: permissions, attributes: {name: logs_read_data}}
+        - {id: p4, type: permissions, attributes: {name: dashboards_write}}
+  - method: GET
+    path: /api/v2/roles/11111111-1111-1111-1111-111111111111/permissions
+    json:
+      data:
+        - {id: p1, type: permissions, attributes: {name: monitors_read}}
+        - {id: p3, type: permissions, attributes: {name: logs_read_data}}
+  - method: GET
+    path: /api/v2/roles/55555555-5555-5555-5555-555555555555/permissions
+    status: 404
+    json: {errors: [Not found]}
+  - method: GET
+    path: /api/v1/monitor/1
+    json: {id: 1, restricted_roles: null, creator: {email: someone@example.com, handle: someone@example.com}}
+  - method: GET
+    path: /api/v1/monitor/2
+    json: {id: 2, restricted_roles: [44444444-4444-4444-4444-444444444444]}
+  - method: GET
+    path: /api/v1/monitor/3
+    json: {id: 3, restricted_roles: null}
+  - method: GET
+    path: /api/v1/monitor/404
+    status: 404
+    json: {errors: [Monitor not found]}
+  - method: GET
+    path: /api/v1/dashboard/abc-def
+    json: {id: abc-def, restricted_roles: [44444444-4444-4444-4444-444444444444], author_handle: dana@example.com}
+  - method: GET
+    path: /api/v2/restriction_policy/*
+    json: {data: {type: restriction_policy, id: x, attributes: {bindings: []}}}
+  - method: GET
+    path: /api/v2/restriction_policy/monitor:3
+    json:
+      data:
+        type: restriction_policy
+        id: "monitor:3"
+        attributes:
+          bindings:
+            - {relation: editor, principals: ["team:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]}
+            - {relation: viewer, principals: ["org:99999999-9999-9999-9999-999999999999"]}
+  - method: GET
+    path: /api/v2/team/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/memberships
+    json: {data: []}
+  - method: GET
+    path: /broken/*
+    status: 500
+    body: ""
+  - method: GET
+    path: /forbidden/*
+    status: 403
+    json: {errors: [Forbidden]}
+checks:
+  - {user: dana@example.com, action: logs.read, resource: org, want: allowed, reason: "allowed: a role of dana@example.com carries logs_read_data"}
+  - {user: bob@example.com, action: users.manage, resource: org, want: denied, reason: "denied: no role of bob@example.com carries user_access_manage"}
+  - {user: off@example.com, action: logs.read, resource: org, want: denied, reason: "denied: off@example.com is disabled in Datadog"}
+  - {user: pending@example.com, action: logs.read, resource: org, want: denied, reason: "denied: pending@example.com was invited to Datadog but has not accepted, so cannot act"}
+  - {user: nostatus@example.com, action: logs.read, resource: org, want: unsupported, reason: "unsupported: Datadog did not report whether nostatus@example.com is disabled"}
+  - {user: ghost@example.com, action: logs.read, resource: org, want: user_not_found, reason: "user_not_found: no Datadog user has email ghost@example.com"}
+  - {user: dup@example.com, action: logs.read, resource: org, want: user_ambiguous, reason: "user_ambiguous: 2 Datadog users have email dup@example.com"}
+  - {user: lost@example.com, action: logs.read, resource: org, want: resource_not_visible, reason: "resource_not_visible: role 55555555-5555-5555-5555-555555555555 of lost@example.com does not exist or toolpass cannot see it"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:1", want: allowed, reason: "allowed: a role of dana@example.com carries monitors_write and monitor 1 carries no restriction"}
+  - {user: bob@example.com, action: monitor.edit, resource: "monitor:1", want: denied, reason: "denied: no role of bob@example.com carries monitors_write, which change, delete or resolve the monitor (monitors_write) needs"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:2", want: denied, reason: "denied: monitor 2 is restricted to 1 role(s) that dana@example.com does not hold"}
+  - {user: bob@example.com, action: monitor.read, resource: "monitor:2", want: allowed, reason: "allowed: a role of bob@example.com carries monitors_read and monitor 2 carries no restriction"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:3", want: denied, reason: "denied: the restriction policy of monitor 3 grants editor to none of dana@example.com's roles, teams or user"}
+  - {user: bob@example.com, action: monitor.read, resource: "monitor:3", want: allowed, reason: "allowed: the restriction policy of monitor 3 grants viewer to the whole org, and a role of bob@example.com carries monitors_read"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:404", want: resource_not_visible, reason: "resource_not_visible: monitor 404 does not exist or toolpass cannot see it"}
+  - {user: dana@example.com, action: dashboard.edit, resource: "dashboard:abc-def", want: allowed, reason: "allowed: a role of dana@example.com carries dashboards_write and dana@example.com is the author of dashboard abc-def, which its restricted roles cannot exclude"}
+  - {user: dana@example.com, action: "raw:monitors_write", resource: "monitor:2", want: denied, reason: "denied: monitor 2 is restricted to 1 role(s) that dana@example.com does not hold"}
+  - {user: dana@example.com, action: "raw:monitors_read", resource: "monitor:3", want: allowed, reason: "allowed: the restriction policy of monitor 3 grants viewer to the whole org, and a role of dana@example.com carries monitors_read"}
+  - {user: dana@example.com, action: "raw:Monitors", resource: org, want: unknown_action, reason: "unknown_action: integration datadog has no action \"raw:Monitors\""}
+  - {user: dana@example.com, action: monitor.edit, resource: "dashboard:abc-def", want: invalid_request, reason: "invalid_request: action monitor.edit takes a monitor: resource, not dashboard:"}
+  - {user: dana@example.com, action: monitor.edit, resource: "monitor:-1", want: invalid_request, reason: "invalid_request: monitor: id must be the asset's id"}
+  - {user: dana@example.com, action: logs.read, resource: org, connection: dd-broken, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: dana@example.com, action: logs.read, resource: org, connection: dd-forbidden, want: credential_rejected, reason: "credential_rejected: Datadog refused to search users (HTTP 403): the API key or application key is invalid, or the application key lacks the scope"}

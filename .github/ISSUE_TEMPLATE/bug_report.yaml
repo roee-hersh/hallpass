@@ -1,12 +1,12 @@
 name: Bug report
-description: hallpass returned a wrong decision, crashed or misbehaved
+description: toolpass returned a wrong decision, crashed or misbehaved
 labels: [bug]
 body:
   - type: input
     id: version
     attributes:
       label: Version
-      description: Output of `hallpass version`, or the commit
+      description: Output of `toolpass version`, or the commit
     validations:
       required: true
   - type: input

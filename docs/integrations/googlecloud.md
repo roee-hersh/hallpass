@@ -1,6 +1,6 @@
 # googlecloud
 
-hallpass authenticates as a service account and asks the Policy Troubleshooter API
+toolpass authenticates as a service account and asks the Policy Troubleshooter API
 (`POST https://policytroubleshooter.googleapis.com/v3/iam:troubleshoot`) whether a principal holds an
 IAM permission on a full resource name. Google evaluates the allow policies and the deny policies of
 the resource and every ancestor (project, folder, organization), expanding group membership, and
@@ -15,18 +15,18 @@ call. Nothing is written and no user credential is ever used.
    policy reads. The troubleshooter can only explain policies the caller can read, so a role granted
    too low in the hierarchy makes every check `UNKNOWN_INFO` (unknown).
 3. Either create a key for the service account and store the JSON in a file (`auth_mode: key`), or
-   run hallpass on GCE/GKE as that service account and use `auth_mode: keyless`: hallpass then takes
+   run toolpass on GCE/GKE as that service account and use `auth_mode: keyless`: toolpass then takes
    the runtime identity's token from the metadata server and no key exists.
 4. If the credential's own project cannot be billed for the API (the API is disabled there, or the
    service account belongs to another organization), set `quota_project` to a project where the
-   API is enabled; hallpass sends it as `X-Goog-User-Project`, and the service account needs
+   API is enabled; toolpass sends it as `X-Goog-User-Project`, and the service account needs
    `serviceusage.services.use` on that project.
 
-`hallpass probe` warns when the role is missing under `scope` and always reminds that the
-troubleshooter discloses which permissions other principals hold: that is what hallpass is for, but
-the service account should be held by hallpass alone.
+`toolpass probe` warns when the role is missing under `scope` and always reminds that the
+troubleshooter discloses which permissions other principals hold: that is what toolpass is for, but
+the service account should be held by toolpass alone.
 
-Signing with a service-account key (`auth_mode: key`) needs `cryptography`: install `hallpass[crypto]` (the Docker image has it).
+Signing with a service-account key (`auth_mode: key`) needs `cryptography`: install `toolpass[crypto]` (the Docker image has it).
 
 ## Connection
 
@@ -34,9 +34,9 @@ Signing with a service-account key (`auth_mode: key`) needs `cryptography`: inst
   - id: gcp-acme
     integration: googlecloud
     scope: organization:123456789012             # or folder:<number>, project:<id>
-    credential: file:/secrets/gcp-hallpass.json   # service-account key JSON (auth_mode key)
+    credential: file:/secrets/gcp-toolpass.json   # service-account key JSON (auth_mode key)
     auth_mode: key                                # or keyless
-    quota_project: acme-hallpass                  # optional
+    quota_project: acme-toolpass                  # optional
     googleworkspace_connection: gws-acme          # optional, see Identity
 ```
 
@@ -120,13 +120,13 @@ whether the user may delete objects anywhere in the project's buckets (as far as
 
 ## Decisions
 
-| Troubleshooter says | hallpass answers |
+| Troubleshooter says | toolpass answers |
 |---|---|
 | `overallAccessState: CAN_ACCESS` | allow |
 | `CANNOT_ACCESS` with `denyPolicyExplanation.denyAccessState: DENY_ACCESS_STATE_DENIED` | deny ("a deny policy denies ...") |
 | `CANNOT_ACCESS` otherwise | deny ("no allow policy grants ...") |
 | `UNKNOWN_CONDITIONAL` (a binding or deny rule has a condition Google could not evaluate without a request context) | unknown (`unsupported`) |
-| `UNKNOWN_INFO` (hallpass cannot read one of the policies, or the resource does not exist) | unknown (`resource_not_visible`) |
+| `UNKNOWN_INFO` (toolpass cannot read one of the policies, or the resource does not exist) | unknown (`resource_not_visible`) |
 | any other or missing state, unreadable body | unknown (`upstream_error`) |
 | suspended / archived account (with `googleworkspace_connection`) | deny |
 | no Workspace account (with `googleworkspace_connection`) | deny (`user_not_found`) |
@@ -141,7 +141,7 @@ Error bodies are read whole so the reason is found even after a long message; on
 
 ## Probe
 
-`hallpass probe` mints a token, then asks the troubleshooter whether the service account itself may
+`toolpass probe` mints a token, then asks the troubleshooter whether the service account itself may
 `resourcemanager.<type>.get` the `scope` resource. `CAN_ACCESS` or `CANNOT_ACCESS` proves the API
 is enabled and the policies under `scope` are readable; `UNKNOWN_INFO` warns that
 `roles/iam.securityReviewer` is missing there. Without `googleworkspace_connection` it warns that an
@@ -171,7 +171,7 @@ Marked `# UNVERIFIED:` in the code:
   policy under `scope`, or whether a `policytroubleshooter.*` permission is needed as well; the probe
   reports `UNKNOWN_INFO` if the role is not enough.
 - Group expansion: the troubleshooter expands Google Groups only when the caller can see the
-  membership; for groups it cannot read the state is `UNKNOWN_INFO`, which hallpass reports as
+  membership; for groups it cannot read the state is `UNKNOWN_INFO`, which toolpass reports as
   `resource_not_visible` like an unreadable policy.
 - A principal that is not a Google Account or a service account: assumed to answer `CANNOT_ACCESS`
   or HTTP 400 rather than some other state.
@@ -181,4 +181,4 @@ Marked `# UNVERIFIED:` in the code:
 Unit tests run against one fake server that serves the token endpoint, the metadata server and
 `/v3/iam:troubleshoot`, verifying the JWT assertion, the bearer, the quota header and every request
 against the API's discovery document (`google-policytroubleshooter` in `test/specs/fetch.sh`). There is
-no live test; after configuring, run `hallpass probe` and one check for a user you know is allowed.
+no live test; after configuring, run `toolpass probe` and one check for a user you know is allowed.

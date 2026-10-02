@@ -1,7 +1,7 @@
 # Shared by test/kind/run.sh and test/kind/helm.sh: create (or reuse) the kind
 # cluster named by $CLUSTER, select its context, and delete it on exit unless
 # KEEP is set. Source it after `set -euo pipefail`.
-CLUSTER="${CLUSTER:-hallpass-e2e}"
+CLUSTER="${CLUSTER:-toolpass-e2e}"
 
 kind_cleanup() {
   if [ -z "${KEEP:-}" ]; then

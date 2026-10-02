@@ -1,0 +1,18 @@
+apiVersion: v2
+name: toolpass
+description: Permission checks for AI agents and bots, answered live by the system they act in.
+type: application
+# The release sets both to the released version; from a clone the chart
+# deploys the latest published image.
+version: 0.0.0
+appVersion: "latest"
+home: https://github.com/roee-hersh/toolpass
+sources:
+  - https://github.com/roee-hersh/toolpass
+keywords:
+  - authorization
+  - permissions
+  - ai-agents
+maintainers:
+  - name: roee-hersh
+    url: https://github.com/roee-hersh

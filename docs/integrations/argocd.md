@@ -1,7 +1,7 @@
 # argocd
 
 Argo CD has no API that asks "may user X do Y" for another user (`account/can-i` is only for the
-caller). hallpass therefore reads the RBAC policy from the cluster and evaluates it locally with the
+caller). toolpass therefore reads the RBAC policy from the cluster and evaluates it locally with the
 same rules as the Argo CD API server. The evaluator is a port of `argo-cd/util/rbac` and
 `argo-cd/server/rbacpolicy` (v3), verified against upstream master in September 2026, and its tests
 are ported from Argo CD's own.
@@ -15,7 +15,7 @@ the Argo CD namespace:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: hallpass-argocd-reader
+  name: toolpass-argocd-reader
   namespace: argocd
 rules:
   - apiGroups: [""]
@@ -45,7 +45,7 @@ rules:
 | `kubernetes_connection` | id of the kubernetes connection for the cluster Argo CD runs in |
 | `namespace` | Argo CD's namespace |
 | `rbac_configmap` | name of the RBAC config map |
-| `user_subject` | what Argo CD sees as the user's subject. `none`: hallpass evaluates only the default role and the caller's groups. `email`: the email is also the subject, as when your identity provider's `sub` claim is the email |
+| `user_subject` | what Argo CD sees as the user's subject. `none`: toolpass evaluates only the default role and the caller's groups. `email`: the email is also the subject, as when your identity provider's `sub` claim is the email |
 
 The policy (config maps and AppProjects) is cached for 30 seconds.
 
@@ -96,7 +96,7 @@ Exactly as in Argo CD:
 |---|---|
 | A rule allows and none denies | allow |
 | No rule allows, or a rule denies | deny |
-| `user_subject: none` and the policy has user-level rules hallpass cannot reach through groups | unknown (`unsupported`) rather than deny |
+| `user_subject: none` and the policy has user-level rules toolpass cannot reach through groups | unknown (`unsupported`) rather than deny |
 | The policy is invalid (Argo CD would refuse it too) | unknown (`unsupported`) |
 | An AppProject's role policy is invalid | evaluated without it, as Argo CD does |
 | The ServiceAccount may not read the config maps or projects | unknown (`credential_rejected`) |
@@ -107,11 +107,11 @@ Exactly as in Argo CD:
   Use `user_subject: email` only when the subject really is the email.
 - Local Argo CD accounts, project JWT tokens.
 - Sync windows, project source/destination restrictions, and anything else enforced outside RBAC.
-- Applications in other namespaces are addressed as `<project>/<namespace>/<name>`; hallpass does not
+- Applications in other namespaces are addressed as `<project>/<namespace>/<name>`; toolpass does not
   look the application up to find its project.
 
 ## Test
 
-Unit tests run against a fake API server. `hallpass-py/tests/integrations/argocd/rbac` contains the
-ported Argo CD tests. `hallpass-py/tests/differential/test_argocd.py` compares the evaluator with
+Unit tests run against a fake API server. `toolpass-py/tests/integrations/argocd/rbac` contains the
+ported Argo CD tests. `toolpass-py/tests/differential/test_argocd.py` compares the evaluator with
 `argocd admin settings rbac can` when the `argocd` binary is on the PATH.

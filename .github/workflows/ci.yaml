@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  hallpass-py:
+  toolpass-py:
     # The engine: lint, types and the whole suite on the oldest and newest
     # Python it supports, on Linux and Windows; then the built wheel,
     # installed into a clean environment, tested from outside the checkout.
@@ -24,7 +24,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: hallpass-py
+        working-directory: toolpass-py
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,7 +38,7 @@ jobs:
           ruff check src tests examples
       - name: types
         if: runner.os == 'Linux'
-        run: mypy --strict src/hallpass
+        run: mypy --strict src/toolpass
       - run: python -m pytest -q
       - name: the installed wheel
         if: runner.os == 'Linux'
@@ -46,19 +46,19 @@ jobs:
           set -eu
           python -m build -o /tmp/dist .
           python -m venv /tmp/clean
-          /tmp/clean/bin/pip install --quiet "$(ls /tmp/dist/hallpass-*.whl)[crypto]" pytest pytest-timeout hypothesis
+          /tmp/clean/bin/pip install --quiet "$(ls /tmp/dist/toolpass-*.whl)[crypto]" pytest pytest-timeout hypothesis
           # The tests import each other as the package "tests", so they
           # keep that name, in a directory with no copy of the source;
           # pyproject.toml comes along for the pytest settings (timeout).
-          mkdir /tmp/wheel && cp -r tests pyproject.toml /tmp/wheel/
-          (cd /tmp/wheel && HALLPASS_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m pytest -q -p no:cacheprovider --rootdir /tmp/wheel tests)
+          mkdir /tmp/wheel && cp -r tests examples pyproject.toml /tmp/wheel/
+          (cd /tmp/wheel && TOOLPASS_REQUIRE_INSTALLED=1 /tmp/clean/bin/python -m pytest -q -p no:cacheprovider --rootdir /tmp/wheel tests)
 
   specs:
     # The integration suites with every fake upstream validating requests
     # against the vendor's published API description, and the vendor mocks
     # (Prism) answering from those descriptions.
     runs-on: ubuntu-latest
-    needs: hallpass-py
+    needs: toolpass-py
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -74,21 +74,21 @@ jobs:
           restore-keys: api-specs-
       - name: fetch API descriptions
         run: test/specs/fetch.sh .specs
-      - run: python -m pip install --quiet -e "./hallpass-py[crypto]" pytest pytest-timeout hypothesis
+      - run: python -m pip install --quiet -e "./toolpass-py[crypto]" pytest pytest-timeout hypothesis
       - name: requests against the descriptions
-        working-directory: hallpass-py
-        run: HALLPASS_SPECS_DIR=$GITHUB_WORKSPACE/.specs python -m pytest -q tests/integrations tests/harness_tests
+        working-directory: toolpass-py
+        run: TOOLPASS_SPECS_DIR=$GITHUB_WORKSPACE/.specs python -m pytest -q tests/integrations tests/harness_tests
       - run: npx --yes @stoplight/prism-cli@5 --version
       - name: contract (Prism)
-        working-directory: hallpass-py
-        run: HALLPASS_SPECS_DIR=$GITHUB_WORKSPACE/.specs python -m pytest -v tests/contract
+        working-directory: toolpass-py
+        run: TOOLPASS_SPECS_DIR=$GITHUB_WORKSPACE/.specs python -m pytest -v tests/contract
 
   frameworks:
     # Each agent framework's real agent loop with a scripted model, against
     # a real Vault in docker; with the ANTHROPIC_API_KEY secret set, also
     # against a real Claude model.
     runs-on: ubuntu-latest
-    needs: hallpass-py
+    needs: toolpass-py
     strategy:
       fail-fast: false
       matrix:
@@ -108,34 +108,34 @@ jobs:
         with:
           python-version: "3.13"
       - run: docker pull hashicorp/vault:1.17
-      - run: python -m pip install --quiet -e "./hallpass-py[crypto,${{ matrix.extra }}]" ${{ matrix.live }} pytest pytest-timeout hypothesis
-      - working-directory: hallpass-py
+      - run: python -m pip install --quiet -e "./toolpass-py[crypto,${{ matrix.extra }}]" ${{ matrix.live }} pytest pytest-timeout hypothesis
+      - working-directory: toolpass-py
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          HALLPASS_REAL: "1"
-        run: python -m pytest -v tests/frameworks/test_${{ matrix.test }}.py
+          TOOLPASS_REAL: "1"
+        run: python -m pytest -v tests/frameworks/test_${{ matrix.test }}.py tests/toolkit
 
   real:
     # The vault integration against a real Vault server: every case checked
     # against Vault's own sys/capabilities answer.
     runs-on: ubuntu-latest
-    needs: hallpass-py
+    needs: toolpass-py
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - run: docker pull hashicorp/vault:1.17
-      - run: python -m pip install --quiet -e "./hallpass-py[crypto]" pytest pytest-timeout hypothesis
-      - working-directory: hallpass-py
-        run: HALLPASS_REAL=1 python -m pytest -v tests/real
+      - run: python -m pip install --quiet -e "./toolpass-py[crypto]" pytest pytest-timeout hypothesis
+      - working-directory: toolpass-py
+        run: TOOLPASS_REAL=1 python -m pytest -v tests/real
 
   clients:
-    # The TypeScript client (npm hallpass-client): built, tested, packed and
+    # The TypeScript client (npm toolpass-client): built, tested, packed and
     # installed into an empty project; the TypeScript agent examples; and
     # the docs' links.
     runs-on: ubuntu-latest
-    needs: hallpass-py
+    needs: toolpass-py
     strategy:
       matrix:
         node: [18, 22]
@@ -145,7 +145,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: build and test
-        working-directory: hallpass-ts
+        working-directory: toolpass-ts
         run: |
           npm ci
           npm test
@@ -153,12 +153,12 @@ jobs:
         run: |
           set -eu
           mkdir /tmp/consumer
-          (cd hallpass-ts && npm pack --pack-destination /tmp/consumer)
-          cp hallpass-ts/test/package.test.mjs /tmp/consumer/
+          (cd toolpass-ts && npm pack --pack-destination /tmp/consumer)
+          cp toolpass-ts/test/package.test.mjs /tmp/consumer/
           cd /tmp/consumer
           npm init -y > /dev/null
-          npm install --no-audit --no-fund ./hallpass-client-*.tgz
-          HALLPASS_TS_PACKED=1 node --test package.test.mjs
+          npm install --no-audit --no-fund ./toolpass-client-*.tgz
+          TOOLPASS_TS_PACKED=1 node --test package.test.mjs
       - name: agent examples (TypeScript)
         if: matrix.node == 22
         working-directory: examples/agent-ts
@@ -171,7 +171,7 @@ jobs:
 
   kind:
     runs-on: ubuntu-latest
-    needs: hallpass-py
+    needs: toolpass-py
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -179,9 +179,9 @@ jobs:
           python-version: "3.13"
       - uses: helm/kind-action@v1
         with:
-          cluster_name: hallpass-e2e
+          cluster_name: toolpass-e2e
           install_only: true
-      - run: python -m pip install --quiet -e "./hallpass-py[crypto]" pytest pytest-timeout hypothesis
+      - run: python -m pip install --quiet -e "./toolpass-py[crypto]" pytest pytest-timeout hypothesis
       - name: kubernetes end to end
         run: KEEP=1 test/kind/run.sh
       - name: helm chart on the cluster
@@ -189,58 +189,58 @@ jobs:
 
   helm:
     # Lints and renders the chart, then loads the rendered config with the
-    # real program so a chart change cannot ship a hallpass.yaml that does
+    # real program so a chart change cannot ship a toolpass.yaml that does
     # not parse.
     runs-on: ubuntu-latest
-    needs: hallpass-py
+    needs: toolpass-py
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - uses: azure/setup-helm@v4
-      - run: python -m pip install --quiet -e "./hallpass-py[crypto]"
-      - run: helm lint deploy/helm/hallpass --strict --set apiKey.value=x
-      - run: helm template hallpass deploy/helm/hallpass --set apiKey.value=x > /dev/null
+      - run: python -m pip install --quiet -e "./toolpass-py[crypto]"
+      - run: helm lint deploy/helm/toolpass --strict --set apiKey.value=x
+      - run: helm template toolpass deploy/helm/toolpass --set apiKey.value=x > /dev/null
       - name: rendered config loads
         run: |
           set -eu
-          helm template hallpass deploy/helm/hallpass --set apiKey.value=x -s templates/configmap.yaml \
-            | sed -n '/hallpass.yaml: |/,$p' | tail -n +2 | sed 's/^    //' > /tmp/rendered.yaml
-          HALLPASS_API_KEY=x hallpass validate -config /tmp/rendered.yaml
+          helm template toolpass deploy/helm/toolpass --set apiKey.value=x -s templates/configmap.yaml \
+            | sed -n '/toolpass.yaml: |/,$p' | tail -n +2 | sed 's/^    //' > /tmp/rendered.yaml
+          TOOLPASS_API_KEY=x toolpass validate -config /tmp/rendered.yaml
       - name: values combinations that must fail
         run: |
           set -eu
-          if helm template hallpass deploy/helm/hallpass > /dev/null 2>&1; then
+          if helm template toolpass deploy/helm/toolpass > /dev/null 2>&1; then
             echo "rendered without an API key"; exit 1; fi
-          if helm template hallpass deploy/helm/hallpass --set apiKey.value=x --set apiKey.existingSecret=y > /dev/null 2>&1; then
+          if helm template toolpass deploy/helm/toolpass --set apiKey.value=x --set apiKey.existingSecret=y > /dev/null 2>&1; then
             echo "rendered with both apiKey.value and apiKey.existingSecret"; exit 1; fi
 
   fuzz:
     # Long property-based runs of every parser, on the nightly schedule only.
     # Tests without their own count run the nightly profile's 20,000 examples
     # (the slowest takes under 2 minutes); tests that set one with
-    # harness.examples(n) get n times HALLPASS_FUZZ_SCALE. Each test gets 15
+    # harness.examples(n) get n times TOOLPASS_FUZZ_SCALE. Each test gets 15
     # minutes instead of the default 2 so the run is never cut off mid-example
     # (an interrupted Hypothesis run reports misleading "flaky" errors); the
     # job as a whole is capped at 2 hours.
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    needs: hallpass-py
+    needs: toolpass-py
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: python -m pip install --quiet -e "./hallpass-py[crypto]" pytest pytest-timeout hypothesis
-      - working-directory: hallpass-py
-        run: HYPOTHESIS_PROFILE=nightly HALLPASS_FUZZ_SCALE=40 python -m pytest -q -p no:cacheprovider -o timeout=900 tests/core/test_catalog.py tests/integrations -k "fuzz or property or hypothesis"
+      - run: python -m pip install --quiet -e "./toolpass-py[crypto]" pytest pytest-timeout hypothesis
+      - working-directory: toolpass-py
+        run: HYPOTHESIS_PROFILE=nightly TOOLPASS_FUZZ_SCALE=40 python -m pytest -q -p no:cacheprovider -o timeout=900 tests/core/test_catalog.py tests/integrations -k "fuzz or property or hypothesis"
 
   differential:
     # Compares the Argo CD RBAC evaluator with the real argocd CLI.
     runs-on: ubuntu-latest
-    needs: hallpass-py
+    needs: toolpass-py
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -251,21 +251,21 @@ jobs:
           curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
           chmod +x /usr/local/bin/argocd
           argocd version --client
-      - run: python -m pip install --quiet -e "./hallpass-py[crypto]" pytest pytest-timeout hypothesis
-      - working-directory: hallpass-py
+      - run: python -m pip install --quiet -e "./toolpass-py[crypto]" pytest pytest-timeout hypothesis
+      - working-directory: toolpass-py
         run: python -m pytest -v tests/differential
 
   docker:
     runs-on: ubuntu-latest
-    needs: hallpass-py
+    needs: toolpass-py
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t hallpass:ci .
+      - run: docker build -t toolpass:ci .
       - name: smoke
         run: |
           set -eu
-          docker run -d --name hp -p 8080:8080 --read-only --user 65532:65532 -e HALLPASS_API_KEY=ci-key \
-            -v "$PWD/examples/hallpass.yaml:/etc/hallpass/hallpass.yaml:ro" hallpass:ci
+          docker run -d --name tp -p 8080:8080 --read-only --user 65532:65532 -e TOOLPASS_API_KEY=ci-key \
+            -v "$PWD/examples/toolpass.yaml:/etc/toolpass/toolpass.yaml:ro" toolpass:ci
           for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz && break; sleep 1; done
           curl -fsS -X POST http://localhost:8080/check -H 'Authorization: Bearer ci-key' \
             -H 'Content-Type: application/json' \
@@ -273,4 +273,4 @@ jobs:
           curl -fsS -X POST http://localhost:8080/check -H 'Authorization: Bearer ci-key' \
             -H 'Content-Type: application/json' \
             -d '{"user":"dana@example.com","connection":"demo","action":"thing.write","resource":"thing:1"}' | grep '"deny"'
-          docker rm -f hp
+          docker rm -f tp

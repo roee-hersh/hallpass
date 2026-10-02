@@ -1,9 +1,9 @@
 /**
- * An MCP server that checks with hallpass before it acts.
+ * An MCP server that checks with toolpass before it acts.
  *
  * Two tools:
  *
- *   check_permission   ask hallpass whether the current user may do something
+ *   check_permission   ask toolpass whether the current user may do something
  *   write_thing        an example action that runs only after an allow
  *
  * The user the agent acts for is fixed when the server starts (AGENT_USER),
@@ -13,7 +13,7 @@
  *
  * Run:
  *
- *     export HALLPASS_URL=http://localhost:8080 HALLPASS_API_KEY=change-me
+ *     export TOOLPASS_URL=http://localhost:8080 TOOLPASS_API_KEY=change-me
  *     export AGENT_USER=dana@example.com
  *     node mcp_server.ts           # speaks MCP over stdio
  *
@@ -24,9 +24,9 @@ import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { Hallpass, guarded } from "../../hallpass-ts/src/index.ts"; // in your project: from "hallpass-client"
+import { Toolpass, guarded } from "../../toolpass-ts/src/index.ts"; // in your project: from "toolpass-client"
 
-const hp = new Hallpass();
+const tp = new Toolpass();
 const AGENT_USER = process.env.AGENT_USER ?? "";
 if (!AGENT_USER) {
   throw new Error("AGENT_USER missing: set it to the email of the user this server acts for");
@@ -38,7 +38,7 @@ const AGENT_GROUPS = (process.env.AGENT_GROUPS ?? "")
   .filter((g) => g !== "");
 
 export const server = new McpServer(
-  { name: "hallpass", version: "1.0.0" },
+  { name: "toolpass", version: "1.0.0" },
   {
     instructions:
       `Tools act on behalf of ${AGENT_USER}. Call check_permission before ` +
@@ -51,18 +51,18 @@ server.registerTool(
   "check_permission",
   {
     description:
-      "Ask hallpass whether the current user may perform an action. " +
-      "connection: the hallpass connection id, e.g. \"jira-main\" or \"k8s-prod-eu\". " +
+      "Ask toolpass whether the current user may perform an action. " +
+      "connection: the toolpass connection id, e.g. \"jira-main\" or \"k8s-prod-eu\". " +
       "action: an action of that integration, e.g. \"DELETE_ISSUES\". " +
       "resource: the target, e.g. \"issue:PAY-123\" or \"namespace:payments\". " +
       "Returns decision (allow / deny / unknown), reason and allowed. Only " +
-      "allowed=true permits the action; unknown means hallpass could not tell " +
+      "allowed=true permits the action; unknown means toolpass could not tell " +
       "and must be treated as deny.",
     inputSchema: { connection: z.string(), action: z.string(), resource: z.string() },
     outputSchema: { decision: z.string(), reason: z.string(), allowed: z.boolean() },
   },
   async ({ connection, action, resource }) => {
-    const d = await hp.check(AGENT_USER, connection, action, resource, AGENT_GROUPS);
+    const d = await tp.check(AGENT_USER, connection, action, resource, AGENT_GROUPS);
     const out = { decision: d.decision, reason: d.reason, allowed: d.allowed };
     return { content: [{ type: "text", text: JSON.stringify(out) }], structuredContent: out };
   },
@@ -76,7 +76,7 @@ server.registerTool(
     description: "Write content to a thing in the demo system. Requires thing.write.",
     inputSchema: { thing_id: z.string(), content: z.string() },
   },
-  guarded(hp, "demo", "thing.write", "thing:{thing_id}", { user: AGENT_USER, groups: AGENT_GROUPS })(
+  guarded(tp, "demo", "thing.write", "thing:{thing_id}", { user: AGENT_USER, groups: AGENT_GROUPS })(
     async ({ thing_id, content }: { thing_id: string; content: string }) => {
       // The action itself, with the agent's own credential. Replace with a
       // real call (delete a Jira issue, scale a deployment, ...) and keep the

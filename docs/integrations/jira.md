@@ -1,21 +1,21 @@
 # jira
 
-hallpass resolves the caller's email to an Atlassian `accountId` with `GET /rest/api/3/user/search`,
+toolpass resolves the caller's email to an Atlassian `accountId` with `GET /rest/api/3/user/search`,
 then asks `POST /rest/api/3/permissions/check` whether that account holds the permission on the
 project, the issue or globally. Jira evaluates permission schemes, project roles, groups and
-issue-level grants (Reporter, Assignee, issue security) itself; hallpass only reads the answer.
+issue-level grants (Reporter, Assignee, issue security) itself; toolpass only reads the answer.
 Nothing in Jira is changed. Jira Cloud only; Data Center is out of scope.
 
 ## Credential
 
 **This is not a read-only role.** `permissions/check` for another user needs **Administer Jira**
-(global) on hallpass's account, plus **Browse users and groups** for the email lookup and **Browse
+(global) on toolpass's account, plus **Browse users and groups** for the email lookup and **Browse
 Projects** on every project you ask about (the project and issue lookups return 404 otherwise). An
 account without Administer Jira gets HTTP 403 and every check answers unknown (`credential_rejected`).
 
 Mitigate the blast radius with a dedicated service account and a **scoped API token** limited to the
 read scopes `read:jira-work` and `read:jira-user` (`auth_mode: scoped_token`). The account still
-holds Administer Jira, but the token hallpass carries can only read.
+holds Administer Jira, but the token toolpass carries can only read.
 
 Three auth modes:
 
@@ -35,7 +35,7 @@ tokens are cached and refreshed five minutes before expiry.
     integration: jira
     url: https://acme.atlassian.net
     auth_mode: basic                     # basic | scoped_token | oauth_client
-    username: hallpass@acme.com          # basic only
+    username: toolpass@acme.com          # basic only
     credential: env:JIRA_TOKEN           # API token, or client secret for oauth_client
     client_id: "abc123"                  # oauth_client only
 ```
@@ -63,7 +63,7 @@ answers the search for a credential it does not accept as an anonymous caller, w
 that case is `credential_rejected`; a confirmation is trusted for five minutes), except that when candidates remain whose email the profile hides the answer is
 unknown (`unsupported`, "email hidden by profile visibility": make the email visible to the site or
 use a scoped token that can read it), and when five full pages hold no match it is unknown
-(`unsupported`, "too many candidates"), since the account may sit on a page hallpass did not read.
+(`unsupported`, "too many candidates"), since the account may sit on a page toolpass did not read.
 An empty email is `invalid_request`.
 
 ## Resources
@@ -96,16 +96,16 @@ A project permission on `global`, or a global permission on a project or issue, 
 
 ## Decisions
 
-| Jira says | hallpass answers |
+| Jira says | toolpass answers |
 |---|---|
 | the project / issue id appears under the permission in the response, or the key appears in `globalPermissions` | allow |
 | the permission is echoed in `projectPermissions` without the id, or the key is missing from `globalPermissions` | deny |
 | 200 whose `projectPermissions` does not echo the requested permission key at all | unknown (`unsupported`): Jira did not evaluate the key |
 | no active account with the email, or only candidates whose email is hidden, or five full search pages without a match | deny (`user_not_found`), unknown (`unsupported`), unknown (`unsupported`) |
-| 404 on the project or issue lookup | unknown (`resource_not_visible`): missing, archived, or not browsable by hallpass's account |
-| 403 on the project or issue lookup | unknown (`credential_rejected`): hallpass's account lacks Browse Projects |
-| 403 on `permissions/check` | unknown (`credential_rejected`): hallpass's account lacks Administer Jira |
-| 403 on the user search | unknown (`credential_rejected`): hallpass's account lacks Browse users and groups |
+| 404 on the project or issue lookup | unknown (`resource_not_visible`): missing, archived, or not browsable by toolpass's account |
+| 403 on the project or issue lookup | unknown (`credential_rejected`): toolpass's account lacks Browse Projects |
+| 403 on `permissions/check` | unknown (`credential_rejected`): toolpass's account lacks Administer Jira |
+| 403 on the user search | unknown (`credential_rejected`): toolpass's account lacks Browse users and groups |
 | 400 on `permissions/check` | unknown (`unsupported`): the permission key does not exist on this site |
 | 401 | unknown (`credential_rejected`) |
 | 429, 5xx, timeout | unknown (`upstream_rate_limited`, `upstream_error`, `upstream_timeout`) |
@@ -147,9 +147,9 @@ warns when Administer Jira is missing (every check for another user will answer 
 
 ## Test
 
-Unit tests run against a fake Jira Cloud site (`hallpass-py/tests/integrations/jira/test_jira.py`) covering
+Unit tests run against a fake Jira Cloud site (`toolpass-py/tests/integrations/jira/test_jira.py`) covering
 the three auth modes, identity edge cases (display-name spoofing, hidden emails, paging and the
 too-many-candidates cap, empty email), project/issue/global checks, a check whose response does not
 echo the permission key, every action, the injected failure modes and the probe. With
-`HALLPASS_SPECS_DIR` set, every request is validated against the Jira Cloud API description. No
+`TOOLPASS_SPECS_DIR` set, every request is validated against the Jira Cloud API description. No
 live-site test exists yet.

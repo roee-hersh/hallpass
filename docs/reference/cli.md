@@ -1,18 +1,18 @@
 # Command-line reference
 
-One command, `hallpass`, with five subcommands plus `hallpass version`. `pip install hallpass`
+One command, `toolpass`, with five subcommands plus `toolpass version`. `pip install toolpass`
 installs it, and it is the entry point of the Docker image. Every subcommand that reads a config
-takes `-config FILE`, defaulting to `/etc/hallpass/hallpass.yaml`. Flags take one dash (`-config
+takes `-config FILE`, defaulting to `/etc/toolpass/toolpass.yaml`. Flags take one dash (`-config
 FILE`); `--config=FILE` works too.
 
 | Command | What it does |
 |---|---|
-| `hallpass serve -config FILE` | Run the service |
-| `hallpass validate -config FILE` | Check the file, credential references and certificates. No network |
-| `hallpass probe -config FILE [-connection ID]` | Call each system with its credential and report |
-| `hallpass check -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]` | Answer one question from the command line |
-| `hallpass check -server URL [-api-key REF] [-ca-file PEM] [-timeout D] [-fresh] ...` | Ask a running hallpass the same question; `-fresh` skips its caches |
-| `hallpass catalog [INTEGRATION]` | List integrations, config keys and actions |
+| `toolpass serve -config FILE` | Run the service |
+| `toolpass validate -config FILE` | Check the file, credential references and certificates. No network |
+| `toolpass probe -config FILE [-connection ID]` | Call each system with its credential and report |
+| `toolpass check -config FILE -connection ID -user EMAIL -action NAME -resource RES [-group G]... [-json]` | Answer one question from the command line |
+| `toolpass check -server URL [-api-key REF] [-ca-file PEM] [-timeout D] [-fresh] ...` | Ask a running toolpass the same question; `-fresh` skips its caches |
+| `toolpass catalog [INTEGRATION]` | List integrations, config keys and actions |
 
 At startup `serve` reads the API key and exits with an error when it cannot (a server that could
 not would report healthy and refuse every check), then probes every connection and logs warnings.
@@ -22,25 +22,25 @@ A broken connection never stops the service from starting.
 connection's credential but no running server and no API key. Caches and the decision log are off. It prints the decision and reason
 (`-json` prints the HTTP response body) and exits 0 for `allow`, 1 for `deny`, 3 for `unknown` and
 2 when no decision was reached (bad flags, a config that does not load, an interrupted run), so
-`if hallpass check ...` treats `unknown` as deny. Only the connection asked about is built, so a
+`if toolpass check ...` treats `unknown` as deny. Only the connection asked about is built, so a
 sibling whose credential is missing on this machine does not get in the way.
 
 ```sh
-$ hallpass check -config hallpass.yaml -connection jira-main \
+$ toolpass check -config toolpass.yaml -connection jira-main \
     -user dana@example.com -action DELETE_ISSUES -resource issue:PAY-123
 deny
   denied: Dana Levi does not hold DELETE_ISSUES on issue PAY-123
 ```
 
-With `-server URL` the same question goes to a running hallpass over `POST /check`, so it can be
+With `-server URL` the same question goes to a running toolpass over `POST /check`, so it can be
 asked from a machine that holds the API key but none of the upstream credentials. `-api-key` is an
-`env:NAME` or `file:/path` reference (default `env:HALLPASS_API_KEY`); a key value on the command
+`env:NAME` or `file:/path` reference (default `env:TOOLPASS_API_KEY`); a key value on the command
 line is rejected. The URL must be `https://` unless it is `localhost` or a loopback address.
 Output and exit codes are the same; a reply that is not a decision (wrong host, proxy error page)
 or none within `-timeout` (default `1m`) exits 2.
 
 ```sh
-hallpass check -server https://hallpass.internal -connection jira-main \
+toolpass check -server https://toolpass.internal -connection jira-main \
     -user dana@example.com -action DELETE_ISSUES -resource issue:PAY-123
 ```
 

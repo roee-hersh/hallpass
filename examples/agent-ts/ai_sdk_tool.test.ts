@@ -1,22 +1,22 @@
 /**
  * Drives the AI SDK tools through `generateText` with a mock model that
- * emits tool calls, against a fake hallpass.
+ * emits tool calls, against a fake toolpass.
  */
 
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { generateText } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
-import { API_KEY, DANA, FakeHallpass } from "./fake_hallpass.ts";
+import { API_KEY, DANA, FakeToolpass } from "./fake_toolpass.ts";
 
-let fake: FakeHallpass;
+let fake: FakeToolpass;
 let mod: typeof import("./ai_sdk_tool.ts");
 
 before(async () => {
-  fake = await FakeHallpass.start();
+  fake = await FakeToolpass.start();
   // The example builds its client from the environment at import.
-  process.env.HALLPASS_URL = fake.url;
-  process.env.HALLPASS_API_KEY = API_KEY;
+  process.env.TOOLPASS_URL = fake.url;
+  process.env.TOOLPASS_API_KEY = API_KEY;
   mod = await import("./ai_sdk_tool.ts");
 });
 after(() => fake.close());

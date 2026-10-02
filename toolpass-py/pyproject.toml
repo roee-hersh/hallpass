@@ -1,0 +1,118 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "toolpass"
+dynamic = ["version"]
+description = "A pass for every tool call: secure-by-default tools for AI agents (scope, approval, prompt-injection and exfiltration guards, credential injection, audit) with permission checks answered live by the systems they act in."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0.1"]
+keywords = ["ai-agents", "security", "prompt-injection", "authorization", "permissions", "llm", "tools", "mcp", "langchain"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+# RSA and ECDSA signing for the integrations that authenticate with a key:
+# GitHub App, Google service accounts, Snowflake key pair, Salesforce JWT,
+# Microsoft 365 certificates.
+crypto = ["cryptography>=42"]
+# Agent framework adapters: toolpass.strands, toolpass.langchain, toolpass.mcp, ...
+strands = ["strands-agents>=1.57.1"]
+langchain = ["langchain>=1.4", "langgraph>=1.2"]
+mcp = ["mcp>=2.1"]
+openai-agents = ["openai-agents>=0.22"]
+claude-agent-sdk = ["claude-agent-sdk>=0.2.160"]
+google-adk = ["google-adk>=2.10"]
+pydantic-ai = ["pydantic-ai-slim>=2.51"]
+crewai = ["crewai>=1.15"]
+llamaindex = ["llama-index-core>=0.14"]
+
+[project.scripts]
+toolpass = "toolpass.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/roee-hersh/toolpass"
+Documentation = "https://github.com/roee-hersh/toolpass/tree/main/docs"
+Issues = "https://github.com/roee-hersh/toolpass/issues"
+Source = "https://github.com/roee-hersh/toolpass/tree/main/toolpass-py"
+
+[tool.hatch.version]
+path = "src/toolpass/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/toolpass"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/toolpass", "tests", "examples", "README.md", "LICENSE"]
+
+[tool.hatch.envs.hatch-test]
+extra-dependencies = ["pytest-timeout>=2.3", "hypothesis>=6.100", "cryptography>=42"]
+
+[tool.hatch.envs.types]
+extra-dependencies = ["mypy>=1.11", "types-PyYAML"]
+
+[tool.hatch.envs.types.scripts]
+check = "mypy --strict src/toolpass"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 120
+addopts = "-ra"
+markers = [
+  "live: calls real third-party systems (needs credentials)",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+# The framework adapters import their framework, an optional extra.
+module = ["strands.*", "langchain.*", "langchain_core.*", "langgraph.*", "mcp.*", "mcp_types.*", "agents.*", "claude_agent_sdk.*", "google.adk.*", "google.genai.*", "pydantic_ai.*", "crewai.*", "llama_index.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Without the framework installed its base classes are Any; the adapters
+# subclass them on purpose.
+module = ["toolpass.strands", "toolpass.langchain", "toolpass.mcp", "toolpass.openai_agents", "toolpass.claude_agent_sdk", "toolpass.google_adk", "toolpass.pydantic_ai", "toolpass.crewai", "toolpass.llamaindex"]
+disallow_subclassing_any = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = ["toolpass._api"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+check_untyped_defs = true
+
+[tool.ruff]
+line-length = 160
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "BLE", "A", "N", "SIM", "RUF"]
+ignore = ["A001", "A002", "N801", "N814", "RUF001", "RUF002", "RUF003", "RUF012", "SIM105", "SIM108", "N818", "UP007", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["BLE", "B011", "N802", "SIM"]
+# Fail closed: any failure in a check's hook (authorizer, approver, credentials) refuses the call.
+"src/toolpass/_toolkit.py" = ["BLE001"]
+"src/toolpass/_checks.py" = ["BLE001"]
+"src/toolpass/_approval.py" = ["BLE001"]
+"src/toolpass/_walk.py" = ["BLE001"]
+# These tests exercise typing.Optional on purpose.
+"tests/toolkit/**" = ["BLE", "B011", "N802", "SIM", "UP045"]

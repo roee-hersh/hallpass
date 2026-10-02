@@ -1,6 +1,6 @@
 # zendesk
 
-One connection is one Zendesk Support account. hallpass authenticates as an administrator, finds
+One connection is one Zendesk Support account. toolpass authenticates as an administrator, finds
 the team member or end user by email and reads what governs their access: the role (`admin`,
 `agent`, `end-user`), the custom role's configuration on Enterprise plans, or the profile's ticket
 restriction on other plans, plus the groups the agent belongs to. Ticket questions read the ticket
@@ -13,15 +13,15 @@ Either of:
 
 1. An **API token** (`auth_mode: token`, the default) with `username` set to the email of the
    team member the token acts as. Zendesk sends it as HTTP Basic `email/token:<token>`. An API token
-   acts with the full permissions of that user, so create a dedicated administrator for hallpass and
+   acts with the full permissions of that user, so create a dedicated administrator for toolpass and
    keep the token tightly held.
 2. An **OAuth access token** (`auth_mode: oauth`), sent as `Bearer`. The `read` scope covers every
-   endpoint hallpass calls.
+   endpoint toolpass calls.
 
 Use an administrator: an agent credential cannot read tickets outside its own ticket access
 (Zendesk answers 403), and those tickets then answer `resource_not_visible`.
 
-`hallpass probe` reads `GET /api/v2/users/me` and reports the credential's user and role.
+`toolpass probe` reads `GET /api/v2/users/me` and reports the credential's user and role.
 
 ## Connection
 
@@ -29,7 +29,7 @@ Use an administrator: an agent credential cannot read tickets outside its own ti
   - id: zendesk-acme
     integration: zendesk
     url: https://acme.zendesk.com
-    username: hallpass-bot@acme.com
+    username: toolpass-bot@acme.com
     credential: env:ZENDESK_API_TOKEN
     # auth_mode: oauth                 # credential is then an OAuth access token; username unused
 ```
@@ -104,17 +104,17 @@ with `modify_closed_tickets`.
 | `requested` (end users) | the user is its requester or in `collaborator_ids` |
 
 A ticket in no group, asked about by an agent restricted to groups, answers `unsupported`: whether
-unassigned tickets appear depends on views hallpass does not read.
+unassigned tickets appear depends on views toolpass does not read.
 
 ## Decisions
 
 | Code | When |
 |---|---|
 | `allowed` / `denied` | the grants above decide |
-| `unsupported` | a setting the plan does not expose (non-Enterprise agent asked about deletion, macros, views, business rules, organizations); an agent role type or ticket access value hallpass does not know; a ticket in no group for a group-restricted agent |
-| `resource_not_visible` | the ticket, organization, user or the ticket's group answers 404, or 403 because hallpass's own user cannot see it; the user's `custom_role_id` is not among the account's custom roles |
+| `unsupported` | a setting the plan does not expose (non-Enterprise agent asked about deletion, macros, views, business rules, organizations); an agent role type or ticket access value toolpass does not know; a ticket in no group for a group-restricted agent |
+| `resource_not_visible` | the ticket, organization, user or the ticket's group answers 404, or 403 because toolpass's own user cannot see it; the user's `custom_role_id` is not among the account's custom roles |
 | `user_not_found` / `user_ambiguous` | the email search |
-| `credential_rejected` | 401, or 403 on a listing hallpass's user may not read |
+| `credential_rejected` | 401, or 403 on a listing toolpass's user may not read |
 | `invalid_request` | a non-numeric id, a query on the resource, a resource type the action does not take |
 | `upstream_*` | 5xx, 429, timeouts, a `next_page` link pointing off the API |
 
@@ -135,9 +135,9 @@ Written from the OpenAPI description and Zendesk's help-center articles; not run
 account. Marked `UNVERIFIED` in the code:
 
 - Whether `role_type` is `null` or `0` for a plain agent without a custom role.
-- Whether an agent with several organization memberships sees tickets of all of them (hallpass
+- Whether an agent with several organization memberships sees tickets of all of them (toolpass
   compares the default organization only, so such an agent may be denied wrongly).
-- Whether a ticket outside hallpass's own user's ticket access answers 403 or 404 (both answer
+- Whether a ticket outside toolpass's own user's ticket access answers 403 or 404 (both answer
   `resource_not_visible`).
 - Whether a light agent's `ticket_restriction` is `null` when the profile shows all tickets.
 - Whether administrators may change a closed ticket's properties without `modify_closed_tickets`
@@ -145,8 +145,8 @@ account. Marked `UNVERIFIED` in the code:
 
 ## Test
 
-`python -m pytest tests/integrations/zendesk` (in `hallpass-py`) runs a fake Zendesk validated against the Support API
-OpenAPI description when `HALLPASS_SPECS_DIR` holds `zendesk.spec` (`test/specs/fetch.sh`). The
+`python -m pytest tests/integrations/zendesk` (in `toolpass-py`) runs a fake Zendesk validated against the Support API
+OpenAPI description when `TOOLPASS_SPECS_DIR` holds `zendesk.spec` (`test/specs/fetch.sh`). The
 fake has an administrator, three custom-role agents (within-groups, assigned-only, within-organization),
 a light agent, a plain agent restricted to groups and two end users. A property test
 (`test_fuzz_parse_target`) checks that
