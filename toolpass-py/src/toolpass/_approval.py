@@ -81,17 +81,8 @@ def _plain(value: object, depth: int = 0) -> object:
     if isinstance(value, (bytes, bytearray)):
         return {"bytes": bytes(value).hex()}
     kind = f"{type(value).__module__}.{type(value).__qualname__}"
-    # An object is keyed by its state, every field included (repr=False ones too).
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return {"object": kind, "fields": _plain({f.name: getattr(value, f.name, None) for f in dataclasses.fields(value)}, depth + 1)}
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        try:
-            return {"object": kind, "fields": _plain(model_dump(), depth + 1)}
-        except Exception:
-            pass
-    state = getattr(value, "__dict__", None)
-    if isinstance(state, dict):
+    state = _state(value)
+    if state is not None:  # an object is keyed by its state, every field included
         return {"object": kind, "fields": _plain(state, depth + 1)}
     return {"object": kind, "repr": repr(value)}
 
@@ -106,6 +97,23 @@ def visible(text: str) -> str:
         else:
             out.append(f"\\u{ord(ch):04x}" if ord(ch) <= 0xFFFF else f"\\U{ord(ch):08x}")
     return "".join(out)
+
+
+def _state(value: object) -> dict[str, object] | None:
+    """An object's field values, raw: every dataclass field (repr=False ones
+    too), every pydantic field (exclude=True ones too, and extras, never
+    through a serializer), or its ``__dict__``. None when it has none."""
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {f.name: getattr(value, f.name, None) for f in dataclasses.fields(value)}
+    model_fields = getattr(type(value), "model_fields", None)
+    if isinstance(model_fields, Mapping):
+        state = {name: getattr(value, name, None) for name in model_fields}
+        extra = getattr(value, "__pydantic_extra__", None)
+        if isinstance(extra, Mapping):
+            state.update({f"extra:{k}": v for k, v in extra.items()})
+        return state
+    attrs = getattr(value, "__dict__", None)
+    return dict(attrs) if isinstance(attrs, dict) else None
 
 
 def _shown(value: object, depth: int = 0) -> object:
@@ -124,6 +132,9 @@ def _shown(value: object, depth: int = 0) -> object:
         return shown
     if isinstance(value, (list, tuple)):
         return [_shown(v, depth + 1) for v in value]
+    state = _state(value)
+    if state is not None:  # the field values the key binds, not a repr that may hide some
+        return {type(value).__name__: _shown(state, depth + 1)}
     return repr(value)
 
 

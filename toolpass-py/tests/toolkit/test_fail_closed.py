@@ -720,3 +720,28 @@ def test_permission_check_placeholders_are_checked_at_declaration():
 
     with pytest.raises(ValueError):
         permission_check(Never(), "jira", "DELETE_ISSUES", "issue:{}")
+
+
+def test_pydantic_excluded_fields_bind_the_approval_and_are_shown(dana):
+    pydantic = pytest.importorskip("pydantic")
+
+    class Transfer(pydantic.BaseModel):
+        to: str
+        amount: int = pydantic.Field(exclude=True)
+        memo: str = pydantic.Field(default="", repr=False)
+
+    queue = ApprovalQueue()
+    tools = Toolkit(audit=None, approver=queue)
+
+    @tools.secured_tool(effect="write", approve=True)
+    def pay(t: Transfer) -> str:
+        return f"paid {t.amount}"
+
+    with pytest.raises(ApprovalPending) as e:
+        pay(Transfer(to="bob", amount=5, memo="rent"))
+    text = e.value.request.describe()
+    assert "5" in text and "rent" in text  # excluded and repr=False fields are shown
+    queue.approve(e.value.request.id)
+    with pytest.raises(ApprovalPending):
+        pay(Transfer(to="bob", amount=999999, memo="rent"))  # a different amount needs its own approval
+    assert pay(Transfer(to="bob", amount=5, memo="rent")) == "paid 5"
