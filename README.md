@@ -1,6 +1,6 @@
 # toolpass
 
-[![ci](https://github.com/roee-hersh/hallpass/actions/workflows/ci.yaml/badge.svg)](https://github.com/roee-hersh/hallpass/actions/workflows/ci.yaml)
+[![ci](https://github.com/roee-hersh/toolpass/actions/workflows/ci.yaml/badge.svg)](https://github.com/roee-hersh/toolpass/actions/workflows/ci.yaml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **A pass for every tool call. Secure-by-default tools for AI agents, under any agent framework.**
@@ -36,7 +36,7 @@ own loop puts its own `@tool` on top. No adapter needed.
 
 ## What it stops
 
-From [`toolpass/examples/ops_agent.py`](toolpass/examples/ops_agent.py), a scripted ops-agent session
+From [`toolpass-py/examples/ops_agent.py`](toolpass-py/examples/ops_agent.py), a scripted ops-agent session
 you can run with no network and no model:
 
 ```text
@@ -51,7 +51,7 @@ you can run with no network and no model:
           -> waiting for approval: this session has read private data and seen untrusted content,
              and this tool sends data out
 [refused] open_gitops_pr(acme/gitops-prod) as dana
-          -> not_authorized: hallpass deny ... dana@example.com is not an admin
+          -> not_authorized: toolpass deny ... dana@example.com is not an admin
 [waiting] open_gitops_pr(acme/gitops-prod) as admin
           -> waiting for approval (this tool always needs approval)
 [ran]     open_gitops_pr(acme/gitops-prod) retried, after a person approved it
@@ -75,7 +75,7 @@ you can run with no network and no model:
 
 Every call goes through these in a fixed order, and anything that cannot be evaluated (an
 authorizer that is down, a validator that crashes) refuses the call. The
-[toolpass README](toolpass/README.md) has the order, the API and the limits.
+[package README](toolpass-py/README.md) has the order, the API and the limits.
 
 ## The exfiltration guard
 
@@ -100,16 +100,15 @@ Dana asks it to delete an issue she couldn't delete herself, the agent can. tool
 system that owns the resource, live, whether *Dana* may do it:
 
 ```python
-from hallpass import Hallpass
-from toolpass import hallpass_check
+from toolpass import Toolpass, permission_check
 
-hp = Hallpass.from_config("hallpass.yaml")   # or Hallpass.remote(url, key) to keep lookup credentials out of the agent
+tp = Toolpass.from_config("toolpass.yaml")   # or Toolpass.remote(url, key) to keep lookup credentials out of the agent
 
-@tools.tool(effect="destructive", authorize=hallpass_check(hp, "jira-main", "DELETE_ISSUES", "issue:{key}"))
+@tools.tool(effect="destructive", authorize=permission_check(tp, "jira-main", "DELETE_ISSUES", "issue:{key}"))
 def delete_issue(key: str) -> str: ...
 ```
 
-That engine is [hallpass](docs/permission-checks.md), in this repository. It answers for
+The [permission engine](docs/permission-checks.md) answers for
 Kubernetes, Argo CD, GitHub, GitLab, Bitbucket, Jira, Confluence, Slack, Datadog, PagerDuty, AWS,
 Google Workspace, Google Cloud, Microsoft 365, Databricks, Salesforce, Snowflake, Vault, Azure,
 Linear and Zendesk, with no policy language and no synced copy of anyone's permissions. It also
@@ -117,13 +116,16 @@ runs on its own, in-process or as a server, with adapters for nine agent framewo
 
 ## Install
 
-toolpass is alpha and not on PyPI yet. Install it from this repository:
-
 ```sh
-pip install "toolpass[permissions] @ git+https://github.com/roee-hersh/hallpass#subdirectory=toolpass"
+pip install toolpass
 ```
 
-`[permissions]` adds the hallpass engine; leave it out if you don't need permission checks.
+Python 3.10 or later; the core depends only on PyYAML. Until the first `toolpass` release reaches
+PyPI, install from this repository:
+
+```sh
+pip install "toolpass @ git+https://github.com/roee-hersh/toolpass#subdirectory=toolpass-py"
+```
 
 ## Honest limits
 
@@ -137,11 +139,10 @@ pip install "toolpass[permissions] @ git+https://github.com/roee-hersh/hallpass#
 
 | Path | What |
 |---|---|
-| [`toolpass/`](toolpass/README.md) | The toolkit: `Toolkit`, `Session`, `ApprovalQueue`, the checks |
-| [`hallpass-py/`](hallpass-py/README.md) | The permission engine, in-process or as a server; on PyPI as `hallpass` |
-| [`hallpass-ts/`](hallpass-ts/README.md) | The Node client for a hallpass server |
-| [`docs/`](docs/README.md) | Permission-check docs: quickstart, architecture, deploy, integrations |
-| [`deploy/`](deploy/helm/hallpass/README.md) | The Helm chart for a hallpass server |
+| [`toolpass-py/`](toolpass-py/README.md) | The Python package: the secure-tools toolkit and the permission engine, in-process or as a server |
+| [`toolpass-ts/`](toolpass-ts/README.md) | The Node client for a toolpass server |
+| [`docs/`](docs/README.md) | Permission checks: quickstart, architecture, deploy, integrations |
+| [`deploy/`](deploy/helm/toolpass/README.md) | The Helm chart for a toolpass server |
 
 ## License
 

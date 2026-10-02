@@ -1,6 +1,6 @@
 # github
 
-hallpass authenticates as a GitHub App installed in one organization, maps the user's email to a
+toolpass authenticates as a GitHub App installed in one organization, maps the user's email to a
 GitHub login (through the organization's SAML identities, a login template or a mapping file), and
 asks the REST API for that login's effective permission: the collaborator permission endpoint for
 repositories (the highest of direct, team, organization and enterprise grants, as GitHub computes
@@ -27,7 +27,7 @@ The App's JWT is signed RS256 with `iat` 60 s in the past and `exp` 9 minutes ah
 installation token it buys lasts one hour and is cached and refreshed five minutes before expiry. A
 401 from the API drops the token and retries the call once with a fresh one.
 
-Signing with the App's private key needs `cryptography`: install `hallpass[crypto]` (the Docker image has it).
+Signing with the App's private key needs `cryptography`: install `toolpass[crypto]` (the Docker image has it).
 
 ## Connection
 
@@ -42,7 +42,7 @@ Signing with the App's private key needs `cryptography`: install `hallpass[crypt
     # identity_mode: saml                 # saml (default), template or map_file
     # login_template: "{local}"           # template mode
     # email_domains: acme.com,acme.io     # template mode, required
-    # user_map_file: /etc/hallpass/github-users.txt   # map_file mode
+    # user_map_file: /etc/toolpass/github-users.txt   # map_file mode
 ```
 
 | Key | Meaning |
@@ -64,7 +64,7 @@ Signing with the App's private key needs `cryptography`: install `hallpass[crypt
   `scimIdentity.username` equals the email (case-insensitively) count. One such identity with a
   linked GitHub user is the login; several linked to different accounts is `user_ambiguous`. If no
   returned identity carries the email (some identity providers only send the address as the SAML
-  `nameId`), hallpass lists every external identity (100 per page, at most 50 pages or 5,000
+  `nameId`), toolpass lists every external identity (100 per page, at most 50 pages or 5,000
   identities), builds an address-to-login map from the three fields above, caches it for 10 minutes
   and looks the email up case-insensitively. An address that appears on identities linked to
   different accounts is recorded as a conflict and answers `user_ambiguous`. When the listing
@@ -123,7 +123,7 @@ role is unknown too.
 ### Branch rules and protection
 
 For `repo.push` and `pr.merge` on `repo:<owner>/<name>@<branch>`, after the permission allows,
-hallpass reads two records and never reads either for a deny:
+toolpass reads two records and never reads either for a deny:
 
 1. `GET /repos/{owner}/{repo}/rules/branches/{branch}`, the ruleset rules that apply. The endpoint
    answers `200 []` for a branch without rules, so a 404 means the repository or branch is not
@@ -239,10 +239,10 @@ Each item is marked `# UNVERIFIED:` in the code.
 
 ## Test
 
-`python -m pytest tests/integrations/github` (in `hallpass-py`) runs against a fake GitHub (REST and GraphQL) that
+`python -m pytest tests/integrations/github` (in `toolpass-py`) runs against a fake GitHub (REST and GraphQL) that
 verifies the App JWT signature and claims with the test key, hands out installation tokens, and
 serves the repository, permission, membership, rules, branch protection and SAML identity endpoints.
-With `HALLPASS_SPECS_DIR` set (see `test/specs/fetch.sh`) every REST request is validated against
+With `TOOLPASS_SPECS_DIR` set (see `test/specs/fetch.sh`) every REST request is validated against
 GitHub's OpenAPI description. Against a real organization: install the App, configure a connection,
-run `hallpass probe` and one check for a user you know has `push` on some repository, then one for
+run `toolpass probe` and one check for a user you know has `push` on some repository, then one for
 `repo.push` on `repo:<org>/<name>@<protected branch>` to confirm the protection record shapes.

@@ -1,6 +1,6 @@
 # azure
 
-One connection is one Entra tenant's Azure Resource Manager. hallpass authenticates as an app
+One connection is one Entra tenant's Azure Resource Manager. toolpass authenticates as an app
 registration, resolves the user to an Entra object id, lists the role assignments and deny
 assignments that apply to that user at a scope (inherited from parent scopes and through group
 membership, which Azure's `assignedTo()` filter expands), reads the role definitions and evaluates
@@ -13,13 +13,13 @@ An **app registration** with a **client secret** (`credential`). Grant it:
 
 - the built-in **Reader** role (`*/read`, which includes `Microsoft.Authorization/roleAssignments/read`,
   `roleDefinitions/read` and `denyAssignments/read`) at the root management group, or at every
-  subscription hallpass is asked about. Assignments at a scope the app cannot read answer
+  subscription toolpass is asked about. Assignments at a scope the app cannot read answer
   `resource_not_visible`.
 - for identity, either a `microsoft365_connection` (the microsoft365 integration's app resolves the
   user; nothing else is needed on this app), or the Graph application permission `User.Read.All`
-  on this app so hallpass can look the user up itself.
+  on this app so toolpass can look the user up itself.
 
-`hallpass probe` fetches an ARM token, lists the built-in role definitions and, without a
+`toolpass probe` fetches an ARM token, lists the built-in role definitions and, without a
 `microsoft365_connection`, lists one Graph user.
 
 ## Connection
@@ -62,7 +62,7 @@ memberships itself through `$filter=assignedTo('{objectId}')`.
 | `resource:/subscriptions/.../providers/<ns>/<type>/<name>[/<type>/<name>]` | the full ARM id |
 
 Every segment is limited to letters, digits, `-`, `_`, `.`, `(` and `)`, with no dot-only
-segments, so the scope hallpass builds is the one ARM spells in assignment scopes and needs no
+segments, so the scope toolpass builds is the one ARM spells in assignment scopes and needs no
 escaping in the URL.
 
 ## Actions
@@ -94,7 +94,7 @@ Wildcards are not accepted in `raw:` or `data:`; role definitions carry them.
 2. When something grants (or might), `GET {scope}/providers/Microsoft.Authorization/denyAssignments?$filter=assignedTo('{oid}')`.
    Each deny whose scope is the target or an ancestor (honouring `doNotApplyToChildScopes`) and
    whose `actions` minus `notActions` (or data equivalents) match the operation **denies**, unless
-   `excludePrincipals` names the user. A deny with a `condition`, one excluding a **group** (hallpass
+   `excludePrincipals` names the user. A deny with a `condition`, one excluding a **group** (toolpass
    does not read group membership), or one whose scope cannot be placed, makes the answer
    `unsupported` instead of allowed.
 3. Otherwise the first unconditional grant **allows**, naming the role, whether it was assigned
@@ -136,16 +136,16 @@ it matters:
 
 - Operation matching is case-insensitive and `*` spans slashes, as the documentation's examples
   imply.
-- Whether `assignedTo()` on deny assignments already applies `excludePrincipals` (hallpass applies
+- Whether `assignedTo()` on deny assignments already applies `excludePrincipals` (toolpass applies
   them again, which is safe).
 - The tenant-root listing `GET /providers/Microsoft.Authorization/roleDefinitions` used by the probe
   is not in the specification file, though `az role definition list` uses it.
 
 ## Test
 
-`python -m pytest tests/integrations/azure` (in `hallpass-py`) runs a fake token endpoint, Graph and ARM validated
+`python -m pytest tests/integrations/azure` (in `toolpass-py`) runs a fake token endpoint, Graph and ARM validated
 against `authorization-RoleAssignmentsCalls`, `authorization-RoleDefinitionsCalls`,
-`authorization-DenyAssignmentCalls` and the Graph description when `HALLPASS_SPECS_DIR` holds them
+`authorization-DenyAssignmentCalls` and the Graph description when `TOOLPASS_SPECS_DIR` holds them
 (`test/specs/fetch.sh`). The fake has Reader, Contributor, Owner, a data-plane role and a custom
 role, assignments direct and through a group at management-group, subscription, resource-group and
 resource scopes, a conditional assignment, and deny assignments with exclusions, conditions and

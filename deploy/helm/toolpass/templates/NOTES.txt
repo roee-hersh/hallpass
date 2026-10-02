@@ -1,0 +1,26 @@
+toolpass is starting.
+
+  Service:  {{ include "toolpass.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+  Config:   ConfigMap {{ include "toolpass.configMapName" . }}, key toolpass.yaml
+  API key:  Secret {{ include "toolpass.apiKeySecretName" . }}, key {{ .Values.apiKey.key }}
+{{- if .Values.apiKey.value }}
+
+  apiKey.value is set, so the key sits in this release's stored values. For
+  anything beyond a try-out, create a Secret yourself and set
+  apiKey.existingSecret instead.
+{{- end }}
+
+Ask it a question from your machine:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "toolpass.fullname" . }} 8080:{{ .Values.service.port }} &
+  export TOOLPASS_API_KEY="$(kubectl -n {{ .Release.Namespace }} get secret {{ include "toolpass.apiKeySecretName" . }} -o jsonpath="{.data['{{ .Values.apiKey.key }}']}" | base64 -d)"
+  curl -X POST localhost:8080/check \
+    -H "Authorization: Bearer $TOOLPASS_API_KEY" -H 'Content-Type: application/json' \
+    -d '{"user":"dana@example.com","connection":"demo","action":"thing.write","resource":"thing:1"}'
+
+Check the pod: helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+Then replace the demo connection in `config.connections` with your own systems.
+Every credential in the config is an env:NAME or file:/path reference; add the
+variable under extraEnv or mount the Secret under extraVolumes. See
+deploy/helm/toolpass/README.md.

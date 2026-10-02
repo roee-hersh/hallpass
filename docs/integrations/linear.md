@@ -1,6 +1,6 @@
 # linear
 
-One connection is one Linear workspace. hallpass authenticates with a personal API key or an OAuth
+One connection is one Linear workspace. toolpass authenticates with a personal API key or an OAuth
 token, finds the user by email through the GraphQL API and reads the workspace role (owner, admin,
 member, guest, app), whether the account is active, and the teams the user belongs to and owns.
 Team, issue and project questions read the object and apply Linear's visibility rules: members see
@@ -20,7 +20,7 @@ Either of:
 Use an administrator's credential: a member credential cannot read private teams it has not
 joined, and their issues and projects then answer `resource_not_visible`.
 
-`hallpass probe` reads `viewer` and `organization` and reports the credential's user and workspace.
+`toolpass probe` reads `viewer` and `organization` and reports the credential's user and workspace.
 
 ## Connection
 
@@ -120,8 +120,8 @@ workspace. Marked `UNVERIFIED` in the code:
 
 ## Test
 
-`python -m pytest tests/integrations/linear` (in `hallpass-py`) runs a fake GraphQL endpoint validated against Linear's
-schema when `HALLPASS_SPECS_DIR` holds `linear.spec` (`test/specs/fetch.sh`): every field, argument
+`python -m pytest tests/integrations/linear` (in `toolpass-py`) runs a fake GraphQL endpoint validated against Linear's
+schema when `TOOLPASS_SPECS_DIR` holds `linear.spec` (`test/specs/fetch.sh`): every field, argument
 and variable of each query is checked against the SDL. The fake has an owner, an administrator, a
 team owner, members with and without teams, a guest, an app user and suspended and invited users
 over public, private, restricted and archived teams. A property test (`test_fuzz_parse_target`)

@@ -1,19 +1,19 @@
 # confluence
 
-For pages and blog posts hallpass asks Confluence directly:
+For pages and blog posts toolpass asks Confluence directly:
 `POST /wiki/rest/api/content/{id}/permission/check` with the user's `accountId` and the operation
 (`read`, `update`, `delete`), which weighs site access, space permissions and content restrictions.
-Confluence has no such call for space-level operations, so for `space:` resources hallpass reads the
+Confluence has no such call for space-level operations, so for `space:` resources toolpass reads the
 space's permission list (`GET /wiki/api/v2/spaces/{id}/permissions`) and, when a group holds the
 permission, the user's groups (`GET /wiki/rest/api/user/memberof`), and matches them itself. A
 space administrator (`administer`/`space`) holds every space operation, and a grant to a principal
-hallpass cannot resolve (anonymous, a role, licensed users) answers unknown rather than deny.
+toolpass cannot resolve (anonymous, a role, licensed users) answers unknown rather than deny.
 Confluence's user search has no email field, so the email is resolved through a **jira** connection
 on the same Atlassian site. Nothing in Confluence is changed. Cloud only; Data Center is out of scope.
 
 ## Credential
 
-Checking another user's permissions needs **Confluence Administrator** on hallpass's account (a plain
+Checking another user's permissions needs **Confluence Administrator** on toolpass's account (a plain
 user gets HTTP 403 on the permission check, answered as `credential_rejected`). The space permission
 and group reads need view access to the space and Browse users. As with jira, prefer a dedicated
 service account with a scoped API token (`auth_mode: scoped_token`) limited to read scopes such as
@@ -32,7 +32,7 @@ The auth modes are the jira integration's: `basic` (`username` + API token again
     integration: confluence
     url: https://acme.atlassian.net
     auth_mode: basic
-    username: hallpass@acme.com
+    username: toolpass@acme.com
     credential: env:CONFLUENCE_TOKEN
     identity_connection: jira-acme        # jira connection on the same site
 ```
@@ -97,14 +97,14 @@ An action on the wrong resource type is `invalid_request`.
 | no match, and the operation or `administer`/`space` is held by a principal that is neither `user` nor `group` (`anonymous`, `role`, ...) | unknown (`unsupported`, "<type>-based space permissions not evaluated") |
 | 404 on the content check, or `spaces?keys=` returns nothing | unknown (`resource_not_visible`) |
 | `spaces?keys=` returns only keys that differ from the request (a case variant), or several spaces with the exact key | unknown (`unsupported`): the space key must match exactly |
-| 403 | unknown (`credential_rejected`): hallpass's account is not a Confluence Administrator, or cannot read the space or groups |
+| 403 | unknown (`credential_rejected`): toolpass's account is not a Confluence Administrator, or cannot read the space or groups |
 | no `identity_connection` | unknown (`unsupported`) |
 | 401, 429, 5xx, timeout | unknown (`credential_rejected`, `upstream_rate_limited`, `upstream_error`, `upstream_timeout`) |
 
 ## Probe
 
 `GET /wiki/rest/api/user/current` proves the credential. The probe warns when `identity_connection`
-is unset and always reminds that checking other users needs Confluence Administrator, which hallpass
+is unset and always reminds that checking other users needs Confluence Administrator, which toolpass
 cannot verify without a resource.
 
 ## What it cannot see
@@ -124,28 +124,28 @@ cannot verify without a resource.
   (`export`/`space`), `page.restrict` (`restrict_content`/`space`) and `space.admin`
   (`administer`/`space`). A different key would make those actions deny for everyone; compare
   against a live site's `GET /wiki/api/v2/spaces/{id}/permissions` before relying on them.
-- The shape of `_links.next` in the two paginated calls. hallpass accepts a v1 link relative to
+- The shape of `_links.next` in the two paginated calls. toolpass accepts a v1 link relative to
   `{url}/wiki`, a v2 link relative to the site and an absolute URL, and normalises all three to the
   connection's base.
-- The meaning of a non-empty `errors` list on `permission/check`: hallpass takes it as "the check
+- The meaning of a non-empty `errors` list on `permission/check`: toolpass takes it as "the check
   could not be evaluated" (unknown subject, operation not applicable). If a live site also fills it
   on an ordinary refusal, those refusals answer unknown instead of deny, never the other way round.
-- How the v2 permission list represents anonymous and licensed-user (site-wide) grants: hallpass
+- How the v2 permission list represents anonymous and licensed-user (site-wide) grants: toolpass
   treats every principal type other than `user` and `group` as unresolved, whatever its name.
 - That `administer`/`space` implies every other space operation is Confluence's documented rule for
   space admins; whether the v2 list already materialises the implied grants is not verified (if it
   does, the rule is redundant, not wrong).
-- Whether `spaces?keys=` matches keys case-insensitively; hallpass insists on an exact match either
+- Whether `spaces?keys=` matches keys case-insensitively; toolpass insists on an exact match either
   way.
 - The auth-mode behaviours listed as unverified in the jira integration apply here as well.
 
 ## Test
 
 Unit tests run against one fake Atlassian site that serves both Jira's user search and Confluence's
-content, space and group APIs (`hallpass-py/tests/integrations/confluence/test_confluence.py`). They wire a real
+content, space and group APIs (`toolpass-py/tests/integrations/confluence/test_confluence.py`). They wire a real
 jira connection as `identity_connection`, and cover content checks (including a `false` with an
 `errors` list), space evaluation through user and group principals with pagination, the space
 administrator rule, anonymous and role principals, exact space-key matching, the missing-identity
-case, every action, the injected failure modes and the probe. With `HALLPASS_SPECS_DIR` set, every
+case, every action, the injected failure modes and the probe. With `TOOLPASS_SPECS_DIR` set, every
 request is validated against the Confluence v1/v2 and Jira API descriptions. No live-site test exists
 yet.

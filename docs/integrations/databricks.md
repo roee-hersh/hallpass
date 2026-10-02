@@ -1,6 +1,6 @@
 # databricks
 
-One connection is one Databricks workspace. hallpass authenticates as a service principal (OAuth
+One connection is one Databricks workspace. toolpass authenticates as a service principal (OAuth
 M2M) or with a personal access token, finds the user through the workspace SCIM API (email, active
 flag, groups), and asks the workspace itself. Unity Catalog securables (catalogs, schemas, tables,
 volumes, functions, models) are answered from the effective-permissions endpoint, which folds in
@@ -23,9 +23,9 @@ workspace admins hold `CAN_MANAGE` on every object. Nothing is written.
    Making the service principal a **workspace admin** answers every workspace-object question, and
    granting it `MANAGE` (or `BROWSE` plus ownership through a group) on the catalogs it should answer
    for covers Unity Catalog. A workspace admin can also change the workspace, so keep the secret
-   tightly held. Whatever hallpass cannot read answers `unknown`, never `deny`.
+   tightly held. Whatever toolpass cannot read answers `unknown`, never `deny`.
 
-`hallpass probe` reads the credential's own SCIM record and says whether it is a workspace admin.
+`toolpass probe` reads the credential's own SCIM record and says whether it is a workspace admin.
 
 ## Connection
 
@@ -119,9 +119,9 @@ through a group, stands for every privilege on the securable itself, but not for
 would refuse the query.
 
 Unity Catalog shows a principal without `MANAGE`, ownership or metastore admin only its own grants,
-with a 200 rather than a 403. A listing in which no principal but hallpass itself appears is
+with a 200 rather than a 403. A listing in which no principal but toolpass itself appears is
 therefore not a deny: it is answered `resource_not_visible` ("either nobody else holds any, or
-hallpass may only see its own"). hallpass learns its own principal name from `GET
+toolpass may only see its own"). toolpass learns its own principal name from `GET
 /api/2.0/preview/scim/v2/Me`, once every ten minutes.
 
 Workspace objects: the ACL is `GET /api/2.0/permissions/{type}/{id}`. A level implies the weaker ones
@@ -134,13 +134,13 @@ names the one owner and is matched exactly (workspace admins included). `CAN_MON
 
 ## Decisions
 
-| Situation | hallpass answers |
+| Situation | toolpass answers |
 |---|---|
 | the needed privileges are all held (directly, through a group, or inherited from a parent securable), or covered by an `ALL_PRIVILEGES` grant at the right level | allow, saying where they come from |
 | privileges missing but the user (or a group of theirs) owns the securable | allow ("owns ...") |
 | privileges missing, the owner, but `USE_CATALOG` / `USE_SCHEMA` on a parent missing | deny ("owns ... but lacks ... on its parents") |
-| privileges missing, not the owner, and the listing names a principal other than hallpass | deny, naming the missing privileges |
-| privileges missing, not the owner, and the listing names nobody but hallpass | unknown (`resource_not_visible`) |
+| privileges missing, not the owner, and the listing names a principal other than toolpass | deny, naming the missing privileges |
+| privileges missing, not the owner, and the listing names nobody but toolpass | unknown (`resource_not_visible`) |
 | a held level equals or implies the needed one | allow |
 | no matching level, user is a workspace admin, `admins_manage_all: true` | allow ("workspace admin") |
 | no matching level otherwise | deny, naming the levels held |
@@ -149,7 +149,7 @@ names the one owner and is matched exactly (workspace admins included). `CAN_MON
 | several records | unknown (`user_ambiguous`) |
 | record without `active` | unknown (`unsupported`) |
 | securable or object answers 404 | unknown (`resource_not_visible`) |
-| 403 `PERMISSION_DENIED` (hallpass lacks `CAN_MANAGE`, `MANAGE` or ownership) | unknown (`credential_rejected`) |
+| 403 `PERMISSION_DENIED` (toolpass lacks `CAN_MANAGE`, `MANAGE` or ownership) | unknown (`credential_rejected`) |
 | 401 after one retry with a fresh token, token endpoint refuses the client | unknown (`credential_rejected`) |
 | the SCIM search endpoint itself answers 404 (wrong `url`, an account console URL) | unknown (`upstream_error`) |
 | 400 `INVALID_PARAMETER_VALUE` | unknown (`invalid_request`) |
@@ -159,7 +159,7 @@ Only `error_code` is read from an error body; messages are never copied into a d
 
 ## Probe
 
-`hallpass probe` calls `GET /api/2.0/preview/scim/v2/Me`, names the principal and whether it is a
+`toolpass probe` calls `GET /api/2.0/preview/scim/v2/Me`, names the principal and whether it is a
 workspace admin, and warns either way: a non-admin cannot read most ACLs, an admin can change the
 workspace.
 
@@ -195,5 +195,5 @@ and that `IS_OWNER` on jobs, pipelines and warehouses implies `CAN_MANAGE`.
 Unit tests run against one fake server that serves the token endpoint (checking the Basic header and
 the form), SCIM, effective permissions (paginated), securable metadata and the Permissions API.
 Databricks publishes no OpenAPI description to validate requests against, so the fake checks paths
-and parameters itself. There is no live test; after configuring, run `hallpass probe` and one check
+and parameters itself. There is no live test; after configuring, run `toolpass probe` and one check
 for a user you know is allowed.

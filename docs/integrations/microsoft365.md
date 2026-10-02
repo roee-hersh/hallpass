@@ -1,11 +1,11 @@
 # microsoft365
 
-hallpass asks Microsoft Graph as an app registration with read-only application permissions. It
+toolpass asks Microsoft Graph as an app registration with read-only application permissions. It
 resolves the caller's email to an Entra user (by UPN, then `mail`, then proxy address), then reads
 the facts the action needs: transitive group membership (`checkMemberGroups`), directory roles,
 team and channel membership, and the effective permissions on a drive item. Exchange delegation
 (Send As, Send on Behalf, Full Access, calendar sharing) has no Graph API and is always unknown.
-hallpass never performs an action and nothing is persisted.
+toolpass never performs an action and nothing is persisted.
 
 ## Credential
 
@@ -23,10 +23,10 @@ admin consent. All of them are read-only:
 | `RoleManagement.Read.Directory` (optional) | `role.member` | without it `role.member` is unknown (`credential_rejected`) |
 
 Prefer a certificate: put the public certificate PEM in `certificate_file` and the private key PEM
-in `credential`. hallpass then signs a PS256 client assertion with the `x5t#S256` thumbprint. With a
+in `credential`. toolpass then signs a PS256 client assertion with the `x5t#S256` thumbprint. With a
 client secret, `credential` is the secret itself.
 
-A certificate credential signs with `cryptography`: install `hallpass[crypto]` (the Docker image has it).
+A certificate credential signs with `cryptography`: install `toolpass[crypto]` (the Docker image has it).
 
 ## Connection
 
@@ -36,7 +36,7 @@ A certificate credential signs with `cryptography`: install `hallpass[crypto]` (
     tenant_id: contoso.onmicrosoft.com          # or the tenant GUID
     client_id: 22222222-2222-2222-2222-222222222222
     credential: file:/secrets/m365-key.pem      # private key PEM, or the client secret
-    certificate_file: /etc/hallpass/m365-cert.pem   # optional; present = certificate auth
+    certificate_file: /etc/toolpass/m365-cert.pem   # optional; present = certificate auth
     authority_url: https://login.microsoftonline.com  # optional
     url: https://graph.microsoft.com                  # optional
 ```
@@ -46,7 +46,7 @@ A certificate credential signs with `cryptography`: install `hallpass[crypto]` (
 | `tenant_id` | Entra tenant, GUID or verified domain |
 | `client_id` | application (client) id |
 | `credential` | client secret, or the PEM private key when `certificate_file` is set (`env:`/`file:`) |
-| `certificate_file` | path to the public certificate PEM; when set hallpass authenticates with a certificate assertion |
+| `certificate_file` | path to the public certificate PEM; when set toolpass authenticates with a certificate assertion |
 | `authority_url` | token authority, default `https://login.microsoftonline.com` |
 | `url` | Graph endpoint, default `https://graph.microsoft.com` |
 
@@ -105,7 +105,7 @@ File rules, in order:
 5. a grant that reaches the caller (directly, through a group they are in, or through a usable
    organization link) with a role string other than `read`/`write`/`owner` (a custom SharePoint
    permission level such as `sp.full control`) is unknown when it did not already allow: the custom
-   level may grant more than hallpass can see;
+   level may grant more than toolpass can see;
 6. a sharing link whose `scope` is not `organization`, `anonymous` or `users` is unknown;
 7. `file.share` with only read/write access is unknown ("sharing rights depend on site settings");
 8. permissions granted to SharePoint `siteGroup` principals cannot be expanded through Graph: if
@@ -114,7 +114,7 @@ File rules, in order:
 
 ## Decisions
 
-| Situation | hallpass answers |
+| Situation | toolpass answers |
 |---|---|
 | membership / role / permission found | allow |
 | user is not a member, has no role, no grant matches and no siteGroup, anonymous link, custom role or unmodelled link scope exists | deny |
@@ -138,7 +138,7 @@ Graph error messages are never copied into a decision text; only the error code 
 
 ## Probe
 
-`hallpass probe` fetches a token, reads `GET /organization` and reports the tenant, then reads the
+`toolpass probe` fetches a token, reads `GET /organization` and reports the tenant, then reads the
 app's own service principal and `appRoleAssignments` to list granted application permissions. It
 warns for any permission that allows writes (`.ReadWrite.`, `Mail.Send`, ...), for required
 permissions that are missing, for the breadth of `Files.Read.All`, and when `Member.Read.Hidden` is
@@ -151,7 +151,7 @@ absent. If it cannot read its own assignments it warns "could not verify permiss
   on a grant that reaches the caller makes the answer unknown rather than deny, because the level
   may include the right in question.
 - **Sensitivity labels**, **Conditional Access**, **information barriers** and **Data Loss
-  Prevention** can block an action hallpass allowed.
+  Prevention** can block an action toolpass allowed.
 - **Team and channel moderation settings** are only detected, not evaluated; a member of a
   moderated channel is unknown for `channel.message.post`.
 - **Exchange delegation** (Send As, Send on Behalf, Full Access, calendar folder permissions) has

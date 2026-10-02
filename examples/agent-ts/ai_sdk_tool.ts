@@ -1,5 +1,5 @@
 /**
- * Vercel AI SDK tools that check with hallpass before they act.
+ * Vercel AI SDK tools that check with toolpass before they act.
  *
  * The tools are defined once. The application enters `session` for the
  * request before it runs the model, so the acting user is never chosen by
@@ -16,9 +16,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
 import { tool } from "ai";
 import { z } from "zod";
-import { Hallpass, current, guarded } from "../../hallpass-ts/src/index.ts"; // in your project: from "hallpass-client"
+import { Toolpass, current, guarded } from "../../toolpass-ts/src/index.ts"; // in your project: from "toolpass-client"
 
-export const hp = new Hallpass();
+export const tp = new Toolpass();
 
 /** Who the agent acts for, set by the application for each request. */
 export interface Session {
@@ -33,23 +33,23 @@ const groups = () => current(session).groups ?? [];
 export const checkPermission = tool({
   description:
     "Ask whether the current user may perform an action in a system. " +
-    "connection is a hallpass connection id (e.g. jira-main), action one of its " +
+    "connection is a toolpass connection id (e.g. jira-main), action one of its " +
     "actions (e.g. DELETE_ISSUES), resource the target (e.g. issue:PAY-123). " +
     "Only 'allow' permits the action; 'unknown' is a deny.",
   inputSchema: z.object({ connection: z.string(), action: z.string(), resource: z.string() }),
   execute: async ({ connection, action, resource }) => {
-    const d = await hp.check(user(), connection, action, resource, groups());
+    const d = await tp.check(user(), connection, action, resource, groups());
     return { decision: d.decision, reason: d.reason, allowed: d.allowed };
   },
 });
 
 // The refusal is returned as the tool's output rather than thrown, so the
-// model reads hallpass's reason whatever the SDK does with a thrown error.
+// model reads toolpass's reason whatever the SDK does with a thrown error.
 export const writeThing = tool({
   description:
     "Write content to a thing in the demo system. Refused unless the current user holds thing.write on it.",
   inputSchema: z.object({ thing_id: z.string(), content: z.string() }),
-  execute: guarded(hp, "demo", "thing.write", "thing:{thing_id}", {
+  execute: guarded(tp, "demo", "thing.write", "thing:{thing_id}", {
     user,
     groups,
     deny: (e) => `refused: ${e.message}`,

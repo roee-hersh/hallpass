@@ -5,7 +5,7 @@
 > marked `# UNVERIFIED:` in the code. Confirm it in a Developer Edition org (setup, probe, one
 > allow and one deny per action family) before using its answers for anything.
 
-hallpass authenticates as an External Client App acting as a read-only integration user, maps the
+toolpass authenticates as an External Client App acting as a read-only integration user, maps the
 caller's email to a `User` row, and asks Salesforce's own permission objects with SOQL: `UserRecordAccess`
 for one record, `ObjectPermissions` and `FieldPermissions` across the user's profile and permission
 sets (ORed, the way Salesforce combines them), `PermissionSet` for system permissions and
@@ -18,8 +18,8 @@ Since Spring '26 new connected apps cannot be created; use an **External Client 
 External Client App Manager):
 
 1. Create the app with OAuth enabled and the **JWT bearer flow** on. Upload the certificate whose
-   private key hallpass will sign with (`openssl req -x509 -newkey rsa:2048 -nodes -keyout
-   hallpass.key -out hallpass.crt -days 365`), set the OAuth scope to **`api`** (Manage user data via
+   private key toolpass will sign with (`openssl req -x509 -newkey rsa:2048 -nodes -keyout
+   toolpass.key -out toolpass.crt -days 365`), set the OAuth scope to **`api`** (Manage user data via
    APIs), and set the policy to **Admin approved users are pre-authorized**.
 2. Create the integration user on the free **Salesforce Integration** licence with the **Minimum
    Access – API Only Integrations** profile. Give it a permission set with **API Enabled**, **View
@@ -43,7 +43,7 @@ now + 3 minutes. The access token it buys carries no expiry, so it is reused for
 minted again 5 minutes before that. A 401 from the API drops the token and retries the call once with
 a fresh one.
 
-The JWT bearer flow signs with `cryptography`: install `hallpass[crypto]` (the Docker image has it).
+The JWT bearer flow signs with `cryptography`: install `toolpass[crypto]` (the Docker image has it).
 
 ## Connection
 
@@ -52,8 +52,8 @@ The JWT bearer flow signs with `cryptography`: install `hallpass[crypto]` (the D
     integration: salesforce
     url: https://acme.my.salesforce.com
     client_id: 3MVG9...                       # the app's consumer key
-    username: hallpass@acme.com               # the integration user (JWT subject)
-    credential: file:/secrets/salesforce-hallpass.pem
+    username: toolpass@acme.com               # the integration user (JWT subject)
+    credential: file:/secrets/salesforce-toolpass.pem
     api_version: v66.0
     # auth_flow: jwt_bearer                   # or client_credentials (consumer secret in credential)
     # audience: https://login.salesforce.com  # https://test.salesforce.com for sandboxes
@@ -163,7 +163,7 @@ If the org answers `INVALID_FIELD` to the filtered sub-select (an API version wi
 still produce a deny, but a grant found through it is `unsupported` ("could not exclude
 session-based or expired assignments"), never allow.
 
-Before an object, field or system answer, hallpass reads the user's permission set group
+Before an object, field or system answer, toolpass reads the user's permission set group
 assignments (`SELECT PermissionSetGroupId FROM PermissionSetAssignment WHERE AssigneeId = '<uid>' AND
 PermissionSetGroupId != null`) and, when there are any, `SELECT Id, DeveloperName, Status FROM
 PermissionSetGroup WHERE Id IN (...)`. A group whose `Status` is not `Updated` makes the answer
@@ -200,7 +200,7 @@ Every query counts against the org's daily API request allocation (a Developer E
 about 15,000 per day, unverified). After the token is cached a check costs two to six requests:
 the identity lookup (one or two queries), the frozen check, the permission set group check where
 relevant, the question itself, and for an object with no permission rows its describe (cached one
-hour). hallpass's decision cache is the mitigation; the probe reports the remaining
+hour). toolpass's decision cache is the mitigation; the probe reports the remaining
 allocation and warns under 10%.
 
 ## Probe
@@ -231,18 +231,18 @@ All Data caveat.
 
 Each item is marked `# UNVERIFIED:` in the code and must be confirmed in a Developer Edition org.
 
-- The JWT bearer assertion must expire within 3 minutes; hallpass sets `exp` = now + 3 minutes with
+- The JWT bearer assertion must expire within 3 minutes; toolpass sets `exp` = now + 3 minutes with
   no `iat` or `jti`.
 - The client credentials flow requires a Run As user on the External Client App and the token then
   acts as that user.
-- The token response's `instance_url` names the REST host; hallpass uses it (https only, no query or
+- The token response's `instance_url` names the REST host; toolpass uses it (https only, no query or
   userinfo) as the API base and falls back to `url`. That every org's REST host is `url`'s host or
   under `.salesforce.com`, `.force.com` or `.salesforce.mil` (any other host is ignored, logged at
   debug, and `url` is used) is unverified, as is that the token response carries no `expires_in`
   (hence `token_ttl`).
-- An expired or revoked session is a 401 with `errorCode: INVALID_SESSION_ID`; hallpass re-mints on
+- An expired or revoked session is a 401 with `errorCode: INVALID_SESSION_ID`; toolpass re-mints on
   any 401, once.
-- `nextRecordsUrl` is a `/services/data/...` path on the same instance; hallpass follows at most
+- `nextRecordsUrl` is a `/services/data/...` path on the same instance; toolpass follows at most
   five pages.
 - The `PermissionSet` describe lists one boolean `PermissionsXxx` field per system and app
   permission, and those same names are the queryable filter fields.
@@ -259,7 +259,7 @@ Each item is marked `# UNVERIFIED:` in the code and must be confirmed in a Devel
   without an expiry, and an org whose API version lacks `ExpirationDate` answers `INVALID_FIELD`
   (which triggers the unfiltered retry described under Actions).
 - `GET /sobjects/<name>/describe` answers 404 `NOT_FOUND` for an object that does not exist, and
-  also for one the integration user cannot see at all; hallpass treats both as unknown. Whether an
+  also for one the integration user cannot see at all; toolpass treats both as unknown. Whether an
   object the integration user has no permission on describes as 200 is unverified.
 - `PermissionSet.NamespacePrefix` is null for local permission sets and filterable through the
   `PermissionSet` relationship of `PermissionSetAssignment`; a developer name never contains two
@@ -288,14 +288,14 @@ Confirmed: new connected apps cannot be created since Spring '26 (External Clien
 
 ## Test
 
-`python -m pytest tests/integrations/salesforce` (in `hallpass-py`) runs against a fake Salesforce that verifies the JWT
+`python -m pytest tests/integrations/salesforce` (in `toolpass-py`) runs against a fake Salesforce that verifies the JWT
 bearer assertion (RS256 signature, `iss`/`sub`/`aud`, `exp` within 3 minutes) and the client
 credentials form, hands out tokens with an `instance_url`, revokes them on demand, and answers
 `/query` by parsing the SOQL `FROM` object and its literals (so a test address `o'neil@example.com`
 must arrive as `o\'neil@example.com`), `/limits`, the `PermissionSet` describe and per-object describes (404 for unknown objects). The fake
 insists that every assignment sub-select carries the activation/expiry filter with a current
 timestamp, hides session-based and expired grants behind it, honours `LIMIT`, and matches permission
-sets on name and namespace. Against a real org: complete the setup above in a Developer Edition org, configure a connection, run `hallpass
+sets on name and namespace. Against a real org: complete the setup above in a Developer Edition org, configure a connection, run `toolpass
 probe`, then one allow and one deny for each of `record.read`, `object.read`, `field.read`,
 `system.permission`, `permset.assigned` and `user.active`, and compare with what the user actually
 sees in the UI. Work through the Unverified list while doing so.

@@ -1,6 +1,6 @@
 /**
  * Drives the MCP server through an MCP client over an in-memory transport,
- * against a fake hallpass.
+ * against a fake toolpass.
  */
 
 import assert from "node:assert/strict";
@@ -8,16 +8,16 @@ import { after, before, beforeEach, describe, test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { API_KEY, DANA, FakeHallpass } from "./fake_hallpass.ts";
+import { API_KEY, DANA, FakeToolpass } from "./fake_toolpass.ts";
 
-let fake: FakeHallpass;
+let fake: FakeToolpass;
 let client: Client;
 
 before(async () => {
-  fake = await FakeHallpass.start();
+  fake = await FakeToolpass.start();
   // The example reads its configuration from the environment at import.
-  process.env.HALLPASS_URL = fake.url;
-  process.env.HALLPASS_API_KEY = API_KEY;
+  process.env.TOOLPASS_URL = fake.url;
+  process.env.TOOLPASS_API_KEY = API_KEY;
   process.env.AGENT_USER = DANA;
   process.env.AGENT_GROUPS = "platform-team, sre";
   const { server } = await import("./mcp_server.ts");

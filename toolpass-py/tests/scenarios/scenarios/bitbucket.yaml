@@ -1,0 +1,167 @@
+# The bitbucket integration against static fakes of Bitbucket Cloud
+# (/2.0, workspace acme) and Bitbucket Data Center (/dc/rest/...).
+# Cloud: member lookup by email, effective repository permissions, owners,
+# branch restrictions, project permissions with a group grant, failures.
+# Data Center: user search, the user's groups, repository, project and
+# global grants, ref restrictions.
+connections:
+  - id: bb-cloud
+    integration: bitbucket
+    url: "{{url}}"
+    ca_file: "{{ca_file}}"
+    workspace: acme
+    credential: env:BB_TOKEN
+  - id: bb-dc
+    integration: bitbucket
+    edition: datacenter
+    url: "{{url}}/dc"
+    ca_file: "{{ca_file}}"
+    credential: env:BB_TOKEN
+env:
+  BB_TOKEN: bb-parity-token
+upstream:
+  # -- Cloud --
+  - method: GET
+    path: /2.0/workspaces/acme/members
+    json:
+      values:
+        - {user: {account_id: "557058:dana", uuid: "{11111111-1111-1111-1111-111111111111}", nickname: dana, email: dana@example.com}}
+        - {user: {account_id: "557058:bob", uuid: "{22222222-2222-2222-2222-222222222222}", nickname: bobby, email: Bob@Example.com}}
+        - {user: {account_id: "557058:ola", uuid: "{33333333-3333-3333-3333-333333333333}", nickname: ola, email: ola@example.com}}
+        - {user: {account_id: "557058:left", uuid: "{55555555-5555-5555-5555-555555555555}", nickname: left, email: left@example.com}}
+        - {user: {account_id: "557058:cr", nickname: "", email: cr@example.com}}
+        - {user: {account_id: "1", email: dup@example.com}}
+        - {user: {account_id: "2", email: DUP@example.com}}
+        - {user: {account_id: "", email: noid@example.com}}
+  - {method: GET, path: "/2.0/workspaces/acme/members/557058:dana", json: {user: {account_id: "557058:dana"}}}
+  - method: GET
+    path: /2.0/workspaces/acme/permissions
+    json:
+      values:
+        - {permission: owner, user: {account_id: "557058:ola"}}
+        - {permission: member, user: {account_id: "557058:dana"}}
+  - {method: GET, path: /2.0/repositories/acme/api, json: {slug: api, is_private: true, project: {key: APP}}}
+  - {method: GET, path: /2.0/repositories/acme/site, json: {slug: site, is_private: false, project: {key: APP}}}
+  - method: GET
+    path: /2.0/workspaces/acme/permissions/repositories/api
+    json:
+      values:
+        - {permission: write, user: {account_id: "557058:dana"}}
+        - {permission: read, user: {account_id: "557058:bob"}}
+  - {method: GET, path: /2.0/workspaces/acme/permissions/repositories/site, json: {values: []}}
+  - method: GET
+    path: /2.0/repositories/acme/api/branch-restrictions
+    json:
+      values:
+        - {kind: push, branch_match_kind: glob, pattern: main, users: [{account_id: "557058:ola"}], groups: []}
+        - {kind: push, branch_match_kind: glob, pattern: "release/*", users: [], groups: [{slug: developers}]}
+        - {kind: push, branch_match_kind: branching_model, branch_type: production, users: [], groups: []}
+        - {kind: restrict_merges, branch_match_kind: glob, pattern: main, users: [{account_id: "557058:dana"}], groups: []}
+  - {method: GET, path: /2.0/workspaces/acme/projects/APP, json: {key: APP, is_private: true}}
+  - {method: GET, path: "/2.0/workspaces/acme/projects/APP/permissions-config/users/557058:dana", json: {permission: write}}
+  - {method: GET, path: "/2.0/workspaces/acme/projects/APP/permissions-config/users/557058:cr", json: {permission: create-repo}}
+  - {method: GET, path: /2.0/workspaces/acme/projects/APP/permissions-config/groups, json: {values: [{permission: admin, group: {slug: developers}}]}}
+  - {method: GET, path: /2.0/workspaces/acme/projects/PUB, json: {key: PUB, is_private: false}}
+  - {method: GET, path: /2.0/workspaces/acme/projects/PUB/permissions-config/groups, json: {values: []}}
+  - {method: GET, path: /2.0/repositories/acme/locked, status: 403, json: {type: error}}
+  - {method: GET, path: /2.0/repositories/acme/broken, status: 500, json: {type: error}}
+  - {method: GET, path: /2.0/repositories/acme/busy, status: 429, headers: {Retry-After: "60"}, json: {type: error}}
+  - {method: GET, path: /2.0/repositories/acme/garbled, body: "[1,"}
+  # -- Data Center --
+  - method: GET
+    path: /dc/rest/api/latest/users
+    json:
+      isLastPage: true
+      values:
+        - {name: dana, slug: dana, emailAddress: dana@example.com, active: true}
+        - {name: bob, slug: bob, emailAddress: Bob@Example.com, active: true}
+        - {name: root, slug: root, emailAddress: root@example.com, active: true}
+        - {name: eve, slug: eve, emailAddress: eve@example.com, active: true}
+        - {name: "off", slug: "off", emailAddress: off@example.com, active: false}
+        - {name: danaher, slug: danaher, emailAddress: dana@example.com.au, active: true}
+  - {method: GET, path: /dc/rest/api/latest/admin/users/more-members, json: {isLastPage: true, values: [{name: developers}]}}
+  - {method: GET, path: /dc/rest/api/latest/admin/permissions/users, json: {isLastPage: true, values: [{permission: ADMIN, user: {name: root}}]}}
+  - {method: GET, path: /dc/rest/api/latest/admin/permissions/groups, json: {isLastPage: true, values: []}}
+  - {method: GET, path: /dc/rest/api/latest/projects/APP, json: {key: APP, public: false}}
+  - {method: GET, path: /dc/rest/api/latest/projects/APP/permissions/*, json: {permitted: false}}
+  - {method: GET, path: /dc/rest/api/latest/projects/APP/permissions/users, json: {isLastPage: true, values: []}}
+  - {method: GET, path: /dc/rest/api/latest/projects/APP/permissions/groups, json: {isLastPage: true, values: [{permission: PROJECT_READ, group: {name: developers}}]}}
+  - {method: GET, path: /dc/rest/api/latest/projects/APP/repos/api, json: {slug: api, public: false}}
+  - method: GET
+    path: /dc/rest/api/latest/projects/APP/repos/api/permissions/users
+    json:
+      isLastPage: true
+      values:
+        - {permission: REPO_READ, user: {name: bob}}
+        - {permission: REPO_WRITE, user: {name: dana}}
+        - {permission: REPO_ADMIN, user: {name: danaher}}
+  - {method: GET, path: /dc/rest/api/latest/projects/APP/repos/api/permissions/groups, json: {isLastPage: true, values: []}}
+  - method: GET
+    path: /dc/rest/branch-permissions/2.0/projects/APP/repos/api/restrictions
+    json:
+      isLastPage: true
+      values:
+        - {id: 1, type: read-only, matcher: {id: refs/heads/main, displayId: main, type: {id: BRANCH}}, users: [{name: root}], groups: []}
+        - {id: 2, type: pull-request-only, matcher: {id: "release/*", displayId: "release/*", type: {id: PATTERN}}, users: [], groups: [developers]}
+  - {method: GET, path: /dc/rest/branch-permissions/2.0/projects/APP/restrictions, json: {isLastPage: true, values: []}}
+  - {method: GET, path: /dc/rest/api/latest/projects/APP/repos/locked, status: 403, json: {errors: []}}
+checks:
+  # -- Cloud --
+  - {user: dana@example.com, action: repo.push, resource: "repo:api", connection: bb-cloud, want: allowed, reason: "allowed: dana has write (needs write) on repository api (effective permission)"}
+  - {user: bob@example.com, action: repo.read, resource: "repo:api", connection: bb-cloud, want: allowed, reason: "allowed: bobby has read (needs read) on repository api (effective permission)"}
+  - {user: bob@example.com, action: repo.push, resource: "repo:api", connection: bb-cloud, want: denied, reason: "denied: bobby has read, needs write on repository api (effective permission)"}
+  - {user: dana@example.com, action: repo.admin, resource: "repo:api", connection: bb-cloud, want: denied, reason: "denied: dana has write, needs admin on repository api (effective permission)"}
+  - {user: ola@example.com, action: repo.admin, resource: "repo:api", connection: bb-cloud, want: allowed, reason: "allowed: ola has admin (needs admin) on repository api (workspace owner)"}
+  - {user: left@example.com, action: repo.read, resource: "repo:site", connection: bb-cloud, want: allowed, reason: "allowed: left has read (needs read) on repository site (public repository)"}
+  - {user: dana@example.com, action: repo.push, resource: "repo:api@main", connection: bb-cloud, want: denied, reason: "denied: a push restriction on \"main\" stops dana from push to main (only the listed users may)"}
+  - {user: ola@example.com, action: repo.push, resource: "repo:api@main", connection: bb-cloud, want: unsupported, reason: "unsupported: push restrictions on api use branching model production, which toolpass cannot evaluate for branch main"}
+  - {user: dana@example.com, action: repo.push, resource: "repo:api@release/1.2", connection: bb-cloud, want: unsupported, reason: "unsupported: a push restriction on \"release/*\" matches release/1.2 and exempts group developers, whose members Bitbucket Cloud does not tell toolpass; dana is not exempted by name"}
+  - {user: dana@example.com, action: pr.merge, resource: "repo:api@main", connection: bb-cloud, want: allowed, reason: "allowed: dana has write (needs write) on repository api@main (effective permission) and no restrict_merges restriction stops main"}
+  - {user: ola@example.com, action: pr.merge, resource: "repo:api@main", connection: bb-cloud, want: denied, reason: "denied: a restrict_merges restriction on \"main\" stops ola from merge into main (only the listed users may)"}
+  - {user: nobody@example.com, action: repo.read, resource: "repo:api", connection: bb-cloud, want: user_not_found, reason: "user_not_found: no member of workspace acme has email nobody@example.com"}
+  - {user: dup@example.com, action: repo.read, resource: "repo:api", connection: bb-cloud, want: user_ambiguous, reason: "user_ambiguous: 2 members of workspace acme have email dup@example.com"}
+  - {user: noid@example.com, action: repo.read, resource: "repo:api", connection: bb-cloud, want: upstream_error, reason: "upstream_error: the member record for noid@example.com carries no account id"}
+  - {user: dana@example.com, action: workspace.member, resource: workspace, connection: bb-cloud, want: allowed, reason: "allowed: dana is a member of workspace acme"}
+  - {user: left@example.com, action: workspace.member, resource: workspace, connection: bb-cloud, want: denied, reason: "denied: left is not a member of workspace acme"}
+  - {user: ola@example.com, action: workspace.admin, resource: workspace, connection: bb-cloud, want: allowed, reason: "allowed: ola is an owner of workspace acme"}
+  - {user: dana@example.com, action: workspace.admin, resource: workspace, connection: bb-cloud, want: denied, reason: "denied: dana is not an owner of workspace acme"}
+  - {user: dana@example.com, action: project.write, resource: "project:APP", connection: bb-cloud, want: allowed, reason: "allowed: dana has write on project APP directly (needs write)"}
+  - {user: cr@example.com, action: repo.create, resource: "project:APP", connection: bb-cloud, want: allowed, reason: "allowed: cr@example.com has create-repo on project APP directly (needs create-repo)"}
+  - {user: dana@example.com, action: repo.create, resource: "project:APP", connection: bb-cloud, want: unsupported, reason: "unsupported: group developers grants create-repo on project APP and Bitbucket Cloud does not tell toolpass who is in it; dana has write directly"}
+  - {user: left@example.com, action: project.read, resource: "project:PUB", connection: bb-cloud, want: allowed, reason: "allowed: project PUB is public, so left can read it"}
+  - {user: left@example.com, action: project.write, resource: "project:PUB", connection: bb-cloud, want: denied, reason: "denied: left has none on project PUB, needs write"}
+  - {user: dana@example.com, action: project.read, resource: "project:NOPE", connection: bb-cloud, want: resource_not_visible, reason: "resource_not_visible: project NOPE does not exist in workspace acme or toolpass cannot see it"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:hidden", connection: bb-cloud, want: resource_not_visible, reason: "resource_not_visible: repository hidden does not exist in workspace acme or toolpass cannot see it"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:locked", connection: bb-cloud, want: credential_rejected, reason: "credential_rejected: Bitbucket refused to read repository locked (HTTP 403): toolpass's token lacks the permission that read needs"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:broken", connection: bb-cloud, want: upstream_error, reason: "upstream_error: upstream returned HTTP 500"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:busy", connection: bb-cloud, want: upstream_rate_limited, reason: "upstream_rate_limited: rate limited by the upstream system"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:garbled", connection: bb-cloud, want: upstream_error, reason: "upstream_error: Bitbucket returned an unreadable response"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:APP/api", connection: bb-cloud, want: invalid_request, reason: "invalid_request: repo: id must be <slug>[@branch]; the workspace is the connection's"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:api@main", connection: bb-cloud, want: invalid_request, reason: "invalid_request: action repo.read does not take a branch"}
+  - {user: dana@example.com, action: repo.push, resource: "repo:api@a..b", connection: bb-cloud, want: invalid_request, reason: "invalid_request: branch \"a..b\" is not a valid branch name"}
+  - {user: dana@example.com, action: workspace.member, resource: "workspace:acme", connection: bb-cloud, want: invalid_request, reason: "invalid_request: workspace takes no id: the connection names the workspace"}
+  - {user: 'a"b@example.com', action: repo.read, resource: "repo:api", connection: bb-cloud, want: invalid_request, reason: "invalid_request: user email \"a\\\"b@example.com\" is not an address"}
+  - {user: dana@example.com, action: repo.delete, resource: "repo:api", connection: bb-cloud, want: unknown_action, reason: "unknown_action: integration bitbucket has no action \"repo.delete\""}
+  # -- Data Center --
+  - {user: bob@example.com, action: repo.read, resource: "repo:APP/api", connection: bb-dc, want: allowed, reason: "allowed: bob has read (needs read) on repository APP/api: REPO_READ granted directly"}
+  - {user: bob@example.com, action: repo.push, resource: "repo:APP/api", connection: bb-dc, want: denied, reason: "denied: bob has read, needs write on repository APP/api"}
+  - {user: dana@example.com, action: repo.push, resource: "repo:APP/api", connection: bb-dc, want: allowed, reason: "allowed: dana has write (needs write) on repository APP/api: REPO_WRITE granted directly"}
+  - {user: eve@example.com, action: repo.read, resource: "repo:APP/api", connection: bb-dc, want: allowed, reason: "allowed: eve has read (needs read) on repository APP/api: PROJECT_READ via group developers on project APP"}
+  - {user: root@example.com, action: repo.admin, resource: "repo:APP/api", connection: bb-dc, want: allowed, reason: "allowed: root has admin (needs admin) on repository APP/api: ADMIN granted directly globally on project APP"}
+  - {user: dana@example.com, action: repo.admin, resource: "repo:APP/api", connection: bb-dc, want: denied, reason: "denied: dana has write, needs admin on repository APP/api"}
+  - {user: dana@example.com, action: repo.push, resource: "repo:APP/api@main", connection: bb-dc, want: denied, reason: "denied: a read-only restriction on main stops dana from push to main"}
+  - {user: root@example.com, action: repo.push, resource: "repo:APP/api@main", connection: bb-dc, want: allowed, reason: "allowed: root has admin (needs write) on repository APP/api@main: ADMIN granted directly globally on project APP, and no branch permission stops main"}
+  - {user: dana@example.com, action: repo.push, resource: "repo:APP/api@release/2.0", connection: bb-dc, want: allowed, reason: "allowed: dana has write (needs write) on repository APP/api@release/2.0: REPO_WRITE granted directly, and no branch permission stops release/2.0"}
+  - {user: root@example.com, action: repo.push, resource: "repo:APP/api@release/2.0", connection: bb-dc, want: allowed, reason: "allowed: root has admin (needs write) on repository APP/api@release/2.0: ADMIN granted directly globally on project APP, and no branch permission stops release/2.0"}
+  - {user: off@example.com, action: repo.read, resource: "repo:APP/api", connection: bb-dc, want: denied, reason: "denied: off is deactivated"}
+  - {user: nobody@example.com, action: repo.read, resource: "repo:APP/api", connection: bb-dc, want: user_not_found, reason: "user_not_found: no user has email nobody@example.com"}
+  - {user: dana@example.com, action: project.read, resource: "project:APP", connection: bb-dc, want: allowed, reason: "allowed: dana has read (needs read) on project APP: PROJECT_READ via group developers"}
+  - {user: dana@example.com, action: project.write, resource: "project:APP", connection: bb-dc, want: denied, reason: "denied: dana has read, needs write on project APP"}
+  - {user: root@example.com, action: repo.create, resource: "project:APP", connection: bb-dc, want: allowed, reason: "allowed: root has admin (needs admin) on project APP: ADMIN granted directly globally"}
+  - {user: dana@example.com, action: workspace.member, resource: workspace, connection: bb-dc, want: allowed, reason: "allowed: dana is an active user of the instance"}
+  - {user: root@example.com, action: workspace.admin, resource: workspace, connection: bb-dc, want: allowed, reason: "allowed: root is a global administrator (ADMIN granted directly)"}
+  - {user: dana@example.com, action: workspace.admin, resource: workspace, connection: bb-dc, want: denied, reason: "denied: dana holds no global administrator permission"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:APP/nope", connection: bb-dc, want: resource_not_visible, reason: "resource_not_visible: repository APP/nope does not exist or toolpass cannot see it"}
+  - {user: dana@example.com, action: project.read, resource: "project:NOPE", connection: bb-dc, want: resource_not_visible, reason: "resource_not_visible: project NOPE does not exist or toolpass cannot see it"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:APP/locked", connection: bb-dc, want: credential_rejected, reason: "credential_rejected: Bitbucket refused to read repository APP/locked (HTTP 403): toolpass's token lacks the permission that read needs"}
+  - {user: dana@example.com, action: repo.read, resource: "repo:api", connection: bb-dc, want: invalid_request, reason: "invalid_request: repo: id must be <PROJECT>/<slug>[@branch] on Data Center"}

@@ -1,31 +1,31 @@
 # Python API reference
 
-The `hallpass` package (`pip install hallpass`, Python 3.10 or later), and the Node client
-`hallpass-client` at the end. For how to use them in an agent, see the
+The `toolpass` package (`pip install toolpass`, Python 3.10 or later), and the Node client
+`toolpass-client` at the end. For how to use them in an agent, see the
 [agent tools guide](../guides/agent-tools.md).
 
-## Hallpass
+## Toolpass
 
 Three ways to make one, all with the same methods:
 
 ```python
-import hallpass
-from hallpass import Hallpass
+import toolpass
+from toolpass import Toolpass
 
-hp = Hallpass.from_config("hallpass.yaml")                   # the engine in this process
-hp = Hallpass(connections=[{"id": "demo", "integration": "fake", "users": "dana@example.com"}])
-hp = Hallpass.remote("https://hallpass.internal", api_key)   # a hallpass server
+tp = Toolpass.from_config("toolpass.yaml")                   # the engine in this process
+tp = Toolpass(connections=[{"id": "demo", "integration": "fake", "users": "dana@example.com"}])
+tp = Toolpass.remote("https://toolpass.internal", api_key)   # a toolpass server
 ```
 
 | Constructor | What it is |
 |---|---|
-| `Hallpass.from_config(path, *, logger=None)` | The engine in this process, from a hallpass YAML file. The file's `decision_cache_seconds`, `identity_cache_seconds` and `decision_log` apply; `listen` and `api_key` are not needed |
-| `Hallpass(connections, *, decision_cache_seconds=30, identity_cache_seconds=900, decision_log="none", logger=None)` | The same, with the connections in code: mappings with exactly the keys of the file ([configuration](configuration.md#connections-in-code)) |
-| `Hallpass.remote(url=None, api_key=None, timeout=10.0)` | A client for a running hallpass server. `url` defaults to `$HALLPASS_URL` or `http://localhost:8080`, `api_key` to `$HALLPASS_API_KEY`, and a missing key raises `ValueError` |
+| `Toolpass.from_config(path, *, logger=None)` | The engine in this process, from a toolpass YAML file. The file's `decision_cache_seconds`, `identity_cache_seconds` and `decision_log` apply; `listen` and `api_key` are not needed |
+| `Toolpass(connections, *, decision_cache_seconds=30, identity_cache_seconds=900, decision_log="none", logger=None)` | The same, with the connections in code: mappings with exactly the keys of the file ([configuration](configuration.md#connections-in-code)) |
+| `Toolpass.remote(url=None, api_key=None, timeout=10.0)` | A client for a running toolpass server. `url` defaults to `$TOOLPASS_URL` or `http://localhost:8080`, `api_key` to `$TOOLPASS_API_KEY`, and a missing key raises `ValueError` |
 
-`logger` takes a `logging.Logger` for the engine's own log lines (the stdlib `hallpass` logger by
-default). `Hallpass()` with no connections raises `TypeError`. Build one per process and share it:
-each in-process `Hallpass` keeps its own caches.
+`logger` takes a `logging.Logger` for the engine's own log lines (the stdlib `toolpass` logger by
+default). `Toolpass()` with no connections raises `TypeError`. Build one per process and share it:
+each in-process `Toolpass` keeps its own caches.
 
 For `remote`, the URL must be `https://`, or `http://` on `localhost` or a loopback address,
 because the API key travels in a header. Redirects are never followed. `timeout` is the seconds to
@@ -35,17 +35,17 @@ wait for the connection and then for each read; the server waits up to the conne
 ## check, allowed, require
 
 ```python
-d = hp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
+d = tp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123")
 d.decision  # "allow", "deny" or "unknown"
 d.reason    # "denied: Dana Levi does not hold DELETE_ISSUES on issue PAY-123"
 d.code      # "denied"
 d.allowed   # True only for allow
 d.status    # the HTTP status the server used (in-process: the one it would use); 0 if none arrived
 
-hp.allowed(...)          # True or False
-hp.require(...)          # returns the decision on allow, raises PermissionDenied otherwise
-await hp.acheck(...)     # check for async code; the lookup runs in a worker thread
-await hp.arequire(...)   # require for async code
+tp.allowed(...)          # True or False
+tp.require(...)          # returns the decision on allow, raises PermissionDenied otherwise
+await tp.acheck(...)     # check for async code; the lookup runs in a worker thread
+await tp.arequire(...)   # require for async code
 ```
 
 All five take `(user, connection, action, resource, groups=None, *, fresh=False)`:
@@ -53,7 +53,7 @@ All five take `(user, connection, action, resource, groups=None, *, fresh=False)
 | Argument | Meaning |
 |---|---|
 | `groups` | A list of the user's groups, for systems that grant by group, such as Kubernetes |
-| `fresh` | Skip hallpass's caches and ask the system now ([fresh checks](api.md#fresh-checks)) |
+| `fresh` | Skip toolpass's caches and ask the system now ([fresh checks](api.md#fresh-checks)) |
 
 `check` never raises for a failed lookup: every failure is an `unknown` decision. With `remote`, a
 connection error, a timeout, a redirect, a body that is not a decision, or an `allow` with a
@@ -64,29 +64,29 @@ In-process only:
 
 | | |
 |---|---|
-| `hp.probe()` | Verify every connection's credential: a list of `(connection id, ok, summary or error)` |
-| `hp.connections()` | The configured connection ids |
-| `hp.local` | `True` when the engine runs in this process (also available on `remote`) |
+| `tp.probe()` | Verify every connection's credential: a list of `(connection id, ok, summary or error)` |
+| `tp.connections()` | The configured connection ids |
+| `tp.local` | `True` when the engine runs in this process (also available on `remote`) |
 
 ## guarded
 
-Wraps a function so its body runs only after hallpass said `allow`.
+Wraps a function so its body runs only after toolpass said `allow`.
 
 ```python
-from hallpass import guarded
+from toolpass import guarded
 
-@guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
+@guarded(tp, "jira-main", "DELETE_ISSUES", "issue:{key}", user=current_user, fresh=True)
 def delete_issue(key: str) -> str: ...
 ```
 
 | Parameter | Meaning |
 |---|---|
-| `connection`, `action` | The connection id and one of its actions (`hallpass catalog <integration>` lists them) |
+| `connection`, `action` | The connection id and one of its actions (`toolpass catalog <integration>` lists them) |
 | `resource` | A format string over the call's arguments, such as `"issue:{key}"`; a parameter left at its default is available too. A call that cannot fill it checks nothing and runs nothing |
 | `user` | A string, a zero-argument callable, or a `ContextVar` your application sets. Read on every call, never from the arguments |
 | `groups` | The user's groups, from the same kinds of source; it must yield a list |
 | `deny` | Optional. Called with the `PermissionDenied`; its return value is returned instead of raising |
-| `fresh` | Optional. Every check skips hallpass's caches |
+| `fresh` | Optional. Every check skips toolpass's caches |
 
 What it guarantees:
 
@@ -98,44 +98,44 @@ What it guarantees:
   function whose one parameter is a dict gets all the arguments in it (the Claude Agent SDK handler
   shape, `async def f(args: dict)`). `async def` works, and the check runs in a worker thread.
 
-`hallpass.current(source)` resolves a user or groups source the same way, for code outside a
+`toolpass.current(source)` resolves a user or groups source the same way, for code outside a
 guarded function. A `ContextVar` with nothing set raises a `RuntimeError` that names it.
 
 ## Framework adapters
 
-Each adapter module needs its extra (`pip install "hallpass[<extra>]"`) and exports `Rule` along
-with the adapter. All take `hp`, then `rules`: a mapping of tool name to
+Each adapter module needs its extra (`pip install "toolpass[<extra>]"`) and exports `Rule` along
+with the adapter. All take `tp`, then `rules`: a mapping of tool name to
 `Rule(connection, action, resource, fresh=False)`, a `(connection, action, resource)` tuple, or
 `None` (the tool runs unchecked even under `strict`); and `strict=False` (refuse tools that have
 no rule).
 
 | Module (extra) | Adapter | User from | Other arguments |
 |---|---|---|---|
-| `hallpass.strands` (`strands`) | `HallpassAuthorization`, an intervention handler | `invocation_state[user_key]` | `user_key="user_id"`, `groups_key=None` |
-| `hallpass.langchain` (`langchain`) | `HallpassMiddleware`, agent middleware; `.tool_node(tools)` for LangGraph | the runtime context's `user_key`, else `user` | `user`, `groups`, `user_key="user_id"`, `groups_key=None` |
-| `hallpass.mcp` (`mcp`) | `guard(server, hp, rules, ...)`, server middleware | the access token's `user_claim`, else `user` | `user`, `groups`, `user_claim="email"`, `groups_claim=None` |
-| `hallpass.openai_agents` (`openai-agents`) | `HallpassGuardrails`; `.apply(agent)`, `.protect(tools)` | the run context's `user_key`, unless `user` | `user_key="user_id"`, `groups_key=None`, `user`, `groups` |
-| `hallpass.claude_agent_sdk` (`claude-agent-sdk`) | `HallpassHooks`; `.apply(options)`, `.hooks()`, `.can_use_tool` | `user` (required) | `groups`, `timeout=60` |
-| `hallpass.google_adk` (`google-adk`) | `HallpassCallbacks`; `.apply(agent)`, `.plugin()` | the session's `user_id`, unless `user` | `user`, `groups` |
-| `hallpass.crewai` (`crewai`) | `HallpassHooks`; `.register()`, `.unregister()`, or `with` | `user`, else the kickoff input `user_input` | `user`, `groups`, `user_input="user_id"`, `groups_input=None` |
-| `hallpass.pydantic_ai` (`pydantic-ai`) | `HallpassAuthorization`, a capability; `HallpassToolset(toolset, hp, rules)` | `user`, else `deps.user` | `user`, `groups` (else `deps.groups`) |
-| `hallpass.llamaindex` (`llamaindex`) | `HallpassAuthorization`; `.wrap(tools)` | `user` (required) | `groups` |
+| `toolpass.strands` (`strands`) | `ToolpassAuthorization`, an intervention handler | `invocation_state[user_key]` | `user_key="user_id"`, `groups_key=None` |
+| `toolpass.langchain` (`langchain`) | `ToolpassMiddleware`, agent middleware; `.tool_node(tools)` for LangGraph | the runtime context's `user_key`, else `user` | `user`, `groups`, `user_key="user_id"`, `groups_key=None` |
+| `toolpass.mcp` (`mcp`) | `guard(server, tp, rules, ...)`, server middleware | the access token's `user_claim`, else `user` | `user`, `groups`, `user_claim="email"`, `groups_claim=None` |
+| `toolpass.openai_agents` (`openai-agents`) | `ToolpassGuardrails`; `.apply(agent)`, `.protect(tools)` | the run context's `user_key`, unless `user` | `user_key="user_id"`, `groups_key=None`, `user`, `groups` |
+| `toolpass.claude_agent_sdk` (`claude-agent-sdk`) | `ToolpassHooks`; `.apply(options)`, `.hooks()`, `.can_use_tool` | `user` (required) | `groups`, `timeout=60` |
+| `toolpass.google_adk` (`google-adk`) | `ToolpassCallbacks`; `.apply(agent)`, `.plugin()` | the session's `user_id`, unless `user` | `user`, `groups` |
+| `toolpass.crewai` (`crewai`) | `ToolpassHooks`; `.register()`, `.unregister()`, or `with` | `user`, else the kickoff input `user_input` | `user`, `groups`, `user_input="user_id"`, `groups_input=None` |
+| `toolpass.pydantic_ai` (`pydantic-ai`) | `ToolpassAuthorization`, a capability; `ToolpassToolset(toolset, tp, rules)` | `user`, else `deps.user` | `user`, `groups` (else `deps.groups`) |
+| `toolpass.llamaindex` (`llamaindex`) | `ToolpassAuthorization`; `.wrap(tools)` | `user` (required) | `groups` |
 
 Each refuses a call when the user is missing, when a resource field is not exactly the string or
 integer the tool declares, when a field is missing with no default, on any answer but `allow`,
-and on any error inside the check; the model reads `hallpass refused this call: <reason>` as the
+and on any error inside the check; the model reads `toolpass refused this call: <reason>` as the
 tool's result. The adapter's docstring says how its framework delivers that result and what it
 cannot check.
 
 ## The write log line
 
-hallpass never sees the write itself, so after a guarded body runs, `guarded` logs one line on the
-`hallpass` logger at INFO:
+toolpass never sees the write itself, so after a guarded body runs, `guarded` logs one line on the
+`toolpass` logger at INFO:
 
 ```text
 unconditional write: dana@example.com ran DELETE_ISSUES on issue:PAY-123 in jira-main;
-hallpass said allow (allowed: dana may delete issues in PAY) at 2026-09-24T10:00:00.412+00:00,
-fresh=True; the write was not conditioned on the state hallpass saw (no If-Match),
+toolpass said allow (allowed: dana may delete issues in PAY) at 2026-09-24T10:00:00.412+00:00,
+fresh=True; the write was not conditioned on the state toolpass saw (no If-Match),
 so check and write were not atomic
 ```
 
@@ -146,31 +146,31 @@ result from` in place of `ran` when the tool failed.
 ## Fresh checks and atomicity
 
 A fresh check narrows the gap between the check and the action; it does not close it. Closing it
-needs a conditional write in the upstream system, such as `If-Match` with an ETag. A hallpass
+needs a conditional write in the upstream system, such as `If-Match` with an ETag. A toolpass
 server older than the `fresh` field rejects it, which `remote` reports as `unknown`, so upgrade the
 server before turning `fresh` on. The [API reference](api.md#fresh-checks) has the details.
 
-## Moving from hallpass-client (Python)
+## Moving from toolpass-client (Python)
 
-`hallpass-client` on PyPI, the old Python client, is replaced by this package and gets no new
-releases; installed versions keep working. To move, depend on `hallpass` and change
-`from hallpass_client import Hallpass` / `Hallpass()` to `from hallpass import Hallpass` /
-`Hallpass.remote()` (and `hallpass_client.strands` to `hallpass.strands`).
+`toolpass-client` on PyPI, the old Python client, is replaced by this package and gets no new
+releases; installed versions keep working. To move, depend on `toolpass` and change
+`from toolpass_client import Toolpass` / `Toolpass()` to `from toolpass import Toolpass` /
+`Toolpass.remote()` (and `toolpass_client.strands` to `toolpass.strands`).
 
-## hallpass-client (Node)
+## toolpass-client (Node)
 
-The Node and TypeScript client of a hallpass server (`npm install hallpass-client`, Node 18.17 or
-later, no dependencies). It follows the same rules as `Hallpass.remote`.
+The Node and TypeScript client of a toolpass server (`npm install toolpass-client`, Node 18.17 or
+later, no dependencies). It follows the same rules as `Toolpass.remote`.
 
 ```ts
-import { Hallpass, guarded } from "hallpass-client";
+import { Toolpass, guarded } from "toolpass-client";
 
-const hp = new Hallpass(); // HALLPASS_URL and HALLPASS_API_KEY; or new Hallpass({ url, apiKey, timeoutMs })
+const tp = new Toolpass(); // TOOLPASS_URL and TOOLPASS_API_KEY; or new Toolpass({ url, apiKey, timeoutMs })
 
-const d = await hp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", { groups, fresh: true });
-await hp.require(...); // rejects with PermissionDenied unless allow
+const d = await tp.check("dana@example.com", "jira-main", "DELETE_ISSUES", "issue:PAY-123", { groups, fresh: true });
+await tp.require(...); // rejects with PermissionDenied unless allow
 
-const deleteIssue = guarded(hp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user, fresh: true })(
+const deleteIssue = guarded(tp, "jira-main", "DELETE_ISSUES", "issue:{key}", { user, fresh: true })(
   async ({ key }: { key: string }) => { ... },
 );
 ```

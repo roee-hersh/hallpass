@@ -8,21 +8,21 @@ release (03:00 UTC), so merge only complete, working changes.
 1. Run `/code-review main high` on the diff and fix every finding.
 2. Run `/security-review` and fix every finding.
 3. Run the local checks, after the review fixes, and get them clean
-   (in `hallpass-py/`, with `pip install -e ".[crypto]" pytest pytest-timeout hypothesis ruff mypy types-PyYAML build`):
+   (in `toolpass-py/`, with `pip install -e ".[crypto]" pytest pytest-timeout hypothesis ruff mypy types-PyYAML build`):
    - `ruff format --check src tests examples`, `ruff check src tests examples`,
-     `mypy --strict src/hallpass`, `python -m pytest -q`
+     `mypy --strict src/toolpass`, `python -m pytest -q`
    - when an integration or `tests/harness` changed: fetch the API descriptions with
-     `test/specs/fetch.sh /tmp/specs`, then `HALLPASS_SPECS_DIR=/tmp/specs python -m pytest -q tests/integrations tests/harness_tests tests/contract`
-   - when a framework adapter (`src/hallpass/<framework>.py`) changed: install its extra
+     `test/specs/fetch.sh /tmp/specs`, then `TOOLPASS_SPECS_DIR=/tmp/specs python -m pytest -q tests/integrations tests/harness_tests tests/contract`
+   - when a framework adapter (`src/toolpass/<framework>.py`) changed: install its extra
      (`pip install -e ".[<extra>]"`) and run `python -m pytest tests/frameworks/test_<framework>.py`
-   - when the vault integration changed: `HALLPASS_REAL=1 python -m pytest tests/real` (needs docker)
+   - when the vault integration changed: `TOOLPASS_REAL=1 python -m pytest tests/real` (needs docker)
    - when packaging (`pyproject.toml`) changed: build the wheel (`python -m build -o /tmp/dist .`),
      install it into a fresh venv, then run `tests` with that venv's Python from outside the repository
-   - when `hallpass-ts` changed: `cd hallpass-ts && npm ci && npm test`, and run the `examples/agent-ts`
+   - when `toolpass-ts` changed: `cd toolpass-ts && npm ci && npm test`, and run the `examples/agent-ts`
      tests, which exercise it
    - when `examples/agent-ts` changed: `cd examples/agent-ts && npm ci && npm test`
    - when any Markdown changed: `python3 test/docs/linkcheck.py`
-   - when `deploy/helm` changed: `helm lint deploy/helm/hallpass --strict --set apiKey.value=x`
+   - when `deploy/helm` changed: `helm lint deploy/helm/toolpass --strict --set apiKey.value=x`
    - when the `Dockerfile` changed: `docker build .` and the smoke test in the `docker` CI job
 4. Open a pull request using `.github/pull_request_template.md`. Mention the
    issue it closes when there is one.

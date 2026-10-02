@@ -1,28 +1,28 @@
 # Configuration reference
 
-hallpass reads one YAML file: `/etc/hallpass/hallpass.yaml` by default for the command (`-config`
-changes it), or the path given to `Hallpass.from_config`. The same connections can also be given in
+toolpass reads one YAML file: `/etc/toolpass/toolpass.yaml` by default for the command (`-config`
+changes it), or the path given to `Toolpass.from_config`. The same connections can also be given in
 code ([below](#connections-in-code)).
-[`examples/hallpass.yaml`](../../examples/hallpass.yaml) has a commented example for every
-integration, and `hallpass catalog <integration>` prints an integration's keys and actions.
+[`examples/toolpass.yaml`](../../examples/toolpass.yaml) has a commented example for every
+integration, and `toolpass catalog <integration>` prints an integration's keys and actions.
 
 The file holds one flat list of connections. An *integration* is the product (kubernetes, jira).
 A *connection* is one configured system of that product. Callers name the connection by `id`.
 
 ```yaml
-api_key: env:HALLPASS_API_KEY
+api_key: env:TOOLPASS_API_KEY
 
 connections:
   - id: k8s-prod-eu
     integration: kubernetes
     url: https://10.20.0.5:6443
-    ca_file: /etc/hallpass/ca/prod-eu.pem
+    ca_file: /etc/toolpass/ca/prod-eu.pem
     credential: file:/secrets/k8s-prod-eu-token
 
   - id: jira-main
     integration: jira
     url: https://acme.atlassian.net
-    username: hallpass-bot@acme.com
+    username: toolpass-bot@acme.com
     credential: env:JIRA_TOKEN
 ```
 
@@ -40,7 +40,7 @@ at the smaller of 5 s and the timeout. URLs must be `https://`; plain `http://` 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `api_key` | required for `serve` | The bearer key callers send, as `env:NAME` or `file:/path`. `Hallpass.from_config` does not need it |
+| `api_key` | required for `serve` | The bearer key callers send, as `env:NAME` or `file:/path`. `Toolpass.from_config` does not need it |
 | `listen` | `:8080` | Address `serve` listens on (`:8080` is every IPv4 and IPv6 address). `-listen` overrides it |
 | `decision_log` | `stderr` | A path, `stderr`, `stdout` or `none`. See [Decision log](../guides/operating.md#decision-log) |
 | `decision_cache_seconds` | `30` | How long `allow` and `deny` answers are reused. `0` disables |
@@ -63,26 +63,26 @@ Every other key belongs to the integration and is listed on its page under
 
 ## Connections in code
 
-`Hallpass(connections=[...])` takes the connections as a list of mappings with exactly the keys of
+`Toolpass(connections=[...])` takes the connections as a list of mappings with exactly the keys of
 the file, validated the same way (with `<connections>` in place of the file name in errors). A
 secret key takes a reference:
 
 | Value | Reads |
 |---|---|
-| `hallpass.env("JIRA_TOKEN")` or `"env:JIRA_TOKEN"` | the environment variable |
-| `hallpass.file("/run/secrets/jira")` or `"file:/run/secrets/jira"` | the file, on every use |
-| `hallpass.literal(token)` | a value your code already holds; never printed or logged |
+| `toolpass.env("JIRA_TOKEN")` or `"env:JIRA_TOKEN"` | the environment variable |
+| `toolpass.file("/run/secrets/jira")` or `"file:/run/secrets/jira"` | the file, on every use |
+| `toolpass.literal(token)` | a value your code already holds; never printed or logged |
 
 A plain string is rejected there as in the file. The top-level keys are keyword arguments:
 `decision_cache_seconds=30`, `identity_cache_seconds=900`, `decision_log="none"`; `listen` and
 `api_key` belong to the server.
 
 ```python
-import hallpass
+import toolpass
 
-hp = hallpass.Hallpass(connections=[
+tp = toolpass.Toolpass(connections=[
     {"id": "jira-main", "integration": "jira", "url": "https://acme.atlassian.net",
-     "username": "hallpass-bot@acme.com", "credential": hallpass.env("JIRA_TOKEN")},
+     "username": "toolpass-bot@acme.com", "credential": toolpass.env("JIRA_TOKEN")},
     {"id": "pagerduty", "integration": "pagerduty", "credential": "file:/run/secrets/pagerduty"},
 ], decision_log="stderr")
 ```
@@ -90,6 +90,6 @@ hp = hallpass.Hallpass(connections=[
 ## Checking a file
 
 ```sh
-hallpass validate -config hallpass.yaml   # syntax, references, certificates; no network
-hallpass probe    -config hallpass.yaml   # calls each system with its credential and reports
+toolpass validate -config toolpass.yaml   # syntax, references, certificates; no network
+toolpass probe    -config toolpass.yaml   # calls each system with its credential and reports
 ```

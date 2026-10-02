@@ -1,6 +1,6 @@
 # aws
 
-One connection is one AWS account. hallpass assumes a read-only role in that account, works out which
+One connection is one AWS account. toolpass assumes a read-only role in that account, works out which
 IAM principals the user can act as (the `AWSReservedSSO_*` roles of their IAM Identity Center permission
 sets, a static email/group -> role map, or an IAM user), and asks `iam:SimulatePrincipalPolicy` whether
 each principal may perform the action on the ARN. IAM evaluates the principal's identity policies,
@@ -8,7 +8,7 @@ permissions boundary and the organization's SCPs. Any principal allowed answers 
 
 ## Credential
 
-hallpass needs two things: a credential to start from, and a role to assume in the account.
+toolpass needs two things: a credential to start from, and a role to assume in the account.
 
 ### The starting credential
 
@@ -17,7 +17,7 @@ hallpass needs two things: a credential to start from, and a role to assume in t
 - JSON static keys: `{"access_key_id":"AKIA...","secret_access_key":"...","session_token":"..."}`
   (`session_token` optional), or
 - the literal `ambient:auto`, `ambient:container`, `ambient:web_identity` or `ambient:imds`, meaning
-  "use the credentials of the environment hallpass runs in": environment keys, the ECS/EKS Pod Identity
+  "use the credentials of the environment toolpass runs in": environment keys, the ECS/EKS Pod Identity
   container endpoint, IRSA (`AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE`) or the EC2 instance metadata
   service. `auto` tries them in that order.
 
@@ -25,11 +25,11 @@ The config loader only accepts `env:`/`file:` references for secrets, so an ambi
 reference to a variable holding the literal:
 
 ```sh
-export HALLPASS_AWS_CRED=ambient:imds
+export TOOLPASS_AWS_CRED=ambient:imds
 ```
 
 ```yaml
-    credential: env:HALLPASS_AWS_CRED
+    credential: env:TOOLPASS_AWS_CRED
 ```
 
 The secret is re-read whenever the assumed-role credentials are refreshed (about every 55 minutes), so a
@@ -85,11 +85,11 @@ trusting the same starting credential:
 }
 ```
 
-`hallpass probe` assumes both roles, reports the caller ARN, counts the `AWSReservedSSO_*` roles in the
+`toolpass probe` assumes both roles, reports the caller ARN, counts the `AWSReservedSSO_*` roles in the
 account and, in `identity_center` mode, checks that `sso_instance_arn` and `identity_store_id` match what
 `sso:ListInstances` returns. It always warns that `iam:SimulatePrincipalPolicy` discloses information
-about the permissions granted to other users: that is what hallpass is for, but the role should be held
-by hallpass alone.
+about the permissions granted to other users: that is what toolpass is for, but the role should be held
+by toolpass alone.
 
 ## Connection
 
@@ -97,25 +97,25 @@ by hallpass alone.
   - id: aws-prod
     integration: aws
     account_id: "123456789012"
-    role_arn: arn:aws:iam::123456789012:role/hallpass-read
+    role_arn: arn:aws:iam::123456789012:role/toolpass-read
     external_id: 7f3a...                          # optional
     partition: aws                                # aws (default), aws-us-gov, aws-cn
     region: eu-west-1                             # STS endpoint region
-    credential: env:HALLPASS_AWS_CRED             # JSON keys, or ambient:<mode>
+    credential: env:TOOLPASS_AWS_CRED             # JSON keys, or ambient:<mode>
     identity_mode: identity_center                # identity_center (default), static_map, iam_user
-    identity_center_role_arn: arn:aws:iam::999999999999:role/hallpass-identity-center-read
+    identity_center_role_arn: arn:aws:iam::999999999999:role/toolpass-identity-center-read
     identity_center_region: eu-west-1
     identity_store_id: d-936712345a
     sso_instance_arn: arn:aws:sso:::instance/ssoins-1234567890abcdef
     context_entries: "aws:MultiFactorAuthPresent=boolean:true;aws:SourceIp=ip:10.0.0.1"   # optional
     implicit_deny_as: deny                        # deny (default) or unknown
-    session_name: hallpass                        # optional
+    session_name: toolpass                        # optional
 ```
 
 | Key | Meaning |
 |---|---|
 | `account_id` | the 12-digit account this connection answers for. `role_arn` must be in it |
-| `role_arn` | hallpass's read role in the account |
+| `role_arn` | toolpass's read role in the account |
 | `external_id` | sent as `ExternalId` on every `AssumeRole` (both roles) |
 | `partition` | `aws`, `aws-us-gov` or `aws-cn`; picks the endpoints and must match every ARN |
 | `region` | region of the STS endpoint used for `AssumeRole` |
@@ -128,7 +128,7 @@ by hallpass alone.
 | `role_map_file` | `static_map`: the map file, see below |
 | `context_entries` | condition keys for the simulation: `key=type:value;key=type:value`; types `string`, `stringList` (comma-separated values), `numeric`, `boolean`, `ip`, `binary`, `date` |
 | `implicit_deny_as` | what "no statement matched" (and, for `identity_center`, "no permission set assigned") answers: `deny` (default) or `unknown` |
-| `session_name` | `RoleSessionName`, default `hallpass` |
+| `session_name` | `RoleSessionName`, default `toolpass` |
 
 Endpoints: STS `https://sts.<region>.amazonaws.com`, IAM `https://iam.amazonaws.com` (signed for
 `us-east-1`; `iam.us-gov.amazonaws.com` for GovCloud), Identity Store
@@ -163,7 +163,7 @@ platform-team           arn:aws:iam::123456789012:role/PlatformAdmin
 platform-team           arn:aws:iam::123456789012:role/ReadOnly
 ```
 
-The file must exist and parse when hallpass starts and is re-read at most every 60 seconds; a broken
+The file must exist and parse when toolpass starts and is re-read at most every 60 seconds; a broken
 re-read keeps the last good map and logs a warning. Groups come from the caller's `groups` field.
 
 ## Resources
@@ -173,7 +173,7 @@ re-read keeps the last good map and logs a warning. Groups come from the caller'
 | `arn:<partition>:<service>:<region>:<account>:<resource>` | that ARN, verbatim (`arn:aws:s3:::bucket/key`, `arn:aws:ec2:eu-west-1:123456789012:instance/i-0abc`). The account field is empty or 12 digits; the partition must match the connection |
 | `all` | every resource (`*`); the simulation then reports the action's overall decision |
 
-`catalog.ParseResource` splits at the first colon, so an ARN arrives as type `arn`; hallpass uses the raw
+`catalog.ParseResource` splits at the first colon, so an ARN arrives as type `arn`; toolpass uses the raw
 string. An ARN whose account field names another account answers `unsupported`: cross-account access
 depends on the resource policy in that account, which the simulation does not see.
 
@@ -201,7 +201,7 @@ ARN are merged: `allowed` only when both say so, otherwise the more restrictive 
 `implicitDeny` > `allowed`). An `allowed` whose result lists `MissingContextValues` is not an allow: IAM
 skipped every statement conditioned on those keys, Deny statements included. Across principals:
 
-| IAM says | hallpass answers |
+| IAM says | toolpass answers |
 |---|---|
 | any principal `allowed` with no `MissingContextValues` | allow, naming the permission set / role / user |
 | a principal `allowed` but with `MissingContextValues`, and no principal allowed outright | unknown (`unsupported`), naming the keys; set `context_entries` |
@@ -242,13 +242,13 @@ Marked `# UNVERIFIED:` in the code:
 - `identitystore:DescribeUser` returning a `UserStatus` field; when present and `DISABLED` the user is
   denied every action, otherwise the field is ignored.
 - Whether `sso:ListAccountAssignmentsForPrincipal` for a `USER` already includes assignments inherited
-  through groups; hallpass asks for the user and for every group and unions the result, so the answer is
+  through groups; toolpass asks for the user and for every group and unions the result, so the answer is
   the same either way at the cost of extra calls.
 - `AWSReservedSSO_*` roles under `/aws-reserved/sso.amazonaws.com/<region>/`; `iam:ListRoles` with the
   parent `PathPrefix` is a prefix match so they are expected to be listed.
 - For resource `all`, `ResourceArns` is omitted so IAM applies its documented default of `*`, rather than
   sending `*` as an ARN.
-- The China partition IAM endpoint and signing region (`hallpass/authx`).
+- The China partition IAM endpoint and signing region (`toolpass/authx`).
 - Whether SCP evaluation (`OrganizationsDecisionDetail`) needs any `organizations:*` permission on
   `role_arn`; none is granted in the policy above.
 
@@ -256,4 +256,4 @@ Marked `# UNVERIFIED:` in the code:
 
 Unit tests run against one fake server that serves STS, IAM (Query/XML), Identity Store and SSO Admin
 (JSON 1.1 by `X-Amz-Target`) and IMDSv2, checking the SigV4 credential scope of every call. There is no
-live test; after configuring, run `hallpass probe` and one check for a user you know is allowed.
+live test; after configuring, run `toolpass probe` and one check for a user you know is allowed.

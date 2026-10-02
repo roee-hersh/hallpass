@@ -1,13 +1,13 @@
 # gitlab
 
-hallpass resolves the email to a GitLab account, reads the account's effective membership of the
+toolpass resolves the email to a GitLab account, reads the account's effective membership of the
 project or group (`GET /projects/:id/members/all/:user_id`, which includes inherited and invited-group
 members) and maps the access level to the asked action with an exact set of levels per action. For
 `repo.push` and `mr.merge` it also reads the project's protected-branch rules: on a named branch
 (`project:acme/webapp@main`) it evaluates the "allowed to push/merge" entries, without one it answers
 unknown as soon as any rule exists. Non-members are evaluated against the project's visibility, the
 account's `external` flag and, for `issue.create`, the project's issue settings; a known instance
-administrator is allowed without a membership. Every call is a read with hallpass's own token;
+administrator is allowed without a membership. Every call is a read with toolpass's own token;
 nothing is written.
 
 ## Credential
@@ -19,7 +19,7 @@ A personal access token with the `read_api` scope, sent in the `PRIVATE-TOKEN` h
 - **GitLab.com**: an Owner of the top-level group, for the enterprise-user (`enterprise_users`) and SAML
   identity (`saml`) APIs. The token's user must be able to see the projects being asked about.
 
-Prefer a dedicated account. `hallpass probe` warns when the token is not an administrator's in
+Prefer a dedicated account. `toolpass probe` warns when the token is not an administrator's in
 `admin_search` mode, when it carries scopes broader than `read_api` (`api`, `write_repository`,
 `sudo`, ...) and when it expires within 14 days.
 
@@ -128,7 +128,7 @@ of every matching rule are evaluated and the most permissive one wins:
 |---|---|
 | level in the action's set | allow |
 | level not in the set, plain role | deny |
-| level not in the set, membership has a custom role (`member_role`) | unknown (`unsupported`): custom roles add abilities hallpass cannot see |
+| level not in the set, membership has a custom role (`member_role`) | unknown (`unsupported`): custom roles add abilities toolpass cannot see |
 | Planner or Reporter asking `mr.approve` | unknown (`unsupported`) |
 | account in a known inactive state, or a bot | deny |
 | account `state` empty or unrecognised | unknown (`unsupported`) |
@@ -180,13 +180,13 @@ Marked `# UNVERIFIED:` in the code:
 - `issue.edit` for Security Manager (25) is assumed allowed like Reporter.
 - `group.project.create` assumes the default group setting (Developers and above may create projects).
 - The minimum role required to list protected branches; a 403 answers `credential_rejected`.
-- How GitLab combines several protected-branch rules that match one branch; hallpass pools every
+- How GitLab combines several protected-branch rules that match one branch; toolpass pools every
   matching rule's entries and lets the most permissive win.
 - A protected-branch entry with `member_role_id` is taken to match a member holding exactly that
   custom role; any other member leaves the entry unresolved (unknown).
 - The probe's token check uses `GET /personal_access_tokens/self`; a 403 or 404 there becomes a
   "could not verify scopes" warning rather than an error.
-- The `emails` array on a user record of `GET /users?search=` and its shape: hallpass accepts an
+- The `emails` array on a user record of `GET /users?search=` and its shape: toolpass accepts an
   array of either bare strings or objects with `email` and `confirmed_at`, counts an entry only when
   `confirmed_at` is absent or non-null, and ignores the array when the field is missing. GitLab's
   published description does not list `emails` on the user record (secondary emails have their own
@@ -197,5 +197,5 @@ Marked `# UNVERIFIED:` in the code:
 Unit tests run against a fake GitLab API (`tests/integrations/gitlab/test_gitlab.py`) that models users (with `external`,
 `is_admin` and secondary emails, paginated search), enterprise users, SAML identities, projects (with
 issue settings), groups, memberships and protected branches, and answers only to the canary token.
-With `HALLPASS_SPECS_DIR` set every request is also validated against GitLab's OpenAPI description. No live fixtures. To try a real connection, configure it and run `hallpass probe`, then one
+With `TOOLPASS_SPECS_DIR` set every request is also validated against GitLab's OpenAPI description. No live fixtures. To try a real connection, configure it and run `toolpass probe`, then one
 check for a user known to be a Developer on some project.

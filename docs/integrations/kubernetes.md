@@ -1,6 +1,6 @@
 # kubernetes
 
-hallpass asks the API server with a `SubjectAccessReview`: "may user U with groups G do verb V on
+toolpass asks the API server with a `SubjectAccessReview`: "may user U with groups G do verb V on
 resource R in namespace N?". The API server answers from RBAC and every other authorizer it has
 (webhooks, ABAC, Node). Nothing is persisted.
 
@@ -15,11 +15,11 @@ rules:
     verbs: ["create"]
 ```
 
-`test/kind/hallpass-rbac.yaml` has the full ServiceAccount, ClusterRole and ClusterRoleBinding. This
+`test/kind/toolpass-rbac.yaml` has the full ServiceAccount, ClusterRole and ClusterRoleBinding. This
 is tighter than the built-in `system:auth-delegator`, which also allows TokenReviews.
 
-A projected token (`kubectl create token hallpass -n hallpass`, or a projected volume in a pod) expires;
-reference it with `credential: file:/path` and hallpass re-reads it on every use.
+A projected token (`kubectl create token toolpass -n toolpass`, or a projected volume in a pod) expires;
+reference it with `credential: file:/path` and toolpass re-reads it on every use.
 
 ## Connection
 
@@ -27,7 +27,7 @@ reference it with `credential: file:/path` and hallpass re-reads it on every use
   - id: k8s-prod-eu
     integration: kubernetes
     url: https://10.20.0.5:6443
-    ca_file: /etc/hallpass/ca/prod-eu.pem     # the cluster CA
+    ca_file: /etc/toolpass/ca/prod-eu.pem     # the cluster CA
     tls_server_name: kubernetes                # when the URL is an IP
     credential: file:/secrets/k8s-prod-eu-token
     username_template: "oidc:{email}"          # optional, default {email}
@@ -43,12 +43,12 @@ reference it with `credential: file:/path` and hallpass re-reads it on every use
 | `group_prefix` | Prefix the API server puts on groups from your identity provider. Without it a caller group starting with `system:` is rejected (`invalid_request`), since it would name a built-in group such as `system:masters` |
 | `add_authenticated_group` | Also send `system:authenticated`, as the API server would for any logged-in user |
 
-hallpass has no user directory to consult. The Kubernetes username is a pure transform of the email, so
+toolpass has no user directory to consult. The Kubernetes username is a pure transform of the email, so
 the template must match the API server's `--oidc-username-prefix` / `--oidc-username-claim` flags or its
 structured authentication config. A wrong template silently denies everyone. Run one check for a user
 you know is allowed after configuring.
 
-Groups come from the caller's `groups` field. hallpass cannot look them up, so every holder of the API
+Groups come from the caller's `groups` field. toolpass cannot look them up, so every holder of the API
 key can assert any group. Set `group_prefix` to match your identity provider; then a caller's value can
 never name a group the API server reserves. Without a prefix, groups starting with `system:` are
 rejected with `invalid_request` rather than sent.
@@ -85,7 +85,7 @@ When both the action and the request name a resource they must agree.
 
 ## Decisions
 
-| API server says | hallpass answers |
+| API server says | toolpass answers |
 |---|---|
 | `allowed: true` | allow |
 | `allowed: false`, no `evaluationError` | deny |
@@ -95,14 +95,14 @@ When both the action and the request name a resource they must agree.
 
 ## Probe
 
-`hallpass probe` posts a SubjectAccessReview for a throwaway subject to prove the token may create
+`toolpass probe` posts a SubjectAccessReview for a throwaway subject to prove the token may create
 them, then a SelfSubjectRulesReview (any authenticated subject may) and warns when the token can do
 anything beyond that one rule, listing the extra verbs and resources.
 
 ## What it cannot see
 
 - Admission: ValidatingAdmissionPolicy, admission webhooks, Pod Security admission and resource quotas
-  run after authorization and can still reject a request hallpass allowed.
+  run after authorization and can still reject a request toolpass allowed.
 - A wrong `username_template` denies everyone silently.
 - Groups are whatever the caller sends. Only the `system:` namespace is protected, and only when
   `group_prefix` is unset.
@@ -119,5 +119,5 @@ anything beyond that one rule, listing the extra verbs and resources.
 ## Test
 
 Unit tests run against a fake API server. `test/kind/run.sh` creates a kind cluster, applies
-`test/kind/hallpass-rbac.yaml` and `test/kind/fixtures.yaml`, and runs the end-to-end tests
-(`hallpass-py/tests/e2e`) against it.
+`test/kind/toolpass-rbac.yaml` and `test/kind/fixtures.yaml`, and runs the end-to-end tests
+(`toolpass-py/tests/e2e`) against it.

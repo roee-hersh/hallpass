@@ -14,8 +14,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 . test/kind/cluster.sh
-RELEASE=hallpass
-NS=hallpass-helm
+RELEASE=toolpass
+NS=toolpass-helm
 KEY=ci-key
 PF_PID=
 
@@ -27,13 +27,13 @@ trap cleanup EXIT
 
 kubectl apply -f test/kind/fixtures.yaml
 
-docker build -t hallpass:e2e .
-kind load docker-image hallpass:e2e --name "$CLUSTER"
+docker build -t toolpass:e2e .
+kind load docker-image toolpass:e2e --name "$CLUSTER"
 
-helm lint deploy/helm/hallpass --strict --set apiKey.value=x
-helm upgrade --install "$RELEASE" deploy/helm/hallpass \
+helm lint deploy/helm/toolpass --strict --set apiKey.value=x
+helm upgrade --install "$RELEASE" deploy/helm/toolpass \
   --namespace "$NS" --create-namespace --wait --timeout 120s \
-  --set image.repository=hallpass --set image.tag=e2e --set image.pullPolicy=Never \
+  --set image.repository=toolpass --set image.tag=e2e --set image.pullPolicy=Never \
   --set apiKey.value="$KEY" \
   --set serviceAccount.automountToken=true \
   --set rbac.subjectAccessReview.create=true \
@@ -52,7 +52,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 if [ -z "$ready" ]; then
-  echo "hallpass never answered /healthz through the port-forward"
+  echo "toolpass never answered /healthz through the port-forward"
   kubectl -n "$NS" get pods
   kubectl -n "$NS" logs "deploy/$RELEASE" --tail=50 || true
   exit 1

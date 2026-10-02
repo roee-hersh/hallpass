@@ -1,0 +1,12 @@
+{{- if not .Values.existingConfigMap -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "toolpass.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "toolpass.labels" . | nindent 4 }}
+data:
+  toolpass.yaml: |
+    {{- toYaml .Values.config | nindent 4 }}
+{{- end }}
