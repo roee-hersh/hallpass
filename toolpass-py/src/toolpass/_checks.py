@@ -14,6 +14,8 @@ import collections.abc
 import re
 import types
 import typing
+import unicodedata
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Union
 
@@ -132,7 +134,8 @@ def _glob(pattern: str) -> re.Pattern[str]:
             out.append("[^/]")
             i += 1
         elif pattern[i] == "[":
-            j = pattern.find("]", i + 2)
+            first = i + 2 if pattern.startswith("!", i + 1) else i + 1
+            j = pattern.find("]", first + 1)  # a "]" right after "[" or "[!" is a member, not the end
             if j == -1:
                 out.append(re.escape("["))
                 i += 1
@@ -140,13 +143,29 @@ def _glob(pattern: str) -> re.Pattern[str]:
                 inner = pattern[i + 1 : j]
                 negate = inner.startswith("!")
                 inner = inner[1:] if negate else inner
-                inner = inner.replace("\\", "\\\\").replace("^", "\\^").replace("[", "\\[")
+                inner = inner.replace("\\", "\\\\").replace("^", "\\^").replace("[", "\\[").replace("]", "\\]")
                 out.append(f"[^/{inner}]" if negate else f"(?!/)[{inner}]")
                 i = j + 1
         else:
             out.append(re.escape(pattern[i]))
             i += 1
     return re.compile("".join(out), re.DOTALL)
+
+
+def _readings(value: str) -> list[str]:
+    """``value``, then percent-decoded (up to three times) and NFKC-folded."""
+    forms = [value]
+    current = value
+    for _ in range(3):
+        decoded = urllib.parse.unquote(current)
+        if decoded == current:
+            break
+        forms.append(decoded)
+        current = decoded
+    folded = unicodedata.normalize("NFKC", current)
+    if folded != current:
+        forms.append(folded)
+    return forms
 
 
 class Scope:
@@ -166,12 +185,19 @@ class Scope:
             patterns = [_glob(p) for p in rule]
 
             def by_glob(v: Any) -> bool:
-                if not isinstance(v, str) or any(c in v for c in "\x00\r\n"):
+                if not isinstance(v, str):
                     return False
-                # A dot segment walks out of whatever the glob was meant to fence in.
-                if any(seg in (".", "..") for seg in re.split(r"[/\\]", v)):
-                    return False
-                return any(p.fullmatch(v) for p in patterns)
+                # The value as written, and as a URL decoder or Unicode folding would read it
+                # ("%2e%2e" and full-width dots are ".."): every form must stay in scope.
+                for form in _readings(v):
+                    if any(c in form for c in "\x00\r\n"):
+                        return False
+                    # A dot segment walks out of whatever the glob was meant to fence in.
+                    if any(seg in (".", "..") for seg in re.split(r"[/\\]", form)):
+                        return False
+                    if not any(p.fullmatch(form) for p in patterns):
+                        return False
+                return True
 
             return by_glob
         if callable(rule):

@@ -9,7 +9,7 @@ yet). None makes the tool answer "waiting for approval" without running.
 the queue, the application shows it to a person (a Slack button, a web page),
 and once they approve it, the same call from the same session runs once.
 Approval is bound to the session, the tool and the exact arguments, and it is
-used up by the call it approved.
+used up by the call it approved, once that call reaches its body.
 """
 
 from __future__ import annotations
@@ -33,8 +33,9 @@ Approver = Callable[["ApprovalRequest"], bool | None]
 class ApprovalRequest:
     """A call waiting for a person to approve it.
 
-    ``id`` is derived from the session, the tool, the arguments and the
-    reasons, so the model retrying the same call refers to the same request. ``reasons`` says
+    ``id`` is derived from the session, the tool, the arguments, the reasons
+    and the preview, so the model retrying the same call refers to the same
+    request. ``reasons`` says
     why approval is needed; ``preview`` is the tool's own description of what
     the call will change, when it has one.
     """
@@ -46,7 +47,7 @@ class ApprovalRequest:
 
     @staticmethod
     def make(call: Call, reasons: tuple[str, ...], preview: str | None) -> ApprovalRequest:
-        return ApprovalRequest(_key(call, reasons), call, reasons, preview)
+        return ApprovalRequest(_key(call, reasons, preview), call, reasons, preview)
 
     def describe(self) -> str:
         """A few lines for a person deciding: who, what, why, and the preview."""
@@ -79,7 +80,20 @@ def _plain(value: object, depth: int = 0) -> object:
         return {"set": sorted((_plain(v, depth + 1) for v in value), key=repr)}
     if isinstance(value, (bytes, bytearray)):
         return {"bytes": bytes(value).hex()}
-    return {"repr": f"{type(value).__qualname__}:{value!r}"}
+    kind = f"{type(value).__module__}.{type(value).__qualname__}"
+    # An object is keyed by its state, every field included (repr=False ones too).
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {"object": kind, "fields": _plain({f.name: getattr(value, f.name, None) for f in dataclasses.fields(value)}, depth + 1)}
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return {"object": kind, "fields": _plain(model_dump(), depth + 1)}
+        except Exception:
+            pass
+    state = getattr(value, "__dict__", None)
+    if isinstance(state, dict):
+        return {"object": kind, "fields": _plain(state, depth + 1)}
+    return {"object": kind, "repr": repr(value)}
 
 
 def visible(text: str) -> str:
@@ -113,17 +127,18 @@ def _shown(value: object, depth: int = 0) -> object:
     return repr(value)
 
 
-def _key(call: Call, reasons: tuple[str, ...]) -> str:
-    # The reasons are part of the key: an approval given for one reason does
-    # not cover the same call once a new reason (exfiltration) applies.
-    canonical = json.dumps([call.session.id, call.tool, _plain(dict(call.arguments)), sorted(reasons)], ensure_ascii=False)
+def _key(call: Call, reasons: tuple[str, ...], preview: str | None) -> str:
+    # The reasons and the preview are part of the key: an approval given for
+    # one reason, or for one described effect, does not cover the same call
+    # once a new reason applies or the preview describes something else.
+    canonical = json.dumps([call.session.id, call.tool, _plain(dict(call.arguments)), sorted(reasons), preview], ensure_ascii=False)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 @dataclasses.dataclass
 class _Entry:
     request: ApprovalRequest
-    state: str  # "pending", "approved", "rejected"
+    state: str  # "pending", "approved", "claimed" (a call is using it), "rejected"
     at: float
     by: str | None = None
 
@@ -153,7 +168,8 @@ class ApprovalQueue:
                 notify = True
                 verdict: bool | None = None
             elif entry.state == "approved":
-                del self._entries[request.id]
+                # Claimed, not used up: settle() uses it once the body runs, or gives it back.
+                entry.state = "claimed"
                 verdict = True
             elif entry.state == "rejected":
                 del self._entries[request.id]
@@ -173,6 +189,20 @@ class ApprovalQueue:
                     self._entries.pop(request.id, None)
                 raise failed
         return verdict
+
+    def settle(self, id: str, used: bool) -> None:
+        """Called by the toolkit after a claimed approval: ``used`` when the
+        call reached its body (the approval is spent), otherwise it is given
+        back, so a credential that was unavailable does not cost the person
+        another approval."""
+        with self._lock:
+            entry = self._entries.get(id)
+            if entry is None or entry.state != "claimed":
+                return
+            if used:
+                del self._entries[id]
+            else:
+                entry.state = "approved"
 
     def on_request(self, listener: Callable[[ApprovalRequest], None]) -> None:
         """Call ``listener`` with each new pending request, e.g. to post it to Slack."""

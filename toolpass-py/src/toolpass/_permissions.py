@@ -13,6 +13,7 @@ remote; toolpass does not import toolpass itself.
 
 from __future__ import annotations
 
+import string
 from typing import Any, Protocol
 
 from toolpass._toolkit import AuthDecision, Call
@@ -31,6 +32,15 @@ def permission_check(tp: _Checker, connection: str, action: str, resource: str, 
     ``fresh=True`` on destructive tools to skip toolpass's caches.
     """
 
+    fields = set()
+    for _, field, _, _ in string.Formatter().parse(resource):
+        if field is None:
+            continue
+        name = field.split(".")[0].split("[")[0]
+        if not name or name.isdigit():
+            raise ValueError(f"permission_check: resource {resource!r} must name the tool's parameters, as in 'issue:{{key}}'")
+        fields.add(name)
+
     def authorize(call: Call) -> AuthDecision:
         target = resource.format(**call.arguments)
         groups = None if call.session.groups is None else list(call.session.groups)
@@ -39,4 +49,5 @@ def permission_check(tp: _Checker, connection: str, action: str, resource: str, 
         return AuthDecision(outcome == "allow", f"toolpass {outcome} {action} on {target} in {connection}: {getattr(d, 'reason', '')}")
 
     authorize.__name__ = f"permission_check({connection}, {action})"
+    authorize.__toolpass_fields__ = frozenset(fields)  # type: ignore[attr-defined]
     return authorize

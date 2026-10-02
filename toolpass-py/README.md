@@ -108,9 +108,15 @@ approvals.on_request(lambda req: slack.post("#approvals", req.describe()))   # w
 approvals.approve(request_id, by="dana@example.com")
 ```
 
-An approval is bound to the session, the tool and the exact arguments, and it expires after `ttl`
-seconds (15 minutes by default). Any callable that returns True, False or None can be the approver
-instead, for example a prompt in a CLI.
+An approval is bound to the session, the tool, the exact arguments, the reasons it was asked for
+and the preview the person saw. It is spent only when the call reaches its body, so a credential
+that was briefly unavailable does not cost another approval, and it expires after `ttl` seconds (15
+minutes by default). Any callable that returns True, False or None can be the approver instead,
+for example a prompt in a CLI.
+
+In async tools, sync hooks (an authorizer, an approval rule, a preview, the approver and its
+listeners, a credentials callable) run in a worker thread, so blocking I/O in them cannot stall the
+event loop; pass `async def` hooks to run them on the loop.
 
 ## Refusals
 

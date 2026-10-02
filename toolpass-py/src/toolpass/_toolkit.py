@@ -41,7 +41,7 @@ import types
 from collections.abc import Callable, Generator, Mapping
 from typing import Any, Literal, NamedTuple, TypeVar, Union, cast
 
-from toolpass._approval import ApprovalQueue, ApprovalRequest, Approver
+from toolpass._approval import ApprovalRequest, Approver
 from toolpass._audit import AuditEvent, AuditSink, log_audit, shorten
 from toolpass._checks import ArgumentError, Scope, ScopeRule, Validator, check_arguments, hints
 from toolpass._session import Session, current_session
@@ -310,11 +310,15 @@ class _State:
     session: Session | None = None
     taken: list[tuple[str, int]] = dataclasses.field(default_factory=list)
     body_started: bool = False
+    claimed: Callable[[bool], None] | None = None  # settles a claimed approval
 
     def release(self) -> None:
         if self.taken and self.session is not None:
             self.session._release(self.taken)
             self.taken = []
+        if self.claimed is not None:
+            settle, self.claimed = self.claimed, None
+            settle(False)
 
 
 class Toolkit:
@@ -425,6 +429,8 @@ class Toolkit:
             # Frameworks build the model's schema from the signature and the
             # annotations: both are the original's, resolved, minus the
             # credential. Nothing points back at the original function.
+            # The framework names the tool after __name__; it must be the name the checks use.
+            wrapper.__name__ = wrapper.__qualname__ = spec.name
             setattr(wrapper, "__signature__", spec.signature)  # noqa: B010
             wrapper.__annotations__ = {k: v for k, v in spec.types.items() if k != "credential"}
             delattr(wrapper, "__wrapped__")
@@ -481,6 +487,9 @@ class Toolkit:
             unknown = set(keys) - names
             if unknown:
                 raise TypeError(f"{tool_name}: {what} names no such parameter: {', '.join(sorted(unknown))}")
+        unknown_fields = set(getattr(authorize, "__toolpass_fields__", ())) - names
+        if unknown_fields:
+            raise TypeError(f"{tool_name}: the authorizer's resource names no such parameter: {', '.join(sorted(unknown_fields))}")
         if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit < 0):
             raise ValueError(f"{tool_name}: limit must be a non-negative integer")
         if not (approve is True or approve is False or callable(approve)):
@@ -622,7 +631,7 @@ class Toolkit:
             reasons.append("this tool always needs approval")
         elif callable(spec.approve):
             try:
-                needed = yield _Ext(spec.approve, (call,), {})
+                needed = yield _Ext(spec.approve, (call,), {}, blocking=True)
             except Exception as e:
                 raise ToolRefused(spec.name, "approval_error", f"the approval rule failed ({type(e).__name__})") from None
             if needed is not False:  # anything but a plain "no" asks a person
@@ -644,20 +653,24 @@ class Toolkit:
             preview = None
             if spec.preview is not None:
                 try:
-                    shown = yield _Ext(spec.preview, (call,), {})
+                    shown = yield _Ext(spec.preview, (call,), {}, blocking=True)
                 except Exception as e:
                     raise ToolRefused(spec.name, "preview_error", f"the preview failed ({type(e).__name__})") from None
                 preview = None if shown is None else str(shown)
             request = ApprovalRequest.make(call, tuple(reasons), preview)
             ev.approval = request.id
             try:
-                verdict = yield _Ext(self.approver, (request,), {}, blocking=not isinstance(self.approver, ApprovalQueue))
+                # A sync approver runs off the event loop: its listeners may post to Slack.
+                verdict = yield _Ext(self.approver, (request,), {}, blocking=True)
             except Exception as e:
                 raise ToolRefused(spec.name, "approval_error", f"the approver failed ({type(e).__name__})") from None
             if verdict is None:
                 raise ApprovalPending(spec.name, request)
             if verdict is not True:
                 raise ToolRefused(spec.name, "approval_rejected", f"approval {request.id} was rejected")
+            settle = getattr(self.approver, "settle", None)
+            if callable(settle):
+                state.claimed = functools.partial(settle, request.id)
 
         # 8. The credential, only after every check passed.
         call_kwargs = dict(bound.kwargs)
@@ -674,6 +687,9 @@ class Toolkit:
         # 9. The body.
         session._mark(untrusted=spec.untrusted_output, private=spec.reads_private)
         state.body_started = True
+        if state.claimed is not None:
+            settle_claim, state.claimed = state.claimed, None
+            settle_claim(True)
         try:
             result = yield _Ext(spec.fn, bound.args, call_kwargs, body=True)
         except BaseException as e:

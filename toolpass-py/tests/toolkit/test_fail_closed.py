@@ -248,7 +248,7 @@ def test_callable_object_with_async_call(dana):
     assert "page u" in asyncio.run(main())
 
 
-def test_cheap_hooks_run_on_the_event_loop_thread():
+def test_sync_hooks_run_off_the_event_loop_and_async_ones_on_it():
     seen = {}
     queue = ApprovalQueue()
     queue.on_request(lambda req: seen.setdefault("listener", threading.current_thread()))
@@ -257,7 +257,7 @@ def test_cheap_hooks_run_on_the_event_loop_thread():
         seen["rule"] = threading.current_thread()
         return True
 
-    def preview(call):
+    async def preview(call):
         seen["preview"] = threading.current_thread()
         return "p"
 
@@ -275,7 +275,9 @@ def test_cheap_hooks_run_on_the_event_loop_thread():
         return loop_thread
 
     loop_thread = asyncio.run(main())
-    assert seen == {"rule": loop_thread, "preview": loop_thread, "listener": loop_thread}
+    assert seen["preview"] is loop_thread  # async: on the loop
+    assert seen["rule"] is not loop_thread  # sync: off it, so blocking I/O cannot stall the loop
+    assert seen["listener"] is not loop_thread  # a listener posting to Slack, too
 
 
 def test_custom_blocking_approver_runs_off_the_loop():
@@ -549,3 +551,172 @@ def test_a_returned_async_iterator_is_refused(events):
     with pytest.raises(TypeError):
         asyncio.run(main())
     assert events.last.outcome == "raised"
+
+
+def test_negated_glob_class_with_a_leading_bracket():
+    from toolpass._checks import Scope
+
+    scope = Scope({"p": "[!]a]"})
+    scope.check({"p": "b"})
+    for bad in ["]", "a", "]a]", "Xa]"]:
+        with pytest.raises(ValueError):
+            scope.check({"p": bad})
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["docs/%2e%2e/secrets", "docs/%2E%2E/secrets", "docs/%252e%252e/secrets", "docs/．．/secrets", "docs/․․/secrets"],
+)
+def test_encoded_and_look_alike_dot_segments_are_out_of_scope(dana, value):
+    tools = Toolkit(audit=None)
+
+    @tools.tool(effect="read", scope={"path": "docs/**"})
+    def read(path: str) -> str:
+        return "ok"
+
+    assert read("docs/guide/intro.md") == "ok"
+    with pytest.raises(ToolRefused):
+        read(value)
+
+
+def test_an_encoded_slash_cannot_cross_a_single_star(dana):
+    tools = Toolkit(audit=None)
+
+    @tools.tool(effect="write", scope={"repo": "acme/gitops-*"})
+    def open_pr(repo: str) -> str:
+        return "ok"
+
+    with pytest.raises(ToolRefused):
+        open_pr("acme/gitops-a%2F..%2F..%2Forgs")
+    with pytest.raises(ToolRefused):
+        open_pr("acme/gitops-a%2Fother")
+
+
+def test_name_override_reaches_the_framework(dana):
+    tools = Toolkit(audit=None)
+
+    @tools.tool(effect="read", name="list_open_pull_requests")
+    def prs() -> str:
+        return "ok"
+
+    class Fetcher:
+        def __call__(self, url: str) -> str:
+            return url
+
+    fetch = tools.tool(effect="read")(Fetcher())
+    assert prs.__name__ == "list_open_pull_requests"
+    assert fetch.__name__ == "Fetcher"
+
+
+def test_an_unavailable_credential_does_not_spend_the_approval(dana):
+    queue = ApprovalQueue()
+    secrets = {}
+    tools = Toolkit(audit=None, approver=queue, credentials=secrets)
+
+    @tools.tool(effect="write", approve=True, credential="deploy")
+    def deploy(env: str, *, credential: str) -> str:
+        return "deployed"
+
+    with pytest.raises(ApprovalPending) as e:
+        deploy("prod")
+    queue.approve(e.value.request.id)
+    with pytest.raises(ToolRefused) as r:
+        deploy("prod")
+    assert r.value.code == "credential_error"
+    secrets["deploy"] = "s3cr3t-token-value"
+    assert deploy("prod") == "deployed"  # the same approval, still there
+    with pytest.raises(ApprovalPending):
+        deploy("prod")  # and now spent
+
+
+def test_concurrent_retries_share_one_approval(dana):
+    queue = ApprovalQueue()
+    tools = Toolkit(audit=None, approver=queue)
+    started = threading.Event()
+    release = threading.Event()
+    ran = []
+
+    @tools.tool(effect="write", approve=True)
+    def deploy(env: str) -> str:
+        started.set()
+        release.wait(5)
+        ran.append(env)
+        return "deployed"
+
+    with pytest.raises(ApprovalPending) as e:
+        deploy("prod")
+    queue.approve(e.value.request.id)
+    import contextvars
+
+    t = threading.Thread(target=contextvars.copy_context().run, args=(deploy, "prod"))
+    t.start()
+    started.wait(5)
+    with pytest.raises(ApprovalPending):
+        deploy("prod")  # the approval is in use by the other call
+    release.set()
+    t.join()
+    assert ran == ["prod"]
+
+
+def test_a_changed_preview_needs_a_new_approval(dana):
+    queue = ApprovalQueue()
+    state = {"objects": 3}
+    tools = Toolkit(audit=None, approver=queue)
+
+    @tools.tool(effect="destructive", approve=True, preview=lambda c: f"delete {state['objects']} objects")
+    def purge(bucket: str) -> str:
+        return "purged"
+
+    with pytest.raises(ApprovalPending) as e:
+        purge("logs")
+    queue.approve(e.value.request.id)
+    state["objects"] = 300
+    with pytest.raises(ApprovalPending) as again:
+        purge("logs")
+    assert again.value.request.id != e.value.request.id
+
+
+def test_approval_keys_use_object_state(dana):
+    queue = ApprovalQueue()
+    tools = Toolkit(audit=None, approver=queue)
+
+    class Target:
+        def __init__(self, name):
+            self.name = name
+
+    @dataclasses.dataclass
+    class Hidden:
+        name: str
+        secret_scope: str = dataclasses.field(repr=False)
+
+    @tools.tool(effect="write", approve=True)
+    def act(target) -> str:  # untyped on purpose
+        return "ran"
+
+    with pytest.raises(ApprovalPending) as e:
+        act(Target("prod"))
+    queue.approve(e.value.request.id)
+    assert act(Target("prod")) == "ran"  # an equal new object reuses the approval
+    with pytest.raises(ApprovalPending) as a:
+        act(Hidden("x", "read"))
+    with pytest.raises(ApprovalPending) as b:
+        act(Hidden("x", "admin"))
+    assert a.value.request.id != b.value.request.id  # a repr=False field still counts
+
+
+def test_permission_check_placeholders_are_checked_at_declaration():
+    from toolpass import permission_check
+
+    class Never:
+        def check(self, *a, **k):
+            raise AssertionError("not called")
+
+    tools = Toolkit(audit=None)
+    with pytest.raises(TypeError, match="issue_key"):
+
+        @tools.tool(effect="destructive", authorize=permission_check(Never(), "jira", "DELETE_ISSUES", "issue:{issue_key}"))
+        def delete(key: str) -> str:
+            return key
+
+    with pytest.raises(ValueError):
+        permission_check(Never(), "jira", "DELETE_ISSUES", "issue:{}")

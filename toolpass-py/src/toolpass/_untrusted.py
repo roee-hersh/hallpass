@@ -28,7 +28,7 @@ from toolpass._walk import strings
 _WORD = re.compile(r"\w+")
 
 DEFAULT_NGRAM = 6
-DEFAULT_CAPACITY = 500_000
+DEFAULT_CAPACITY = 100_000  # about 8 MB of digests at most; past it every check answers "match"
 
 
 def words(text: str) -> list[str]:
