@@ -28,6 +28,7 @@ be evaluated refuses too.
 from __future__ import annotations
 
 import asyncio
+import collections.abc
 import contextvars
 import dataclasses
 import functools
@@ -691,6 +692,11 @@ class Toolkit:
                 raise ToolError(spec.name, message, e) from None
             raise
         try:
+            if isinstance(result, collections.abc.AsyncIterator):
+                raise TypeError(f"{spec.name} returned an async iterator; return the whole result")
+            if isinstance(result, collections.abc.Iterator):
+                # A lazy result would be consumed later, past redaction and the untrusted record.
+                result = list(result)
             if hidden:
                 result = _redact(result, hidden)
             if spec.untrusted_output:

@@ -507,3 +507,45 @@ def test_authorization_errors_show_only_the_type(dana):
     with pytest.raises(ToolRefused) as e:
         w()
     assert "sk_live" not in str(e.value) and "ConnectionError" in str(e.value)
+
+
+def test_a_returned_iterator_is_materialized_then_redacted_and_recorded(dana):
+    token = "tok_0123456789abcdef"
+    tools = Toolkit(audit=None, credentials={"api": token})
+
+    @tools.tool(effect="read", credential="api")
+    def lines(*, credential: str):
+        return (line for line in [f"Authorization: Bearer {credential}"])
+
+    assert lines() == ["Authorization: Bearer [REDACTED]"]
+
+    @tools.tool(effect="read", untrusted_output=True)
+    def fetch():
+        return iter([INJECTION])
+
+    @tools.tool(effect="write")
+    def send(text: str) -> str:
+        return "sent"
+
+    assert fetch() == [INJECTION]
+    with pytest.raises(ToolRefused):
+        send(INJECTION)
+
+
+def test_a_returned_async_iterator_is_refused(events):
+    async def agen():
+        yield "x"
+
+    tools = Toolkit(audit=events)
+
+    @tools.tool(effect="read")
+    async def stream():
+        return agen()
+
+    async def main():
+        with Session("d@example.com").active():
+            await stream()
+
+    with pytest.raises(TypeError):
+        asyncio.run(main())
+    assert events.last.outcome == "raised"

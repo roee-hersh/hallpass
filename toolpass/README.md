@@ -126,7 +126,8 @@ recorded and fenced, and the original exception kept on `.original` for your own
 
 A validator accepts by returning `True` (or any truthy value, such as a `re.Match`) and rejects by
 returning anything falsy (`False`, `None`) or raising. Generator tools are not supported: return
-the whole result.
+the whole result. A returned iterator is turned into a list before redaction; an async iterator
+is refused.
 
 ## Permission checks with hallpass
 
